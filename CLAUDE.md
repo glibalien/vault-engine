@@ -51,9 +51,16 @@ parseFile(filePath, raw)
 - **gray-matter auto-converts dates** to `Date` objects. `inferType` checks `instanceof Date`.
 - **`Position` type** comes from `unist`, not `mdast`.
 
+### DB Layer (`src/db/`)
+
+Database connection and schema management.
+
+- **`connection.ts`** — `openDatabase(dbPath)` factory. Configures WAL mode, foreign keys, busy timeout. Creates parent directories for file-based DBs.
+- **`schema.ts`** — `createSchema(db)` runs idempotent DDL: 7 tables (nodes, node_types, nodes_fts, fields, relationships, schemas, files), 9 indices, 3 FTS5 sync triggers. No migration tracking — DB is rebuildable.
+- **`index.ts`** — Re-exports `openDatabase` and `createSchema`.
+
 ### Planned Modules (not yet implemented)
 
-- `src/db/` — SQLite (better-sqlite3) with WAL mode, FTS5
 - `src/schema/` — YAML schema loader with inheritance
 - `src/sync/` — chokidar file watcher + incremental indexer
 - `src/mcp/` — MCP server with query/read/mutate tools

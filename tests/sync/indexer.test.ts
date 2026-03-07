@@ -345,4 +345,34 @@ describe('incrementalIndex', () => {
     expect(file.mtime).toBeTruthy();
     expect(file.hash).toMatch(/^[a-f0-9]{64}$/);
   });
+
+  it('skips files with matching mtime', () => {
+    writeVaultFile('notes/hello.md', '# Hello');
+    incrementalIndex(db, tmpVault);
+
+    const result = incrementalIndex(db, tmpVault);
+
+    expect(result.indexed).toBe(0);
+    expect(result.skipped).toBe(1);
+    expect(result.deleted).toBe(0);
+  });
+
+  it('updates mtime but skips re-index when content is unchanged', () => {
+    writeVaultFile('notes/hello.md', '# Hello');
+    incrementalIndex(db, tmpVault);
+
+    // Touch the file (change mtime without changing content)
+    const filePath = join(tmpVault, 'notes/hello.md');
+    const future = new Date(Date.now() + 10000);
+    utimesSync(filePath, future, future);
+
+    const result = incrementalIndex(db, tmpVault);
+
+    expect(result.indexed).toBe(0);
+    expect(result.skipped).toBe(1);
+
+    // Mtime should be updated in DB
+    const file = db.prepare('SELECT mtime FROM files WHERE path = ?').get('notes/hello.md') as any;
+    expect(file.mtime).toBe(future.toISOString());
+  });
 });

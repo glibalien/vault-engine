@@ -3,6 +3,19 @@ import type { Position } from 'unist';
 
 export type { Root, Position };
 
+export interface WikiLinkNode {
+  type: 'wikiLink';
+  target: string;
+  alias?: string;
+  position?: Position;
+}
+
+declare module 'mdast' {
+  interface PhrasingContentMap {
+    wikiLink: WikiLinkNode;
+  }
+}
+
 export interface WikiLink {
   target: string;
   alias?: string;

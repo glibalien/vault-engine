@@ -1,0 +1,23 @@
+name: task
+display_name: Task
+icon: check
+
+fields:
+  status:
+    type: enum
+    values: [todo, in-progress, blocked, done, cancelled]
+    default: todo
+    required: true
+  assignee:
+    type: reference
+    target_schema: person
+  due_date:
+    type: date
+  priority:
+    type: enum
+    values: [critical, high, medium, low]
+    default: medium
+
+serialization:
+  filename_template: "tasks/{{title}}.md"
+  frontmatter_fields: [status, assignee, due_date, priority]

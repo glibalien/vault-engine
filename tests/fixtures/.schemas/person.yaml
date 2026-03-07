@@ -1,0 +1,17 @@
+name: person
+display_name: Person
+icon: user
+
+fields:
+  role:
+    type: string
+  company:
+    type: string
+  email:
+    type: string
+  tags:
+    type: list<string>
+
+serialization:
+  filename_template: "people/{{title}}.md"
+  frontmatter_fields: [role, company, email, tags]

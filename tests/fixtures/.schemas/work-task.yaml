@@ -1,0 +1,18 @@
+name: work-task
+display_name: Work Task
+icon: briefcase
+extends: task
+
+fields:
+  project:
+    type: reference
+    target_schema: project
+  department:
+    type: string
+  billable:
+    type: boolean
+    default: false
+
+serialization:
+  filename_template: "tasks/work/{{title}}.md"
+  frontmatter_fields: [status, assignee, due_date, priority, project, department, billable]

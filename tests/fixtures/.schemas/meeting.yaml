@@ -1,0 +1,26 @@
+name: meeting
+display_name: Meeting
+icon: calendar
+
+fields:
+  date:
+    type: date
+    required: true
+  attendees:
+    type: list<reference>
+    target_schema: person
+  project:
+    type: reference
+    target_schema: project
+  status:
+    type: enum
+    values: [scheduled, completed, cancelled]
+    default: scheduled
+
+computed:
+  action_count:
+    query: "COUNT nodes WHERE types INCLUDES 'task' AND source REFERENCES this"
+
+serialization:
+  filename_template: "meetings/{{date}}-{{title}}.md"
+  frontmatter_fields: [date, attendees, project, status]

@@ -405,4 +405,21 @@ describe('incrementalIndex', () => {
     const nodes = db.prepare('SELECT id FROM nodes ORDER BY id').all() as any[];
     expect(nodes.map(n => n.id)).toEqual(['notes/first.md', 'notes/second.md']);
   });
+
+  it('removes DB entries for files deleted from disk', () => {
+    writeVaultFile('notes/keep.md', '# Keep');
+    writeVaultFile('notes/remove.md', '# Remove');
+    incrementalIndex(db, tmpVault);
+
+    rmSync(join(tmpVault, 'notes/remove.md'));
+
+    const result = incrementalIndex(db, tmpVault);
+
+    expect(result.deleted).toBe(1);
+    expect(result.skipped).toBe(1);
+
+    expect(db.prepare('SELECT * FROM nodes WHERE id = ?').get('notes/remove.md')).toBeUndefined();
+    expect(db.prepare('SELECT * FROM files WHERE path = ?').get('notes/remove.md')).toBeUndefined();
+    expect(db.prepare('SELECT * FROM nodes WHERE id = ?').get('notes/keep.md')).toBeDefined();
+  });
 });

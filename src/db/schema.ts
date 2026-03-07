@@ -48,8 +48,7 @@ export function createSchema(db: Database.Database): void {
       rel_type        TEXT NOT NULL,
       context         TEXT,
       created_at      TEXT DEFAULT (datetime('now')),
-      FOREIGN KEY (source_id) REFERENCES nodes(id) ON DELETE CASCADE,
-      FOREIGN KEY (target_id) REFERENCES nodes(id) ON DELETE CASCADE
+      FOREIGN KEY (source_id) REFERENCES nodes(id) ON DELETE CASCADE
     );
 
     CREATE TABLE IF NOT EXISTS schemas (

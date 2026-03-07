@@ -144,6 +144,22 @@ describe('createSchema', () => {
     ).toThrow(/FOREIGN KEY/);
   });
 
+  it('allows dangling target_id in relationships (no FK on target)', () => {
+    createSchema(db);
+
+    db.prepare(
+      `INSERT INTO nodes (id, file_path, node_type, content_text, content_md)
+       VALUES ('n1', 'test.md', 'file', 'text', '# Test')`
+    ).run();
+
+    expect(() =>
+      db.prepare(
+        `INSERT INTO relationships (source_id, target_id, rel_type)
+         VALUES ('n1', 'nonexistent-target', 'wiki-link')`
+      ).run()
+    ).not.toThrow();
+  });
+
   it('cascades deletes from nodes to node_types and fields', () => {
     createSchema(db);
 

@@ -1,6 +1,12 @@
 import type Database from 'better-sqlite3';
 import type { ParsedFile } from '../parser/index.js';
 
+function stringifyValue(value: unknown, valueType: string): string {
+  if (value instanceof Date) return value.toISOString();
+  if (Array.isArray(value)) return JSON.stringify(value);
+  return String(value);
+}
+
 export function indexFile(
   db: Database.Database,
   parsed: ParsedFile,
@@ -22,5 +28,23 @@ export function indexFile(
   const insertType = db.prepare('INSERT INTO node_types (node_id, schema_type) VALUES (?, ?)');
   for (const type of parsed.types) {
     insertType.run(relativePath, type);
+  }
+
+  // Insert fields
+  const insertField = db.prepare(`
+    INSERT INTO fields (node_id, key, value_text, value_type, value_number, value_date)
+    VALUES (?, ?, ?, ?, ?, ?)
+  `);
+  for (const field of parsed.fields) {
+    insertField.run(
+      relativePath,
+      field.key,
+      stringifyValue(field.value, field.valueType),
+      field.valueType,
+      field.valueType === 'number' ? Number(field.value) : null,
+      field.valueType === 'date' && field.value instanceof Date
+        ? field.value.toISOString()
+        : null,
+    );
   }
 }

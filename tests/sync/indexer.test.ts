@@ -56,4 +56,56 @@ describe('indexFile', () => {
     const types = db.prepare('SELECT * FROM node_types WHERE node_id = ?').all('notes/plain.md');
     expect(types).toHaveLength(0);
   });
+
+  it('inserts fields with correct value mappings', () => {
+    const { parsed } = loadAndParse('sample-task.md', 'tasks/review.md');
+    indexFile(db, parsed, 'tasks/review.md', '2025-03-10T00:00:00.000Z');
+
+    const fields = db.prepare('SELECT * FROM fields WHERE node_id = ? ORDER BY key')
+      .all('tasks/review.md') as any[];
+    const byKey = Object.fromEntries(fields.map(f => [f.key, f]));
+
+    // string field
+    expect(byKey.status.value_text).toBe('todo');
+    expect(byKey.status.value_type).toBe('string');
+
+    // reference field
+    expect(byKey.assignee.value_type).toBe('reference');
+    expect(byKey.assignee.value_text).toBe('[[Bob Jones]]');
+
+    // number field — priority is 'high' (string), not a number
+    expect(byKey.priority.value_type).toBe('string');
+  });
+
+  it('populates value_number for number fields', () => {
+    const raw = '---\ntitle: Test\ncount: 42\n---\nBody.';
+    const parsed = parseFile('test.md', raw);
+    indexFile(db, parsed, 'test.md', '2025-03-10T00:00:00.000Z');
+
+    const field = db.prepare('SELECT * FROM fields WHERE node_id = ? AND key = ?')
+      .get('test.md', 'count') as any;
+    expect(field.value_type).toBe('number');
+    expect(field.value_number).toBe(42);
+    expect(field.value_text).toBe('42');
+  });
+
+  it('populates value_date for date fields', () => {
+    const { parsed } = loadAndParse('sample-task.md', 'tasks/review.md');
+    indexFile(db, parsed, 'tasks/review.md', '2025-03-10T00:00:00.000Z');
+
+    const field = db.prepare('SELECT * FROM fields WHERE node_id = ? AND key = ?')
+      .get('tasks/review.md', 'due_date') as any;
+    expect(field.value_type).toBe('date');
+    expect(field.value_date).toMatch(/^\d{4}-\d{2}-\d{2}/);
+  });
+
+  it('serializes list fields as JSON', () => {
+    const { parsed } = loadAndParse('sample-person.md', 'people/alice.md');
+    indexFile(db, parsed, 'people/alice.md', '2025-03-10T00:00:00.000Z');
+
+    const field = db.prepare('SELECT * FROM fields WHERE node_id = ? AND key = ?')
+      .get('people/alice.md', 'tags') as any;
+    expect(field.value_type).toBe('list');
+    expect(JSON.parse(field.value_text)).toEqual(['engineering', 'leadership']);
+  });
 });

@@ -37,6 +37,28 @@ describe('loadSchemas', () => {
     expect(person!.fields.tags).toEqual({ type: 'list<string>' });
     expect(person!.serialization?.filename_template).toBe('people/{{title}}.md');
   });
+
+  it('stores all schemas in DB and retrieves via getAllSchemas', () => {
+    loadSchemas(db, fixturesDir);
+
+    const all = getAllSchemas(db);
+    const names = all.map(s => s.name).sort();
+    expect(names).toEqual(['meeting', 'person', 'task', 'work-task']);
+  });
+
+  it('returns null for non-existent schema', () => {
+    loadSchemas(db, fixturesDir);
+
+    expect(getSchema(db, 'nonexistent')).toBeNull();
+  });
+
+  it('stores computed fields in schema definition', () => {
+    loadSchemas(db, fixturesDir);
+
+    const meeting = getSchema(db, 'meeting');
+    expect(meeting!.computed).toBeDefined();
+    expect(meeting!.computed!.action_count.query).toContain('COUNT');
+  });
 });
 
 describe('inheritance resolution', () => {
@@ -215,5 +237,51 @@ fields:
 `);
 
     expect(() => loadSchemas(db, tmpDir)).toThrow(/Duplicate schema name 'thing'/);
+  });
+
+  it('full reload replaces previous schemas', () => {
+    writeFileSync(join(tmpDir, '.schemas', 'alpha.yaml'), `
+name: alpha
+fields:
+  x:
+    type: string
+`);
+    writeFileSync(join(tmpDir, '.schemas', 'beta.yaml'), `
+name: beta
+fields:
+  y:
+    type: number
+`);
+
+    loadSchemas(db, tmpDir);
+    expect(getAllSchemas(db)).toHaveLength(2);
+    expect(getSchema(db, 'alpha')).not.toBeNull();
+
+    // Remove alpha, add gamma
+    rmSync(join(tmpDir, '.schemas', 'alpha.yaml'));
+    writeFileSync(join(tmpDir, '.schemas', 'gamma.yaml'), `
+name: gamma
+fields:
+  z:
+    type: boolean
+`);
+
+    loadSchemas(db, tmpDir);
+    const all = getAllSchemas(db);
+    const names = all.map(s => s.name).sort();
+    expect(names).toEqual(['beta', 'gamma']);
+    expect(getSchema(db, 'alpha')).toBeNull();
+  });
+
+  it('handles empty .schemas directory', () => {
+    // tmpDir already has an empty .schemas/ dir from beforeEach
+    loadSchemas(db, tmpDir);
+    expect(getAllSchemas(db)).toEqual([]);
+  });
+
+  it('handles missing .schemas directory', () => {
+    rmSync(join(tmpDir, '.schemas'), { recursive: true, force: true });
+    loadSchemas(db, tmpDir);
+    expect(getAllSchemas(db)).toEqual([]);
   });
 });

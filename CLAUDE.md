@@ -75,10 +75,23 @@ Full-text search over indexed content.
 - **`search.ts`** — `search(db, options)` queries FTS5 with optional type filtering. Two-phase SQL: FTS5 MATCH for ranked node IDs, then batch-loads types and fields. Returns `SearchResult[]` ordered by bm25 rank.
 - **`index.ts`** — Re-exports `search`, `SearchOptions`, `SearchResult`.
 
+### MCP Layer (`src/mcp/`)
+
+MCP server exposing read-only query tools over the indexed vault.
+
+- **`server.ts`** — `createServer(db)` creates an `McpServer` with 4 tools registered. Returns the server instance (caller connects transport). Contains a `hydrateNodes` helper that batch-loads types and fields for node rows.
+  - **`list-types`** — No params. Returns distinct types from `node_types` with counts.
+  - **`get-node`** — Returns full node details by ID (vault-relative path). Optional `include_relationships` flag.
+  - **`get-recent`** — Returns nodes ordered by `updated_at DESC`. Optional `schema_type` and `since` filters.
+  - **`query-nodes`** — Structured search with optional `schema_type`, `full_text` (FTS5), field `filters` (equality), `order_by`, and `limit`. Dynamic SQL construction with bound parameters.
+
+### Entry Point (`src/index.ts`)
+
+Opens DB (path from CLI arg or default `.vault-engine/vault.db`), creates schema, starts MCP server over stdio transport.
+
 ### Planned Modules (not yet implemented)
 
 - `src/schema/` — YAML schema loader with inheritance
-- `src/mcp/` — MCP server with query/read/mutate tools
 
 ## Testing
 

@@ -4,7 +4,7 @@ import { resolve } from 'path';
 import Database from 'better-sqlite3';
 import { createSchema } from '../../src/db/schema.js';
 import { parseFile } from '../../src/parser/index.js';
-import { indexFile, rebuildIndex } from '../../src/sync/indexer.js';
+import { indexFile, rebuildIndex, deleteFile } from '../../src/sync/indexer.js';
 
 const fixturesDir = resolve(import.meta.dirname, '../fixtures');
 
@@ -161,6 +161,54 @@ describe('indexFile', () => {
 
     const file = db.prepare('SELECT * FROM files WHERE path = ?').get('tasks/review.md') as any;
     expect(file.mtime).toBe('2025-03-11T00:00:00.000Z');
+  });
+});
+
+describe('deleteFile', () => {
+  let db: Database.Database;
+
+  beforeEach(() => {
+    db = new Database(':memory:');
+    db.pragma('foreign_keys = ON');
+    createSchema(db);
+  });
+
+  afterEach(() => {
+    db.close();
+  });
+
+  function seedFile(path: string, raw: string) {
+    const parsed = parseFile(path, raw);
+    indexFile(db, parsed, path, '2025-03-10T00:00:00.000Z', raw);
+  }
+
+  it('removes node, types, fields, relationships, and files rows', () => {
+    const raw = readFileSync(resolve(fixturesDir, 'sample-task.md'), 'utf-8');
+    seedFile('tasks/review.md', raw);
+
+    deleteFile(db, 'tasks/review.md');
+
+    expect(db.prepare('SELECT * FROM nodes WHERE id = ?').get('tasks/review.md')).toBeUndefined();
+    expect(db.prepare('SELECT * FROM node_types WHERE node_id = ?').all('tasks/review.md')).toHaveLength(0);
+    expect(db.prepare('SELECT * FROM fields WHERE node_id = ?').all('tasks/review.md')).toHaveLength(0);
+    expect(db.prepare('SELECT * FROM relationships WHERE source_id = ?').all('tasks/review.md')).toHaveLength(0);
+    expect(db.prepare('SELECT * FROM files WHERE path = ?').get('tasks/review.md')).toBeUndefined();
+  });
+
+  it('does not affect other files', () => {
+    const raw1 = readFileSync(resolve(fixturesDir, 'sample-task.md'), 'utf-8');
+    const raw2 = readFileSync(resolve(fixturesDir, 'sample-person.md'), 'utf-8');
+    seedFile('tasks/review.md', raw1);
+    seedFile('people/alice.md', raw2);
+
+    deleteFile(db, 'tasks/review.md');
+
+    expect(db.prepare('SELECT * FROM nodes WHERE id = ?').get('people/alice.md')).toBeDefined();
+    expect(db.prepare('SELECT * FROM files WHERE path = ?').get('people/alice.md')).toBeDefined();
+  });
+
+  it('is a no-op for nonexistent paths', () => {
+    expect(() => deleteFile(db, 'nonexistent.md')).not.toThrow();
   });
 });
 

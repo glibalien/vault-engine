@@ -85,6 +85,14 @@ export function indexFile(
   `).run(relativePath, mtime, hash);
 }
 
+export function deleteFile(db: Database.Database, relativePath: string): void {
+  db.prepare('DELETE FROM relationships WHERE source_id = ?').run(relativePath);
+  db.prepare('DELETE FROM fields WHERE node_id = ?').run(relativePath);
+  db.prepare('DELETE FROM node_types WHERE node_id = ?').run(relativePath);
+  db.prepare('DELETE FROM nodes WHERE id = ?').run(relativePath);
+  db.prepare('DELETE FROM files WHERE path = ?').run(relativePath);
+}
+
 export function rebuildIndex(
   db: Database.Database,
   vaultPath: string,

@@ -66,6 +66,14 @@ File-to-database indexing pipeline.
 - **`indexer.ts`** — `indexFile(db, parsed, relativePath, mtime, raw)` writes one parsed file into all DB tables (nodes, node_types, fields, relationships, files). Uses delete-then-insert for child tables. Does not manage transactions. `rebuildIndex(db, vaultPath)` scans all `.md` files, clears the DB, and indexes everything in one transaction.
 - **`index.ts`** — Re-exports `indexFile` and `rebuildIndex`.
 
+### Search Layer (`src/search/`)
+
+Full-text search over indexed content.
+
+- **`types.ts`** — `SearchOptions` (query, schemaType, limit) and `SearchResult` (id, filePath, nodeType, types, fields, contentText, rank).
+- **`search.ts`** — `search(db, options)` queries FTS5 with optional type filtering. Two-phase SQL: FTS5 MATCH for ranked node IDs, then batch-loads types and fields. Returns `SearchResult[]` ordered by bm25 rank.
+- **`index.ts`** — Re-exports `search`, `SearchOptions`, `SearchResult`.
+
 ### Planned Modules (not yet implemented)
 
 - `src/schema/` — YAML schema loader with inheritance

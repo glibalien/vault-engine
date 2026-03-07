@@ -119,4 +119,62 @@ describe('watchVault', () => {
     expect(db.prepare('SELECT * FROM nodes WHERE id = ?').get('test.md')).toBeUndefined();
     expect(db.prepare('SELECT * FROM files WHERE path = ?').get('test.md')).toBeUndefined();
   });
+
+  it('ignores non-.md files', async () => {
+    handle = watchVault(db, tmpVault);
+    await handle.ready;
+
+    writeFileSync(join(tmpVault, 'readme.txt'), 'Not markdown.');
+    writeFileSync(join(tmpVault, 'data.json'), '{}');
+    writeFileSync(join(tmpVault, 'real.md'), '# Real');
+
+    await waitFor(() =>
+      db.prepare('SELECT * FROM nodes WHERE id = ?').get('real.md') !== undefined,
+    );
+
+    // Give extra time for any stray events
+    await new Promise((r) => setTimeout(r, 200));
+
+    const allNodes = db.prepare('SELECT id FROM nodes').all() as any[];
+    expect(allNodes).toHaveLength(1);
+    expect(allNodes[0].id).toBe('real.md');
+  });
+
+  it('skips indexing when path has active write lock', async () => {
+    handle = watchVault(db, tmpVault);
+    await handle.ready;
+
+    acquireWriteLock('locked.md');
+    writeFileSync(join(tmpVault, 'locked.md'), '# Locked');
+
+    // Write an unlocked file to prove the watcher is working
+    writeFileSync(join(tmpVault, 'unlocked.md'), '# Unlocked');
+
+    await waitFor(() =>
+      db.prepare('SELECT * FROM nodes WHERE id = ?').get('unlocked.md') !== undefined,
+    );
+
+    // Give extra time for any stray events
+    await new Promise((r) => setTimeout(r, 200));
+
+    expect(db.prepare('SELECT * FROM nodes WHERE id = ?').get('locked.md')).toBeUndefined();
+
+    releaseWriteLock('locked.md');
+  });
+
+  it('indexes files in subdirectories', async () => {
+    handle = watchVault(db, tmpVault);
+    await handle.ready;
+
+    mkdirSync(join(tmpVault, 'notes'), { recursive: true });
+    writeFileSync(join(tmpVault, 'notes/deep.md'), '# Deep Note');
+
+    await waitFor(() =>
+      db.prepare('SELECT * FROM nodes WHERE id = ?').get('notes/deep.md') !== undefined,
+    );
+
+    const node = db.prepare('SELECT * FROM nodes WHERE id = ?').get('notes/deep.md') as any;
+    expect(node).toBeDefined();
+    expect(node.file_path).toBe('notes/deep.md');
+  });
 });

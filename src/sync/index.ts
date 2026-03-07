@@ -1,1 +1,1 @@
-export { indexFile, rebuildIndex } from './indexer.js';
+export { indexFile, rebuildIndex, deleteFile, incrementalIndex } from './indexer.js';

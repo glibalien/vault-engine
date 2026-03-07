@@ -77,4 +77,26 @@ describe('watchVault', () => {
     expect(node).toBeDefined();
     expect(node.content_text).toContain('Hello');
   });
+
+  it('updates DB when a .md file is modified', async () => {
+    handle = watchVault(db, tmpVault);
+    await handle.ready;
+
+    writeFileSync(join(tmpVault, 'test.md'), '# Original');
+
+    // Wait for initial add to be processed
+    await waitFor(() =>
+      db.prepare('SELECT * FROM nodes WHERE id = ?').get('test.md') !== undefined,
+    );
+
+    writeFileSync(join(tmpVault, 'test.md'), '# Updated\nNew content.');
+
+    await waitFor(() => {
+      const node = db.prepare('SELECT content_text FROM nodes WHERE id = ?').get('test.md') as any;
+      return node?.content_text?.includes('Updated');
+    });
+
+    const node = db.prepare('SELECT content_text FROM nodes WHERE id = ?').get('test.md') as any;
+    expect(node.content_text).toContain('Updated');
+  });
 });

@@ -162,6 +162,28 @@ describe('watchVault', () => {
     releaseWriteLock('locked.md');
   });
 
+  it('debounces rapid writes to the same file', async () => {
+    handle = watchVault(db, tmpVault, { debounceMs: 100 });
+    await handle.ready;
+
+    // Write the same file 5 times rapidly
+    for (let i = 0; i < 5; i++) {
+      writeFileSync(join(tmpVault, 'rapid.md'), `# Version ${i}`);
+    }
+
+    await waitFor(() =>
+      db.prepare('SELECT * FROM nodes WHERE id = ?').get('rapid.md') !== undefined,
+    );
+
+    // The final content should be the last write
+    const node = db.prepare('SELECT content_text FROM nodes WHERE id = ?').get('rapid.md') as any;
+    expect(node.content_text).toContain('Version 4');
+
+    // Only one files row should exist (not duplicates from multiple indexes)
+    const files = db.prepare('SELECT * FROM files WHERE path = ?').all('rapid.md');
+    expect(files).toHaveLength(1);
+  });
+
   it('indexes files in subdirectories', async () => {
     handle = watchVault(db, tmpVault);
     await handle.ready;

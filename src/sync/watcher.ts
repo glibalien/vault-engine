@@ -70,7 +70,9 @@ export function watchVault(
         const raw = readFileSync(absPath, 'utf-8');
         const mtime = statSync(absPath).mtime.toISOString();
         const parsed = parseFile(rel, raw);
-        indexFile(db, parsed, rel, mtime, raw);
+        db.transaction(() => {
+          indexFile(db, parsed, rel, mtime, raw);
+        })();
       } catch (err) {
         console.error(`[vault-engine] failed to index ${rel}:`, err);
       }
@@ -80,13 +82,19 @@ export function watchVault(
   watcher.on('add', handleAddOrChange);
   watcher.on('change', handleAddOrChange);
 
+  watcher.on('error', (err) => {
+    console.error('[vault-engine] watcher error:', err);
+  });
+
   watcher.on('unlink', (absPath: string) => {
     const rel = relative(vaultPath, absPath).replaceAll('\\', '/');
     if (isWriteLocked(rel)) return;
 
     debounced(rel, () => {
       try {
-        deleteFile(db, rel);
+        db.transaction(() => {
+          deleteFile(db, rel);
+        })();
       } catch (err) {
         console.error(`[vault-engine] failed to delete ${rel}:`, err);
       }

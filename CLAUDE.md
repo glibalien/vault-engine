@@ -59,10 +59,16 @@ Database connection and schema management.
 - **`schema.ts`** — `createSchema(db)` runs idempotent DDL: 7 tables (nodes, node_types, nodes_fts, fields, relationships, schemas, files), 9 indices, 3 FTS5 sync triggers. No migration tracking — DB is rebuildable.
 - **`index.ts`** — Re-exports `openDatabase` and `createSchema`.
 
+### Sync Layer (`src/sync/`)
+
+File-to-database indexing pipeline.
+
+- **`indexer.ts`** — `indexFile(db, parsed, relativePath, mtime, raw)` writes one parsed file into all DB tables (nodes, node_types, fields, relationships, files). Uses delete-then-insert for child tables. Does not manage transactions. `rebuildIndex(db, vaultPath)` scans all `.md` files, clears the DB, and indexes everything in one transaction.
+- **`index.ts`** — Re-exports `indexFile` and `rebuildIndex`.
+
 ### Planned Modules (not yet implemented)
 
 - `src/schema/` — YAML schema loader with inheritance
-- `src/sync/` — chokidar file watcher + incremental indexer
 - `src/mcp/` — MCP server with query/read/mutate tools
 
 ## Testing

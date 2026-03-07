@@ -1,6 +1,6 @@
 import { createHash } from 'node:crypto';
 import { readFileSync, statSync, readdirSync } from 'node:fs';
-import { relative, join } from 'node:path';
+import { relative, join, basename } from 'node:path';
 import type Database from 'better-sqlite3';
 import type { ParsedFile } from '../parser/index.js';
 import { parseFile } from '../parser/index.js';
@@ -21,6 +21,13 @@ function stringifyValue(value: unknown, valueType: string): string {
   return String(value);
 }
 
+function deriveTitle(parsed: ParsedFile, relativePath: string): string {
+  if (parsed.frontmatter.title && typeof parsed.frontmatter.title === 'string') {
+    return parsed.frontmatter.title;
+  }
+  return basename(relativePath, '.md');
+}
+
 export function indexFile(
   db: Database.Database,
   parsed: ParsedFile,
@@ -35,9 +42,9 @@ export function indexFile(
 
   // Upsert node
   db.prepare(`
-    INSERT OR REPLACE INTO nodes (id, file_path, node_type, content_text, content_md, depth)
-    VALUES (?, ?, 'file', ?, ?, 0)
-  `).run(relativePath, relativePath, parsed.contentText, parsed.contentMd);
+    INSERT OR REPLACE INTO nodes (id, file_path, node_type, content_text, content_md, title, depth)
+    VALUES (?, ?, 'file', ?, ?, ?, 0)
+  `).run(relativePath, relativePath, parsed.contentText, parsed.contentMd, deriveTitle(parsed, relativePath));
 
   // Insert node_types
   const insertType = db.prepare('INSERT INTO node_types (node_id, schema_type) VALUES (?, ?)');

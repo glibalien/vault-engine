@@ -107,6 +107,7 @@ export function watchVault(
   });
 
   let schemaWatcher: FSWatcher | undefined;
+  let schemaTimer: ReturnType<typeof setTimeout> | undefined;
   if (opts?.onSchemaChange) {
     const schemasDir = join(vaultPath, '.schemas');
     const onSchemaChange = opts.onSchemaChange;
@@ -119,7 +120,6 @@ export function watchVault(
       },
     });
 
-    let schemaTimer: ReturnType<typeof setTimeout> | undefined;
     const schemaDebounce = () => {
       if (schemaTimer) clearTimeout(schemaTimer);
       schemaTimer = setTimeout(() => {
@@ -131,6 +131,10 @@ export function watchVault(
     schemaWatcher.on('add', schemaDebounce);
     schemaWatcher.on('change', schemaDebounce);
     schemaWatcher.on('unlink', schemaDebounce);
+
+    schemaWatcher.on('error', (err) => {
+      console.error('[vault-engine] schema watcher error:', err);
+    });
   }
 
   return {
@@ -138,6 +142,7 @@ export function watchVault(
     close: async () => {
       for (const timer of timers.values()) clearTimeout(timer);
       timers.clear();
+      if (schemaTimer) clearTimeout(schemaTimer);
       await watcher.close();
       if (schemaWatcher) await schemaWatcher.close();
     },

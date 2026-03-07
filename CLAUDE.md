@@ -63,8 +63,8 @@ Database connection and schema management.
 
 File-to-database indexing pipeline.
 
-- **`indexer.ts`** — `indexFile(db, parsed, relativePath, mtime, raw)` writes one parsed file into all DB tables (nodes, node_types, fields, relationships, files). Uses delete-then-insert for child tables. Does not manage transactions. `rebuildIndex(db, vaultPath)` scans all `.md` files, clears the DB, and indexes everything in one transaction.
-- **`index.ts`** — Re-exports `indexFile` and `rebuildIndex`.
+- **`indexer.ts`** — `indexFile(db, parsed, relativePath, mtime, raw)` writes one parsed file into all DB tables (nodes, node_types, fields, relationships, files). Uses delete-then-insert for child tables. Does not manage transactions. `deleteFile(db, relativePath)` removes all DB rows for a file path (relationships, fields, node_types, nodes, files). `rebuildIndex(db, vaultPath)` scans all `.md` files, clears the DB, and indexes everything in one transaction. `incrementalIndex(db, vaultPath)` scans files, compares mtime then SHA-256 hash against the `files` table, only re-indexes changed/new files, and removes DB entries for deleted files. Returns `{ indexed, skipped, deleted }`.
+- **`index.ts`** — Re-exports `indexFile`, `rebuildIndex`, `deleteFile`, `incrementalIndex`.
 
 ### Search Layer (`src/search/`)
 

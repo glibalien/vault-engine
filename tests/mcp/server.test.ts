@@ -200,4 +200,149 @@ describe('MCP server', () => {
       expect(data).toHaveLength(1);
     });
   });
+
+  describe('query-nodes', () => {
+    it('returns error when no filter criteria provided', async () => {
+      const result = await client.callTool({
+        name: 'query-nodes',
+        arguments: {},
+      });
+
+      expect(result.isError).toBe(true);
+      const text = (result.content as Array<{ text: string }>)[0].text;
+      expect(text).toContain('At least one');
+    });
+
+    it('queries by schema_type only', async () => {
+      indexFixture(db, 'sample-task.md', 'tasks/review.md');
+      indexFixture(db, 'sample-person.md', 'people/alice.md');
+
+      const result = await client.callTool({
+        name: 'query-nodes',
+        arguments: { schema_type: 'person' },
+      });
+
+      const data = JSON.parse((result.content as Array<{ text: string }>)[0].text);
+      expect(data).toHaveLength(1);
+      expect(data[0].id).toBe('people/alice.md');
+      expect(data[0].types).toContain('person');
+      // content_md should NOT be included
+      expect(data[0].content_md).toBeUndefined();
+    });
+
+    it('queries by full_text search', async () => {
+      indexFixture(db, 'sample-task.md', 'tasks/review.md');
+      indexFixture(db, 'sample-person.md', 'people/alice.md');
+
+      const result = await client.callTool({
+        name: 'query-nodes',
+        arguments: { full_text: 'vendor' },
+      });
+
+      const data = JSON.parse((result.content as Array<{ text: string }>)[0].text);
+      expect(data).toHaveLength(1);
+      expect(data[0].id).toBe('tasks/review.md');
+    });
+
+    it('combines schema_type and full_text', async () => {
+      indexFixture(db, 'sample-task.md', 'tasks/review.md');
+      indexFixture(db, 'sample-meeting.md', 'meetings/q1.md');
+
+      // Both have type "task", but only review has "Globex"
+      const result = await client.callTool({
+        name: 'query-nodes',
+        arguments: { schema_type: 'task', full_text: 'Globex' },
+      });
+
+      const data = JSON.parse((result.content as Array<{ text: string }>)[0].text);
+      expect(data).toHaveLength(1);
+      expect(data[0].id).toBe('tasks/review.md');
+    });
+
+    it('filters by field equality', async () => {
+      indexFixture(db, 'sample-task.md', 'tasks/review.md');
+      indexFixture(db, 'sample-meeting.md', 'meetings/q1.md');
+
+      const result = await client.callTool({
+        name: 'query-nodes',
+        arguments: {
+          filters: [{ field: 'status', operator: 'eq', value: 'todo' }],
+        },
+      });
+
+      const data = JSON.parse((result.content as Array<{ text: string }>)[0].text);
+      // Both sample-task and sample-meeting have status: todo
+      expect(data).toHaveLength(2);
+    });
+
+    it('combines schema_type and field filter', async () => {
+      indexFixture(db, 'sample-task.md', 'tasks/review.md');
+      indexFixture(db, 'sample-meeting.md', 'meetings/q1.md');
+
+      const result = await client.callTool({
+        name: 'query-nodes',
+        arguments: {
+          schema_type: 'meeting',
+          filters: [{ field: 'status', operator: 'eq', value: 'todo' }],
+        },
+      });
+
+      const data = JSON.parse((result.content as Array<{ text: string }>)[0].text);
+      expect(data).toHaveLength(1);
+      expect(data[0].id).toBe('meetings/q1.md');
+    });
+
+    it('returns empty array when filters match nothing', async () => {
+      indexFixture(db, 'sample-task.md', 'tasks/review.md');
+
+      const result = await client.callTool({
+        name: 'query-nodes',
+        arguments: {
+          filters: [{ field: 'status', operator: 'eq', value: 'done' }],
+        },
+      });
+
+      const data = JSON.parse((result.content as Array<{ text: string }>)[0].text);
+      expect(data).toEqual([]);
+    });
+
+    it('respects limit', async () => {
+      indexFixture(db, 'sample-task.md', 'tasks/review.md');
+      indexFixture(db, 'sample-person.md', 'people/alice.md');
+      indexFixture(db, 'sample-meeting.md', 'meetings/q1.md');
+
+      const result = await client.callTool({
+        name: 'query-nodes',
+        arguments: { schema_type: 'task', limit: 1 },
+      });
+
+      const data = JSON.parse((result.content as Array<{ text: string }>)[0].text);
+      expect(data).toHaveLength(1);
+    });
+
+    it('supports order_by on updated_at', async () => {
+      indexFixture(db, 'sample-task.md', 'tasks/review.md');
+      indexFixture(db, 'sample-meeting.md', 'meetings/q1.md');
+
+      const result = await client.callTool({
+        name: 'query-nodes',
+        arguments: { schema_type: 'task', order_by: 'updated_at ASC' },
+      });
+
+      const data = JSON.parse((result.content as Array<{ text: string }>)[0].text);
+      expect(data).toHaveLength(2);
+      // Just verify both returned — ordering by updated_at with same insert time is deterministic by rowid
+    });
+
+    it('handles FTS5 syntax errors gracefully', async () => {
+      indexFixture(db, 'sample-task.md', 'tasks/review.md');
+
+      const result = await client.callTool({
+        name: 'query-nodes',
+        arguments: { full_text: '***invalid***' },
+      });
+
+      expect(result.isError).toBe(true);
+    });
+  });
 });

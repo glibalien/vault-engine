@@ -3,7 +3,7 @@ import Database from 'better-sqlite3';
 import { createSchema } from '../../src/db/schema.js';
 import { parseFile } from '../../src/parser/index.js';
 import { indexFile } from '../../src/sync/indexer.js';
-import { resolveTarget } from '../../src/sync/resolver.js';
+import { resolveTarget, resolveReferences } from '../../src/sync/resolver.js';
 import { readFileSync } from 'fs';
 import { resolve } from 'path';
 
@@ -149,5 +149,102 @@ describe('resolveTarget', () => {
     seed('b/shared/Note.md', '---\ntitle: Note\n---\nB.');
 
     expect(resolveTarget(db, 'shared/Note')).toBeNull();
+  });
+});
+
+describe('resolveReferences', () => {
+  let db: Database.Database;
+
+  beforeEach(() => {
+    db = new Database(':memory:');
+    db.pragma('foreign_keys = ON');
+    createSchema(db);
+  });
+
+  afterEach(() => {
+    db.close();
+  });
+
+  function seed(path: string, raw: string) {
+    const parsed = parseFile(path, raw);
+    indexFile(db, parsed, path, '2025-03-10T00:00:00.000Z', raw);
+  }
+
+  it('resolves relationships where target matches a node title', () => {
+    seed('people/alice.md', '---\ntitle: Alice Smith\ntypes: [person]\n---\nBio.');
+    seed('tasks/todo.md', '---\ntitle: My Task\nassignee: "[[Alice Smith]]"\n---\nDo it.');
+
+    const result = resolveReferences(db);
+
+    const rel = db.prepare(
+      "SELECT resolved_target_id FROM relationships WHERE source_id = 'tasks/todo.md' AND target_id = 'Alice Smith'"
+    ).get() as any;
+    expect(rel.resolved_target_id).toBe('people/alice.md');
+    expect(result.resolved).toBeGreaterThanOrEqual(1);
+  });
+
+  it('leaves unresolvable targets as NULL', () => {
+    seed('tasks/todo.md', '---\ntitle: My Task\nassignee: "[[Nobody]]"\n---\nDo it.');
+
+    const result = resolveReferences(db);
+
+    const rel = db.prepare(
+      "SELECT resolved_target_id FROM relationships WHERE source_id = 'tasks/todo.md' AND target_id = 'Nobody'"
+    ).get() as any;
+    expect(rel.resolved_target_id).toBeNull();
+    expect(result.unresolved).toBeGreaterThanOrEqual(1);
+  });
+
+  it('clears stale resolutions when target node is deleted', () => {
+    seed('people/alice.md', '---\ntitle: Alice Smith\ntypes: [person]\n---\nBio.');
+    seed('tasks/todo.md', '---\ntitle: My Task\nassignee: "[[Alice Smith]]"\n---\nDo it.');
+    resolveReferences(db);
+
+    // Verify it was resolved
+    let rel = db.prepare(
+      "SELECT resolved_target_id FROM relationships WHERE source_id = 'tasks/todo.md' AND target_id = 'Alice Smith'"
+    ).get() as any;
+    expect(rel.resolved_target_id).toBe('people/alice.md');
+
+    // Delete the target node
+    db.prepare("DELETE FROM nodes WHERE id = 'people/alice.md'").run();
+
+    // Re-resolve — should clear the stale reference
+    resolveReferences(db);
+
+    rel = db.prepare(
+      "SELECT resolved_target_id FROM relationships WHERE source_id = 'tasks/todo.md' AND target_id = 'Alice Smith'"
+    ).get() as any;
+    expect(rel.resolved_target_id).toBeNull();
+  });
+
+  it('resolves previously dangling refs when target node is added', () => {
+    seed('tasks/todo.md', '---\ntitle: My Task\nassignee: "[[Alice Smith]]"\n---\nDo it.');
+    resolveReferences(db);
+
+    // Dangling
+    let rel = db.prepare(
+      "SELECT resolved_target_id FROM relationships WHERE source_id = 'tasks/todo.md' AND target_id = 'Alice Smith'"
+    ).get() as any;
+    expect(rel.resolved_target_id).toBeNull();
+
+    // Add the target node
+    seed('people/alice.md', '---\ntitle: Alice Smith\ntypes: [person]\n---\nBio.');
+    resolveReferences(db);
+
+    rel = db.prepare(
+      "SELECT resolved_target_id FROM relationships WHERE source_id = 'tasks/todo.md' AND target_id = 'Alice Smith'"
+    ).get() as any;
+    expect(rel.resolved_target_id).toBe('people/alice.md');
+  });
+
+  it('returns counts of resolved and unresolved references', () => {
+    seed('people/alice.md', '---\ntitle: Alice Smith\ntypes: [person]\n---\nBio.');
+    seed('tasks/todo.md', '---\ntitle: My Task\nassignee: "[[Alice Smith]]"\nsource: "[[Unknown]]"\n---\nDo it.');
+
+    const result = resolveReferences(db);
+
+    expect(result.resolved).toBe(1);
+    expect(result.unresolved).toBe(1);
   });
 });

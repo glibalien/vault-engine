@@ -42,6 +42,40 @@ export function resolveTarget(db: Database.Database, wikiLinkTarget: string): st
   return resolveTargetWithMaps(wikiLinkTarget, titleMap, pathMap);
 }
 
+export function resolveReferences(db: Database.Database): { resolved: number; unresolved: number } {
+  // Step 1: Clear stale resolutions
+  db.prepare(`
+    UPDATE relationships SET resolved_target_id = NULL
+    WHERE resolved_target_id IS NOT NULL
+      AND resolved_target_id NOT IN (SELECT id FROM nodes)
+  `).run();
+
+  // Step 2: Build lookup maps
+  const { titleMap, pathMap } = buildLookupMaps(db);
+
+  // Step 3: Resolve unresolved references
+  const unresolvedRows = db.prepare(
+    'SELECT id, target_id FROM relationships WHERE resolved_target_id IS NULL'
+  ).all() as Array<{ id: number; target_id: string }>;
+
+  const update = db.prepare('UPDATE relationships SET resolved_target_id = ? WHERE id = ?');
+
+  let resolved = 0;
+  let stillUnresolved = 0;
+
+  for (const row of unresolvedRows) {
+    const nodeId = resolveTargetWithMaps(row.target_id, titleMap, pathMap);
+    if (nodeId) {
+      update.run(nodeId, row.id);
+      resolved++;
+    } else {
+      stillUnresolved++;
+    }
+  }
+
+  return { resolved, unresolved: stillUnresolved };
+}
+
 function resolveTargetWithMaps(
   wikiLinkTarget: string,
   titleMap: Map<string, string[]>,

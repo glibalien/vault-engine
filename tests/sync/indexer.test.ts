@@ -375,4 +375,34 @@ describe('incrementalIndex', () => {
     const file = db.prepare('SELECT mtime FROM files WHERE path = ?').get('notes/hello.md') as any;
     expect(file.mtime).toBe(future.toISOString());
   });
+
+  it('re-indexes files whose content has changed', () => {
+    writeVaultFile('notes/hello.md', '# Hello\nOriginal content.');
+    incrementalIndex(db, tmpVault);
+
+    writeVaultFile('notes/hello.md', '# Hello\nUpdated content.');
+
+    const result = incrementalIndex(db, tmpVault);
+
+    expect(result.indexed).toBe(1);
+    expect(result.skipped).toBe(0);
+
+    const node = db.prepare('SELECT content_text FROM nodes WHERE id = ?').get('notes/hello.md') as any;
+    expect(node.content_text).toContain('Updated content');
+  });
+
+  it('indexes newly added files alongside existing unchanged files', () => {
+    writeVaultFile('notes/first.md', '# First');
+    incrementalIndex(db, tmpVault);
+
+    writeVaultFile('notes/second.md', '# Second');
+
+    const result = incrementalIndex(db, tmpVault);
+
+    expect(result.indexed).toBe(1);
+    expect(result.skipped).toBe(1);
+
+    const nodes = db.prepare('SELECT id FROM nodes ORDER BY id').all() as any[];
+    expect(nodes.map(n => n.id)).toEqual(['notes/first.md', 'notes/second.md']);
+  });
 });

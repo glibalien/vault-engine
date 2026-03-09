@@ -79,19 +79,32 @@ Full-text search over indexed content.
 
 MCP server exposing read-only query tools over the indexed vault.
 
-- **`server.ts`** — `createServer(db)` creates an `McpServer` with 4 tools registered. Returns the server instance (caller connects transport). Contains a `hydrateNodes` helper that batch-loads types and fields for node rows.
+- **`server.ts`** — `createServer(db)` creates an `McpServer` with 7 tools registered. Returns the server instance (caller connects transport). Contains `hydrateNodes` (batch-loads types + fields), `loadNodeForValidation` (reconstructs `FieldEntry[]` from DB), and `inferFieldType` (JS value → `FieldValueType`) helpers.
   - **`list-types`** — No params. Returns distinct types from `node_types` with counts.
   - **`get-node`** — Returns full node details by ID (vault-relative path). Optional `include_relationships` flag.
   - **`get-recent`** — Returns nodes ordered by `updated_at DESC`. Optional `schema_type` and `since` filters.
   - **`query-nodes`** — Structured search with optional `schema_type`, `full_text` (FTS5), field `filters` (equality), `order_by`, and `limit`. Dynamic SQL construction with bound parameters.
+  - **`list-schemas`** — No params. Returns schema summaries (name, display_name, icon, extends, ancestors, field_count) from the `schemas` table. Distinct from `list-types` (indexed data vs YAML definitions).
+  - **`describe-schema`** — Returns full `ResolvedSchema` by name, including inherited fields.
+  - **`validate-node`** — Two modes: by `node_id` (loads from DB) or hypothetical (`types: string[]` + `fields`). Runs `mergeSchemaFields` + `validateNode` pipeline.
 
 ### Entry Point (`src/index.ts`)
 
 Opens DB (path from CLI arg or default `.vault-engine/vault.db`), creates schema, starts MCP server over stdio transport.
 
-### Planned Modules (not yet implemented)
+### Schema Layer (`src/schema/`)
 
-- `src/schema/` — YAML schema loader with inheritance
+YAML-driven schema definitions with inheritance, multi-type field merging, and validation.
+
+- **`types.ts`** — `SchemaDefinition`, `FieldDefinition`, `ResolvedSchema`, `MergedField`, `MergeConflict`, `MergeResult`, `ValidationWarning`, `ValidationResult`.
+- **`loader.ts`** — `loadSchemas(db, vaultPath)` reads `.schemas/*.yaml`, resolves `extends` inheritance (topological sort, cycle detection), stores in `schemas` table. `getSchema(db, name)` and `getAllSchemas(db)` read back.
+- **`merger.ts`** — `mergeSchemaFields(db, types)` merges field definitions from multiple schemas. Compatible fields merge; incompatible types produce conflicts. Enum values union.
+- **`validator.ts`** — `validateNode(parsed, mergeResult)` checks required fields, type compatibility, enum values, reference syntax. Warns, never rejects.
+- **`index.ts`** — Re-exports all types and functions.
+
+## Gotchas
+
+- **Zod records** require two arguments: `z.record(z.string(), z.unknown())`, not `z.record(z.unknown())`.
 
 ## Testing
 

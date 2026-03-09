@@ -144,9 +144,9 @@ Plus additions to existing files:
 - [x] Multi-type field merging (union fields from all types on a node)
 - [x] Schema validation on index (warn, don't reject)
 - [x] Reference resolution (wiki-link title → node ID lookup)
-- [ ] MCP tool: `list-schemas`
-- [ ] MCP tool: `describe-schema`
-- [ ] MCP tool: `validate-node`
+- [x] MCP tool: `list-schemas`
+- [x] MCP tool: `describe-schema`
+- [x] MCP tool: `validate-node`
 - [ ] Computed field evaluation (count, percentage aggregations)
 
 ## Milestone

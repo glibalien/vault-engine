@@ -3,6 +3,9 @@ import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import type Database from 'better-sqlite3';
 import { z } from 'zod';
 import { getAllSchemas, getSchema } from '../schema/loader.js';
+import { mergeSchemaFields } from '../schema/merger.js';
+import { validateNode } from '../schema/validator.js';
+import type { FieldEntry, FieldValueType } from '../parser/types.js';
 
 export function createServer(db: Database.Database): McpServer {
   const server = new McpServer({ name: 'vault-engine', version: '0.1.0' });
@@ -54,6 +57,42 @@ export function createServer(db: Database.Database): McpServer {
       }
       return node;
     });
+  }
+
+  function loadNodeForValidation(nodeId: string): { types: string[]; fields: FieldEntry[] } | null {
+    const node = db.prepare('SELECT id FROM nodes WHERE id = ?').get(nodeId) as { id: string } | undefined;
+    if (!node) return null;
+
+    const typeRows = db.prepare(
+      'SELECT schema_type FROM node_types WHERE node_id = ?'
+    ).all(nodeId) as Array<{ schema_type: string }>;
+    const types = typeRows.map(r => r.schema_type);
+
+    const fieldRows = db.prepare(
+      'SELECT key, value_text, value_type, value_number, value_date FROM fields WHERE node_id = ?'
+    ).all(nodeId) as Array<{ key: string; value_text: string; value_type: string; value_number: number | null; value_date: string | null }>;
+
+    const fields: FieldEntry[] = fieldRows.map(r => {
+      let value: unknown = r.value_text;
+      const valueType = r.value_type as FieldValueType;
+      if (valueType === 'number' && r.value_number !== null) value = r.value_number;
+      else if (valueType === 'date' && r.value_date) value = new Date(r.value_date);
+      else if (valueType === 'list' && r.value_text) {
+        try { value = JSON.parse(r.value_text); } catch { /* keep as string */ }
+      }
+      return { key: r.key, value, valueType };
+    });
+
+    return { types, fields };
+  }
+
+  function inferFieldType(value: unknown): FieldValueType {
+    if (typeof value === 'number') return 'number';
+    if (typeof value === 'boolean') return 'boolean';
+    if (value instanceof Date) return 'date';
+    if (Array.isArray(value)) return 'list';
+    if (typeof value === 'string' && /^\[\[.+\]\]$/.test(value)) return 'reference';
+    return 'string';
   }
 
   server.tool(
@@ -294,6 +333,74 @@ export function createServer(db: Database.Database): McpServer {
         };
       }
       return { content: [{ type: 'text', text: JSON.stringify(schema) }] };
+    },
+  );
+
+  server.tool(
+    'validate-node',
+    'Validate a node against its schemas. Provide node_id for an existing node, or types + fields for hypothetical validation.',
+    {
+      node_id: z.string().optional()
+        .describe('Validate an existing node by its ID (vault-relative path)'),
+      types: z.array(z.string()).optional()
+        .describe('Schema types for hypothetical validation, e.g. ["task", "meeting"]'),
+      fields: z.record(z.unknown()).optional()
+        .describe('Field values for hypothetical validation, e.g. { "status": "todo" }'),
+    },
+    async ({ node_id, types, fields: hypotheticalFields }) => {
+      if (!node_id && !types) {
+        return {
+          content: [{ type: 'text', text: 'Error: Provide node_id or types (with optional fields)' }],
+          isError: true,
+        };
+      }
+
+      let nodeTypes: string[];
+      let fieldEntries: FieldEntry[];
+
+      if (node_id) {
+        const loaded = loadNodeForValidation(node_id);
+        if (!loaded) {
+          return {
+            content: [{ type: 'text', text: `Error: Node not found: ${node_id}` }],
+            isError: true,
+          };
+        }
+        nodeTypes = loaded.types;
+        fieldEntries = loaded.fields;
+      } else {
+        nodeTypes = types!;
+        fieldEntries = Object.entries(hypotheticalFields ?? {}).map(([key, value]) => ({
+          key,
+          value,
+          valueType: inferFieldType(value),
+        }));
+      }
+
+      // If no types have schemas, nothing to validate
+      const hasKnownSchema = nodeTypes.some(t =>
+        db.prepare('SELECT 1 FROM schemas WHERE name = ?').get(t) !== undefined
+      );
+      if (!hasKnownSchema) {
+        return {
+          content: [{ type: 'text', text: JSON.stringify({ valid: true, warnings: [] }) }],
+        };
+      }
+
+      const merge = mergeSchemaFields(db, nodeTypes);
+      const parsed = {
+        filePath: node_id ?? 'hypothetical',
+        frontmatter: {},
+        types: nodeTypes,
+        fields: fieldEntries,
+        wikiLinks: [],
+        mdast: { type: 'root' as const, children: [] },
+        contentText: '',
+        contentMd: '',
+      };
+      const result = validateNode(parsed, merge);
+
+      return { content: [{ type: 'text', text: JSON.stringify(result) }] };
     },
   );
 

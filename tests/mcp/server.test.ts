@@ -381,6 +381,93 @@ describe('MCP server', () => {
     });
   });
 
+  describe('validate-node', () => {
+    it('validates an existing node by ID', async () => {
+      const { loadSchemas } = await import('../../src/schema/loader.js');
+      loadSchemas(db, resolve(import.meta.dirname, '../fixtures'));
+      indexFixture(db, 'sample-task.md', 'tasks/review.md');
+
+      const result = await client.callTool({
+        name: 'validate-node',
+        arguments: { node_id: 'tasks/review.md' },
+      });
+
+      expect(result.isError).toBeFalsy();
+      const data = JSON.parse((result.content as Array<{ text: string }>)[0].text);
+      expect(data.valid).toBe(true);
+      expect(data.warnings).toEqual([]);
+    });
+
+    it('returns validation warnings for invalid node', async () => {
+      const { loadSchemas } = await import('../../src/schema/loader.js');
+      loadSchemas(db, resolve(import.meta.dirname, '../fixtures'));
+
+      // Index a task node with missing required field (status) and bad enum (priority)
+      const raw = [
+        '---',
+        'title: Bad Task',
+        'types: [task]',
+        'priority: extreme',
+        '---',
+        'Content here.',
+      ].join('\n');
+      const parsed = parseFile('tasks/bad.md', raw);
+      indexFile(db, parsed, 'tasks/bad.md', '2025-03-10T00:00:00.000Z', raw);
+
+      const result = await client.callTool({
+        name: 'validate-node',
+        arguments: { node_id: 'tasks/bad.md' },
+      });
+
+      const data = JSON.parse((result.content as Array<{ text: string }>)[0].text);
+      expect(data.valid).toBe(false);
+      expect(data.warnings.length).toBeGreaterThan(0);
+      const rules = data.warnings.map((w: any) => w.rule);
+      expect(rules).toContain('required');    // missing status
+      expect(rules).toContain('invalid_enum'); // extreme not in enum
+    });
+
+    it('returns error for nonexistent node', async () => {
+      const result = await client.callTool({
+        name: 'validate-node',
+        arguments: { node_id: 'nonexistent.md' },
+      });
+
+      expect(result.isError).toBe(true);
+    });
+
+    it('returns valid with empty warnings when node has no schemas', async () => {
+      // Index a node with types that have no schema definitions loaded
+      const raw = [
+        '---',
+        'title: Orphan',
+        'types: [unknown-type]',
+        '---',
+        'Content.',
+      ].join('\n');
+      const parsed = parseFile('orphan.md', raw);
+      indexFile(db, parsed, 'orphan.md', '2025-03-10T00:00:00.000Z', raw);
+
+      const result = await client.callTool({
+        name: 'validate-node',
+        arguments: { node_id: 'orphan.md' },
+      });
+
+      const data = JSON.parse((result.content as Array<{ text: string }>)[0].text);
+      expect(data.valid).toBe(true);
+      expect(data.warnings).toEqual([]);
+    });
+
+    it('returns error when neither node_id nor types provided', async () => {
+      const result = await client.callTool({
+        name: 'validate-node',
+        arguments: {},
+      });
+
+      expect(result.isError).toBe(true);
+    });
+  });
+
   describe('list-schemas', () => {
     it('returns empty array when no schemas are loaded', async () => {
       const result = await client.callTool({ name: 'list-schemas', arguments: {} });

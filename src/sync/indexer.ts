@@ -43,11 +43,26 @@ export function indexFile(
   db.prepare('DELETE FROM node_types WHERE node_id = ?').run(relativePath);
   db.prepare('DELETE FROM fields WHERE node_id = ?').run(relativePath);
 
-  // Upsert node
+  // Validate against schema if types exist
+  let isValid: number | null = null;
+  if (parsed.types.length > 0) {
+    const merge = mergeSchemaFields(db, parsed.types);
+    const hasKnownSchema = parsed.types.some(t => {
+      const schema = db.prepare('SELECT 1 FROM schemas WHERE name = ?').get(t);
+      return schema !== undefined;
+    });
+
+    if (hasKnownSchema) {
+      const validation = validateNode(parsed, merge);
+      isValid = validation.valid ? 1 : 0;
+    }
+  }
+
+  // Upsert node (includes is_valid to avoid extra UPDATE triggering FTS5 sync)
   db.prepare(`
-    INSERT OR REPLACE INTO nodes (id, file_path, node_type, content_text, content_md, title, depth)
-    VALUES (?, ?, 'file', ?, ?, ?, 0)
-  `).run(relativePath, relativePath, parsed.contentText, parsed.contentMd, deriveTitle(parsed, relativePath));
+    INSERT OR REPLACE INTO nodes (id, file_path, node_type, content_text, content_md, title, depth, is_valid)
+    VALUES (?, ?, 'file', ?, ?, ?, 0, ?)
+  `).run(relativePath, relativePath, parsed.contentText, parsed.contentMd, deriveTitle(parsed, relativePath), isValid);
 
   // Insert node_types
   const insertType = db.prepare('INSERT INTO node_types (node_id, schema_type) VALUES (?, ?)');
@@ -93,23 +108,6 @@ export function indexFile(
     INSERT OR REPLACE INTO files (path, mtime, hash)
     VALUES (?, ?, ?)
   `).run(relativePath, mtime, hash);
-
-  // Validate against schema if types exist
-  let isValid: number | null = null;
-  if (parsed.types.length > 0) {
-    const merge = mergeSchemaFields(db, parsed.types);
-    const hasKnownSchema = parsed.types.some(t => {
-      const schema = db.prepare('SELECT 1 FROM schemas WHERE name = ?').get(t);
-      return schema !== undefined;
-    });
-
-    if (hasKnownSchema) {
-      const validation = validateNode(parsed, merge);
-      isValid = validation.valid ? 1 : 0;
-    }
-  }
-
-  db.prepare('UPDATE nodes SET is_valid = ? WHERE id = ?').run(isValid, relativePath);
 }
 
 export function deleteFile(db: Database.Database, relativePath: string): void {

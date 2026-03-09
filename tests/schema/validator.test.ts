@@ -196,12 +196,10 @@ describe('validateNode', () => {
       const result = validateNode(parsed, merge);
 
       expect(result.valid).toBe(false);
-      // required (status missing) + type_mismatch (assignee: string vs reference) + invalid_enum (priority) + invalid_reference (assignee)
+      // required (status) + type_mismatch (assignee: string vs reference) + invalid_enum (priority) + invalid_reference (assignee)
+      expect(result.warnings).toHaveLength(4);
       const rules = result.warnings.map(w => w.rule).sort();
-      expect(rules).toContain('required');
-      expect(rules).toContain('invalid_enum');
-      expect(rules).toContain('invalid_reference');
-      expect(result.warnings.length).toBeGreaterThanOrEqual(3);
+      expect(rules).toEqual(['invalid_enum', 'invalid_reference', 'required', 'type_mismatch']);
     });
 
     it('returns valid with empty merge result', () => {

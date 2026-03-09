@@ -6,6 +6,7 @@ import Database from 'better-sqlite3';
 import { createSchema } from '../../src/db/schema.js';
 import { parseFile } from '../../src/parser/index.js';
 import { indexFile, rebuildIndex, deleteFile, incrementalIndex } from '../../src/sync/indexer.js';
+import { loadSchemas } from '../../src/schema/loader.js';
 
 const fixturesDir = resolve(import.meta.dirname, '../fixtures');
 
@@ -421,5 +422,59 @@ describe('incrementalIndex', () => {
     expect(db.prepare('SELECT * FROM nodes WHERE id = ?').get('notes/remove.md')).toBeUndefined();
     expect(db.prepare('SELECT * FROM files WHERE path = ?').get('notes/remove.md')).toBeUndefined();
     expect(db.prepare('SELECT * FROM nodes WHERE id = ?').get('notes/keep.md')).toBeDefined();
+  });
+});
+
+describe('indexFile validation (is_valid)', () => {
+  let db: Database.Database;
+
+  beforeEach(() => {
+    db = new Database(':memory:');
+    db.pragma('foreign_keys = ON');
+    createSchema(db);
+    // Load schemas from test fixtures (task, person, meeting, work-task)
+    loadSchemas(db, resolve(import.meta.dirname, '../fixtures'));
+  });
+
+  afterEach(() => {
+    db.close();
+  });
+
+  it('sets is_valid = 1 when node passes validation', () => {
+    // sample-task.md has status: todo, which matches task schema
+    const raw = readFileSync(resolve(fixturesDir, 'sample-task.md'), 'utf-8');
+    const parsed = parseFile('tasks/review.md', raw);
+    indexFile(db, parsed, 'tasks/review.md', '2025-03-10T00:00:00.000Z', raw);
+
+    const node = db.prepare('SELECT is_valid FROM nodes WHERE id = ?').get('tasks/review.md') as any;
+    expect(node.is_valid).toBe(1);
+  });
+
+  it('sets is_valid = 0 when node has validation warnings', () => {
+    // Task with invalid enum value for status
+    const raw = '---\ntitle: Bad Task\ntypes: [task]\nstatus: nonexistent\n---\nBody.';
+    const parsed = parseFile('tasks/bad.md', raw);
+    indexFile(db, parsed, 'tasks/bad.md', '2025-03-10T00:00:00.000Z', raw);
+
+    const node = db.prepare('SELECT is_valid FROM nodes WHERE id = ?').get('tasks/bad.md') as any;
+    expect(node.is_valid).toBe(0);
+  });
+
+  it('sets is_valid = null when no schema exists for the types', () => {
+    const raw = '---\ntitle: Unknown Type\ntypes: [recipe]\nservings: 4\n---\nBody.';
+    const parsed = parseFile('recipes/pasta.md', raw);
+    indexFile(db, parsed, 'recipes/pasta.md', '2025-03-10T00:00:00.000Z', raw);
+
+    const node = db.prepare('SELECT is_valid FROM nodes WHERE id = ?').get('recipes/pasta.md') as any;
+    expect(node.is_valid).toBeNull();
+  });
+
+  it('sets is_valid = null when node has no types', () => {
+    const raw = '# Just a note\nNo frontmatter types.';
+    const parsed = parseFile('notes/plain.md', raw);
+    indexFile(db, parsed, 'notes/plain.md', '2025-03-10T00:00:00.000Z', raw);
+
+    const node = db.prepare('SELECT is_valid FROM nodes WHERE id = ?').get('notes/plain.md') as any;
+    expect(node.is_valid).toBeNull();
   });
 });

@@ -5,6 +5,8 @@ import type Database from 'better-sqlite3';
 import type { ParsedFile } from '../parser/index.js';
 import { parseFile } from '../parser/index.js';
 import { resolveReferences } from './resolver.js';
+import { mergeSchemaFields } from '../schema/merger.js';
+import { validateNode } from '../schema/validator.js';
 
 function globMd(dir: string): string[] {
   const results: string[] = [];
@@ -91,6 +93,23 @@ export function indexFile(
     INSERT OR REPLACE INTO files (path, mtime, hash)
     VALUES (?, ?, ?)
   `).run(relativePath, mtime, hash);
+
+  // Validate against schema if types exist
+  let isValid: number | null = null;
+  if (parsed.types.length > 0) {
+    const merge = mergeSchemaFields(db, parsed.types);
+    const hasKnownSchema = parsed.types.some(t => {
+      const schema = db.prepare('SELECT 1 FROM schemas WHERE name = ?').get(t);
+      return schema !== undefined;
+    });
+
+    if (hasKnownSchema) {
+      const validation = validateNode(parsed, merge);
+      isValid = validation.valid ? 1 : 0;
+    }
+  }
+
+  db.prepare('UPDATE nodes SET is_valid = ? WHERE id = ?').run(isValid, relativePath);
 }
 
 export function deleteFile(db: Database.Database, relativePath: string): void {

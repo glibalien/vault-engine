@@ -13,6 +13,7 @@ export function createSchema(db: Database.Database): void {
       content_text    TEXT,
       content_md      TEXT,
       title           TEXT,
+      is_valid        INTEGER,
       created_at      TEXT DEFAULT (datetime('now')),
       updated_at      TEXT DEFAULT (datetime('now')),
       FOREIGN KEY (parent_id) REFERENCES nodes(id)

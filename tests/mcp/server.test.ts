@@ -346,6 +346,41 @@ describe('MCP server', () => {
     });
   });
 
+  describe('describe-schema', () => {
+    it('returns full schema with inherited fields', async () => {
+      const { loadSchemas } = await import('../../src/schema/loader.js');
+      loadSchemas(db, resolve(import.meta.dirname, '../fixtures'));
+
+      const result = await client.callTool({
+        name: 'describe-schema',
+        arguments: { schema_name: 'work-task' },
+      });
+
+      expect(result.isError).toBeFalsy();
+      const data = JSON.parse((result.content as Array<{ text: string }>)[0].text);
+      expect(data.name).toBe('work-task');
+      expect(data.extends).toBe('task');
+      expect(data.ancestors).toEqual(['task']);
+      // Should include inherited fields from task
+      expect(data.fields.status).toBeDefined();
+      expect(data.fields.status.type).toBe('enum');
+      // And own fields
+      expect(data.fields.department).toBeDefined();
+      expect(data.fields.department.type).toBe('string');
+    });
+
+    it('returns error for unknown schema', async () => {
+      const result = await client.callTool({
+        name: 'describe-schema',
+        arguments: { schema_name: 'nonexistent' },
+      });
+
+      expect(result.isError).toBe(true);
+      const text = (result.content as Array<{ text: string }>)[0].text;
+      expect(text).toContain('not found');
+    });
+  });
+
   describe('list-schemas', () => {
     it('returns empty array when no schemas are loaded', async () => {
       const result = await client.callTool({ name: 'list-schemas', arguments: {} });

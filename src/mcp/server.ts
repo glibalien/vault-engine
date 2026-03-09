@@ -2,7 +2,7 @@
 import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import type Database from 'better-sqlite3';
 import { z } from 'zod';
-import { getAllSchemas } from '../schema/loader.js';
+import { getAllSchemas, getSchema } from '../schema/loader.js';
 
 export function createServer(db: Database.Database): McpServer {
   const server = new McpServer({ name: 'vault-engine', version: '0.1.0' });
@@ -276,6 +276,24 @@ export function createServer(db: Database.Database): McpServer {
         field_count: Object.keys(s.fields).length,
       }));
       return { content: [{ type: 'text', text: JSON.stringify(summaries) }] };
+    },
+  );
+
+  server.tool(
+    'describe-schema',
+    'Get the full definition of a schema including inherited fields, field types, and constraints',
+    {
+      schema_name: z.string().describe('Schema name, e.g. "task", "work-task"'),
+    },
+    async ({ schema_name }) => {
+      const schema = getSchema(db, schema_name);
+      if (!schema) {
+        return {
+          content: [{ type: 'text', text: `Error: Schema not found: ${schema_name}` }],
+          isError: true,
+        };
+      }
+      return { content: [{ type: 'text', text: JSON.stringify(schema) }] };
     },
   );
 

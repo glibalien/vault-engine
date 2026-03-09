@@ -6,6 +6,8 @@ export type {
   MergedField,
   MergeConflict,
   MergeResult,
+  ValidationWarning,
+  ValidationResult,
 } from './types.js';
 
 export { loadSchemas, getSchema, getAllSchemas } from './loader.js';

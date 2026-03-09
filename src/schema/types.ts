@@ -64,3 +64,14 @@ export interface MergeResult {
   fields: Record<string, MergedField>;
   conflicts: MergeConflict[];
 }
+
+export interface ValidationWarning {
+  field: string;
+  message: string;
+  rule: 'required' | 'type_mismatch' | 'invalid_enum' | 'invalid_reference';
+}
+
+export interface ValidationResult {
+  valid: boolean;
+  warnings: ValidationWarning[];
+}

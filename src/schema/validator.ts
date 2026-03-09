@@ -1,6 +1,8 @@
 import type { ParsedFile } from '../parser/types.js';
 import type { MergeResult, ValidationResult, ValidationWarning } from './types.js';
 
+const WIKI_LINK_RE = /^\[\[[^\]]+\]\]$/;
+
 const TYPE_COMPAT: Record<string, Set<string>> = {
   string: new Set(['string']),
   number: new Set(['number']),
@@ -56,6 +58,33 @@ export function validateNode(parsed: ParsedFile, mergeResult: MergeResult): Vali
         rule: 'invalid_enum',
         message: `Field '${name}' has value '${parsedField.value}' which is not in [${schemaDef.values.join(', ')}]`,
       });
+    }
+  }
+
+  // Check reference syntax
+  for (const [name, schemaDef] of Object.entries(mergeResult.fields)) {
+    const parsedField = fieldsByKey.get(name);
+    if (!parsedField) continue;
+
+    if (schemaDef.type === 'reference') {
+      if (typeof parsedField.value === 'string' && !WIKI_LINK_RE.test(parsedField.value)) {
+        warnings.push({
+          field: name,
+          rule: 'invalid_reference',
+          message: `Field '${name}' should be a wiki-link ([[target]]) but got '${parsedField.value}'`,
+        });
+      }
+    } else if (schemaDef.type === 'list<reference>' && Array.isArray(parsedField.value)) {
+      const invalid = parsedField.value.filter(
+        (item): item is string => typeof item === 'string' && !WIKI_LINK_RE.test(item),
+      );
+      if (invalid.length > 0) {
+        warnings.push({
+          field: name,
+          rule: 'invalid_reference',
+          message: `Field '${name}' contains non-wiki-link values: ${invalid.join(', ')}`,
+        });
+      }
     }
   }
 

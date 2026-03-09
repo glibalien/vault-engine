@@ -138,4 +138,46 @@ describe('validateNode', () => {
       expect(result.warnings.filter(w => w.rule === 'invalid_enum')).toHaveLength(0);
     });
   });
+
+  describe('reference validation', () => {
+    it('warns when reference field lacks wiki-link syntax', () => {
+      const parsed = makeParsed([{ key: 'assignee', value: 'Alice', valueType: 'string' }]);
+      const merge = makeMerge({ assignee: { type: 'reference' } });
+      const result = validateNode(parsed, merge);
+      expect(result.valid).toBe(false);
+      // type_mismatch also fires (string vs reference), plus invalid_reference
+      expect(result.warnings.filter(w => w.rule === 'invalid_reference')).toHaveLength(1);
+      expect(result.warnings.filter(w => w.rule === 'invalid_reference')[0]).toMatchObject({
+        field: 'assignee',
+        rule: 'invalid_reference',
+      });
+    });
+
+    it('passes when reference field has wiki-link syntax', () => {
+      const parsed = makeParsed([{ key: 'assignee', value: '[[Alice]]', valueType: 'reference' }]);
+      const merge = makeMerge({ assignee: { type: 'reference' } });
+      const result = validateNode(parsed, merge);
+      expect(result.warnings.filter(w => w.rule === 'invalid_reference')).toHaveLength(0);
+    });
+
+    it('warns for list<reference> items without wiki-link syntax', () => {
+      const parsed = makeParsed([{ key: 'attendees', value: ['[[Alice]]', 'Bob', '[[Carol]]'], valueType: 'list' }]);
+      const merge = makeMerge({ attendees: { type: 'list<reference>' } });
+      const result = validateNode(parsed, merge);
+      expect(result.valid).toBe(false);
+      expect(result.warnings).toHaveLength(1);
+      expect(result.warnings[0]).toMatchObject({
+        field: 'attendees',
+        rule: 'invalid_reference',
+        message: expect.stringContaining('Bob'),
+      });
+    });
+
+    it('passes for list<reference> when all items are wiki-links', () => {
+      const parsed = makeParsed([{ key: 'attendees', value: ['[[Alice]]', '[[Bob]]'], valueType: 'list' }]);
+      const merge = makeMerge({ attendees: { type: 'list<reference>' } });
+      const result = validateNode(parsed, merge);
+      expect(result.warnings.filter(w => w.rule === 'invalid_reference')).toHaveLength(0);
+    });
+  });
 });

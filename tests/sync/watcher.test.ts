@@ -1,10 +1,12 @@
 import { describe, it, expect, beforeEach, afterEach } from 'vitest';
-import { mkdtempSync, writeFileSync, rmSync, mkdirSync, unlinkSync } from 'fs';
+import { mkdtempSync, writeFileSync, rmSync, mkdirSync, unlinkSync, statSync } from 'fs';
 import { tmpdir } from 'os';
 import { join } from 'path';
 import Database from 'better-sqlite3';
 import { createSchema } from '../../src/db/schema.js';
 import { acquireWriteLock, releaseWriteLock, isWriteLocked, watchVault } from '../../src/sync/watcher.js';
+import { indexFile } from '../../src/sync/indexer.js';
+import { parseFile } from '../../src/parser/index.js';
 
 describe('write lock', () => {
   afterEach(() => {
@@ -198,5 +200,40 @@ describe('watchVault', () => {
     const node = db.prepare('SELECT * FROM nodes WHERE id = ?').get('notes/deep.md') as any;
     expect(node).toBeDefined();
     expect(node.file_path).toBe('notes/deep.md');
+  });
+
+  it('skips re-index when file content unchanged (hash match)', async () => {
+    handle = watchVault(db, tmpVault);
+    await handle.ready;
+
+    const content = '---\ntitle: Stable\n---\n';
+    const rel = 'stable.md';
+    const absPath = join(tmpVault, rel);
+
+    // Pre-index the file in the DB
+    writeFileSync(absPath, content);
+    const parsed = parseFile(rel, content);
+    const mtime = statSync(absPath).mtime.toISOString();
+    db.transaction(() => {
+      indexFile(db, parsed, rel, mtime, content);
+    })();
+
+    // Touch the file (rewrite same content) — triggers chokidar change event
+    // but hash should match, so watcher skips re-index
+    writeFileSync(absPath, content);
+
+    // Write a different file to prove the watcher is processing events
+    writeFileSync(join(tmpVault, 'marker.md'), '# Marker');
+    await waitFor(() =>
+      db.prepare('SELECT * FROM nodes WHERE id = ?').get('marker.md') !== undefined,
+    );
+
+    // Give time for any stray events
+    await new Promise((r) => setTimeout(r, 200));
+
+    // The stable file's DB entry should still have the original mtime
+    // (watcher didn't re-index it)
+    const filesRow = db.prepare('SELECT mtime FROM files WHERE path = ?').get(rel) as any;
+    expect(filesRow.mtime).toBe(mtime);
   });
 });

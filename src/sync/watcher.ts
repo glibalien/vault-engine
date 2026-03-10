@@ -1,4 +1,5 @@
 import { readFileSync, statSync } from 'node:fs';
+import { createHash } from 'node:crypto';
 import { relative, join } from 'node:path';
 import { watch, type FSWatcher } from 'chokidar';
 import type Database from 'better-sqlite3';
@@ -70,6 +71,12 @@ export function watchVault(
     debounced(rel, () => {
       try {
         const raw = readFileSync(absPath, 'utf-8');
+        const hash = createHash('sha256').update(raw).digest('hex');
+        const existing = db.prepare('SELECT hash FROM files WHERE path = ?').get(rel) as
+          | { hash: string }
+          | undefined;
+        if (existing && existing.hash === hash) return;
+
         const mtime = statSync(absPath).mtime.toISOString();
         const parsed = parseFile(rel, raw);
         db.transaction(() => {

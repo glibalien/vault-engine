@@ -6,7 +6,7 @@ import { getAllSchemas, getSchema } from '../schema/loader.js';
 import { mergeSchemaFields } from '../schema/merger.js';
 import { validateNode } from '../schema/validator.js';
 import { evaluateComputed } from '../schema/computed.js';
-import type { ComputedDefinition } from '../schema/types.js';
+import type { ComputedDefinition, ValidationWarning } from '../schema/types.js';
 import type { FieldEntry, FieldValueType } from '../parser/types.js';
 import { existsSync, statSync } from 'node:fs';
 import { join } from 'node:path';
@@ -14,7 +14,6 @@ import { parseFile } from '../parser/index.js';
 import { serializeNode, computeFieldOrder, generateFilePath, writeNodeFile, sanitizeSegment } from '../serializer/index.js';
 import { indexFile } from '../sync/indexer.js';
 import { resolveReferences } from '../sync/resolver.js';
-import type { ValidationWarning } from '../schema/types.js';
 
 export function createServer(db: Database.Database, vaultPath: string): McpServer {
   const server = new McpServer({ name: 'vault-engine', version: '0.1.0' });

@@ -105,7 +105,7 @@ export function createServer(db: Database.Database, vaultPath: string): McpServe
     return 'string';
   }
 
-  function createNode(params: {
+  function createNodeInner(params: {
     title: string;
     types: string[];
     fields: Record<string, unknown>;
@@ -206,12 +206,9 @@ export function createServer(db: Database.Database, vaultPath: string): McpServe
     const stat = statSync(join(vaultPath, relativePath));
     const mtime = stat.mtime.toISOString();
 
-    // Step 9: Parse + index + resolve refs in transaction
+    // Step 9: Parse + index
     const parsed = parseFile(relativePath, content);
-    db.transaction(() => {
-      indexFile(db, parsed, relativePath, mtime, content);
-      resolveReferences(db);
-    })();
+    indexFile(db, parsed, relativePath, mtime, content);
 
     // Step 10: Return hydrated node + warnings
     const row = db.prepare(`
@@ -229,7 +226,15 @@ export function createServer(db: Database.Database, vaultPath: string): McpServe
     };
   }
 
-  function updateNode(params: {
+  function createNode(params: Parameters<typeof createNodeInner>[0]) {
+    return db.transaction(() => {
+      const result = createNodeInner(params);
+      if (!result.isError) resolveReferences(db);
+      return result;
+    })();
+  }
+
+  function updateNodeInner(params: {
     node_id: string;
     fields?: Record<string, unknown>;
     body?: string;
@@ -350,12 +355,9 @@ export function createServer(db: Database.Database, vaultPath: string): McpServe
     const stat = statSync(absPath);
     const mtime = stat.mtime.toISOString();
 
-    // Parse + index + resolve refs in transaction
+    // Parse + index
     const reParsed = parseFile(node_id, content);
-    db.transaction(() => {
-      indexFile(db, reParsed, node_id, mtime, content);
-      resolveReferences(db);
-    })();
+    indexFile(db, reParsed, node_id, mtime, content);
 
     // Return hydrated node + warnings
     const row = db.prepare(`
@@ -371,6 +373,14 @@ export function createServer(db: Database.Database, vaultPath: string): McpServe
     return {
       content: [{ type: 'text' as const, text: JSON.stringify({ node, warnings }) }],
     };
+  }
+
+  function updateNode(params: Parameters<typeof updateNodeInner>[0]) {
+    return db.transaction(() => {
+      const result = updateNodeInner(params);
+      if (!result.isError) resolveReferences(db);
+      return result;
+    })();
   }
 
   function returnCurrentNode(nodeId: string) {
@@ -393,7 +403,7 @@ export function createServer(db: Database.Database, vaultPath: string): McpServe
     };
   }
 
-  function addRelationship(params: {
+  function addRelationshipInner(params: {
     source_id: string;
     target: string;
     rel_type: string;
@@ -431,7 +441,7 @@ export function createServer(db: Database.Database, vaultPath: string): McpServe
       if (bodyLinks.some(l => l.target.toLowerCase() === innerTarget.toLowerCase())) {
         return returnCurrentNode(source_id);
       }
-      return updateNode({ node_id: source_id, append_body: target });
+      return updateNodeInner({ node_id: source_id, append_body: target });
     }
 
     // Check schemas
@@ -455,13 +465,13 @@ export function createServer(db: Database.Database, vaultPath: string): McpServe
           if (alreadyExists) {
             return returnCurrentNode(source_id);
           }
-          return updateNode({
+          return updateNodeInner({
             node_id: source_id,
             fields: { [rel_type]: [...currentArray, target] },
           });
         } else {
           // Scalar field
-          return updateNode({
+          return updateNodeInner({
             node_id: source_id,
             fields: { [rel_type]: target },
           });
@@ -481,12 +491,12 @@ export function createServer(db: Database.Database, vaultPath: string): McpServe
         if (alreadyExists) {
           return returnCurrentNode(source_id);
         }
-        return updateNode({
+        return updateNodeInner({
           node_id: source_id,
           fields: { [rel_type]: [...existing, target] },
         });
       } else if (rel_type in parsed.frontmatter) {
-        return updateNode({
+        return updateNodeInner({
           node_id: source_id,
           fields: { [rel_type]: target },
         });
@@ -498,7 +508,15 @@ export function createServer(db: Database.Database, vaultPath: string): McpServe
     if (bodyLinks.some(l => l.target.toLowerCase() === innerTarget.toLowerCase())) {
       return returnCurrentNode(source_id);
     }
-    return updateNode({ node_id: source_id, append_body: target });
+    return updateNodeInner({ node_id: source_id, append_body: target });
+  }
+
+  function addRelationship(params: Parameters<typeof addRelationshipInner>[0]) {
+    return db.transaction(() => {
+      const result = addRelationshipInner(params);
+      if (!result.isError) resolveReferences(db);
+      return result;
+    })();
   }
 
   server.tool(
@@ -521,7 +539,7 @@ export function createServer(db: Database.Database, vaultPath: string): McpServe
     },
   );
 
-  function removeRelationship(params: {
+  function removeRelationshipInner(params: {
     source_id: string;
     target: string;
     rel_type: string;
@@ -563,7 +581,7 @@ export function createServer(db: Database.Database, vaultPath: string): McpServe
         return returnCurrentNode(source_id);
       }
       const newBody = removeBodyWikiLink(parsed.contentMd, innerTarget);
-      return updateNode({ node_id: source_id, body: newBody });
+      return updateNodeInner({ node_id: source_id, body: newBody });
     }
 
     // Check schemas
@@ -585,7 +603,7 @@ export function createServer(db: Database.Database, vaultPath: string): McpServe
             return inner == null || inner.toLowerCase() !== innerTarget.toLowerCase();
           });
           if (filtered.length === existing.length) return returnCurrentNode(source_id);
-          return updateNode({
+          return updateNodeInner({
             node_id: source_id,
             fields: { [rel_type]: filtered },
           });
@@ -597,7 +615,7 @@ export function createServer(db: Database.Database, vaultPath: string): McpServe
           if (inner == null || inner.toLowerCase() !== innerTarget.toLowerCase()) {
             return returnCurrentNode(source_id);
           }
-          return updateNode({ node_id: source_id, fields: { [rel_type]: null } });
+          return updateNodeInner({ node_id: source_id, fields: { [rel_type]: null } });
         }
       }
     }
@@ -612,7 +630,7 @@ export function createServer(db: Database.Database, vaultPath: string): McpServe
           return inner == null || inner.toLowerCase() !== innerTarget.toLowerCase();
         });
         if (filtered.length === existing.length) return returnCurrentNode(source_id);
-        return updateNode({
+        return updateNodeInner({
           node_id: source_id,
           fields: { [rel_type]: filtered },
         });
@@ -621,7 +639,7 @@ export function createServer(db: Database.Database, vaultPath: string): McpServe
         if (inner == null || inner.toLowerCase() !== innerTarget.toLowerCase()) {
           return returnCurrentNode(source_id);
         }
-        return updateNode({ node_id: source_id, fields: { [rel_type]: null } });
+        return updateNodeInner({ node_id: source_id, fields: { [rel_type]: null } });
       }
     }
 
@@ -631,7 +649,15 @@ export function createServer(db: Database.Database, vaultPath: string): McpServe
       return returnCurrentNode(source_id);
     }
     const newBody = removeBodyWikiLink(parsed.contentMd, innerTarget);
-    return updateNode({ node_id: source_id, body: newBody });
+    return updateNodeInner({ node_id: source_id, body: newBody });
+  }
+
+  function removeRelationship(params: Parameters<typeof removeRelationshipInner>[0]) {
+    return db.transaction(() => {
+      const result = removeRelationshipInner(params);
+      if (!result.isError) resolveReferences(db);
+      return result;
+    })();
   }
 
   server.tool(
@@ -653,6 +679,36 @@ export function createServer(db: Database.Database, vaultPath: string): McpServe
       }
     },
   );
+
+  function deleteNodeInner(params: { node_id: string }) {
+    const { node_id } = params;
+
+    const nodeRow = db.prepare('SELECT id FROM nodes WHERE id = ?').get(node_id);
+    if (!nodeRow) {
+      return {
+        content: [{ type: 'text' as const, text: `Error: Node not found: ${node_id}` }],
+        isError: true,
+      };
+    }
+
+    const absPath = join(vaultPath, node_id);
+    if (!existsSync(absPath)) {
+      return {
+        content: [{
+          type: 'text' as const,
+          text: `Error: File not found on disk: ${node_id}. Database and filesystem are out of sync.`,
+        }],
+        isError: true,
+      };
+    }
+
+    deleteNodeFile(vaultPath, node_id);
+    deleteFile(db, node_id);
+
+    return {
+      content: [{ type: 'text' as const, text: JSON.stringify({ node_id, deleted: true }) }],
+    };
+  }
 
   function renameNode(params: {
     node_id: string;

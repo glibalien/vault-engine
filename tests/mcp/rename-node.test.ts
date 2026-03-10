@@ -155,4 +155,154 @@ describe('rename-node', () => {
     expect(content).toContain('[[Alice Smith]]');
     expect(content).not.toContain('[[Alice]]');
   });
+
+  it('updates body references in other files', async () => {
+    await createTestNode({ title: 'Alice' });
+    await createTestNode({
+      title: 'Meeting Notes',
+      body: 'Attendees: [[Alice]] and [[Bob]].',
+    });
+
+    const result = await callRename({ node_id: 'Alice.md', new_title: 'Alice Smith' });
+    expect(result.isError).toBeUndefined();
+    const parsed = parseResult(result);
+    expect(parsed.references_updated).toBe(1);
+
+    // Referencing file updated
+    const content = readFileSync(join(vaultPath, 'Meeting Notes.md'), 'utf-8');
+    expect(content).toContain('[[Alice Smith]]');
+    expect(content).not.toContain('[[Alice]]');
+    // Other links preserved
+    expect(content).toContain('[[Bob]]');
+  });
+
+  it('updates frontmatter references in other files', async () => {
+    await createTestNode({ title: 'Alice' });
+    await createTestNode({
+      title: 'Task',
+      fields: { assignee: '[[Alice]]', status: 'open' },
+    });
+
+    await callRename({ node_id: 'Alice.md', new_title: 'Alice Smith' });
+
+    const content = readFileSync(join(vaultPath, 'Task.md'), 'utf-8');
+    expect(content).toContain('[[Alice Smith]]');
+    expect(content).not.toContain('[[Alice]]');
+    expect(content).toContain('status: open');
+  });
+
+  it('updates list field references in other files', async () => {
+    await createTestNode({ title: 'Alice' });
+    await createTestNode({
+      title: 'Project',
+      fields: { members: ['[[Alice]]', '[[Bob]]'] },
+    });
+
+    await callRename({ node_id: 'Alice.md', new_title: 'Alice Smith' });
+
+    const content = readFileSync(join(vaultPath, 'Project.md'), 'utf-8');
+    expect(content).toContain('[[Alice Smith]]');
+    expect(content).toContain('[[Bob]]');
+  });
+
+  it('preserves aliases in referencing files', async () => {
+    await createTestNode({ title: 'Alice' });
+    await createTestNode({
+      title: 'Notes',
+      body: 'Spoke with [[Alice|the boss]] today.',
+    });
+
+    await callRename({ node_id: 'Alice.md', new_title: 'Alice Smith' });
+
+    const content = readFileSync(join(vaultPath, 'Notes.md'), 'utf-8');
+    expect(content).toContain('[[Alice Smith|the boss]]');
+  });
+
+  it('updates multiple referencing files', async () => {
+    await createTestNode({ title: 'Alice' });
+    await createTestNode({ title: 'File A', body: 'See [[Alice]].' });
+    await createTestNode({ title: 'File B', body: 'Ask [[Alice]].' });
+    await createTestNode({ title: 'File C', body: 'No references here.' });
+
+    const result = await callRename({ node_id: 'Alice.md', new_title: 'Alice Smith' });
+    const parsed = parseResult(result);
+    expect(parsed.references_updated).toBe(2);
+
+    expect(readFileSync(join(vaultPath, 'File A.md'), 'utf-8')).toContain('[[Alice Smith]]');
+    expect(readFileSync(join(vaultPath, 'File B.md'), 'utf-8')).toContain('[[Alice Smith]]');
+    // File C unchanged
+    expect(readFileSync(join(vaultPath, 'File C.md'), 'utf-8')).not.toContain('Alice Smith');
+  });
+
+  it('does not match substring wiki-links in other files', async () => {
+    await createTestNode({ title: 'Alice' });
+    await createTestNode({ title: 'Alice Cooper' });
+    await createTestNode({
+      title: 'Notes',
+      body: 'See [[Alice]] and [[Alice Cooper]].',
+    });
+
+    await callRename({ node_id: 'Alice.md', new_title: 'Alice Smith' });
+
+    const content = readFileSync(join(vaultPath, 'Notes.md'), 'utf-8');
+    expect(content).toContain('[[Alice Smith]]');
+    expect(content).toContain('[[Alice Cooper]]');
+  });
+
+  it('updates resolved references in DB after rename', async () => {
+    await createTestNode({ title: 'Alice' });
+    await createTestNode({ title: 'Task', body: '[[Alice]]' });
+
+    await callRename({ node_id: 'Alice.md', new_title: 'Alice Smith' });
+
+    // Check relationships table: target_id updated to new title, resolved to new path
+    const rels = db.prepare(`
+      SELECT target_id, resolved_target_id FROM relationships
+      WHERE source_id = ?
+    `).all('Task.md') as Array<{ target_id: string; resolved_target_id: string | null }>;
+
+    const aliceRel = rels.find(r => r.target_id === 'Alice Smith');
+    expect(aliceRel).toBeDefined();
+    expect(aliceRel!.resolved_target_id).toBe('Alice Smith.md');
+  });
+
+  it('catches unresolved references via target_id text match', async () => {
+    await createTestNode({ title: 'Alice', fields: { tag: 'a' } });
+    await createTestNode({ title: 'Task', body: '[[Alice]]' });
+
+    // Insert a second "Alice" to create ambiguity, then clear resolution
+    db.prepare(`INSERT INTO nodes (id, file_path, node_type, content_text, title) VALUES (?, ?, 'file', '', ?)`).run(
+      'other/Alice.md', 'other/Alice.md', 'Alice'
+    );
+    db.prepare('UPDATE relationships SET resolved_target_id = NULL WHERE source_id = ?').run('Task.md');
+
+    // The reference is now unresolved, but target_id = "Alice" still matches
+    const result = await callRename({ node_id: 'Alice.md', new_title: 'Alice Smith' });
+    expect(result.isError).toBeUndefined();
+    const parsed = parseResult(result);
+    expect(parsed.references_updated).toBe(1);
+
+    const content = readFileSync(join(vaultPath, 'Task.md'), 'utf-8');
+    expect(content).toContain('[[Alice Smith]]');
+  });
+
+  it('moves file without changing title when only new_path provided', async () => {
+    await createTestNode({ title: 'Alice' });
+    await createTestNode({ title: 'Task', body: '[[Alice]]' });
+
+    const result = await callRename({
+      node_id: 'Alice.md',
+      new_title: 'Alice',
+      new_path: 'people/Alice.md',
+    });
+    expect(result.isError).toBeUndefined();
+    const parsed = parseResult(result);
+    expect(parsed.new_path).toBe('people/Alice.md');
+    expect(existsSync(join(vaultPath, 'people/Alice.md'))).toBe(true);
+    expect(existsSync(join(vaultPath, 'Alice.md'))).toBe(false);
+
+    // References unchanged (title didn't change, so body text stays [[Alice]])
+    const taskContent = readFileSync(join(vaultPath, 'Task.md'), 'utf-8');
+    expect(taskContent).toContain('[[Alice]]');
+  });
 });

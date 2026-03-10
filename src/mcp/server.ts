@@ -11,8 +11,9 @@ import type { FieldEntry, FieldValueType } from '../parser/types.js';
 import { existsSync, statSync, readFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { parseFile } from '../parser/index.js';
-import { serializeNode, computeFieldOrder, generateFilePath, writeNodeFile, sanitizeSegment } from '../serializer/index.js';
-import { indexFile } from '../sync/indexer.js';
+import { serializeNode, computeFieldOrder, generateFilePath, writeNodeFile, deleteNodeFile, sanitizeSegment } from '../serializer/index.js';
+import { indexFile, deleteFile } from '../sync/indexer.js';
+import { updateBodyReferences, updateFrontmatterReferences } from './rename-helpers.js';
 import { resolveReferences } from '../sync/resolver.js';
 
 export function createServer(db: Database.Database, vaultPath: string): McpServer {
@@ -511,6 +512,95 @@ export function createServer(db: Database.Database, vaultPath: string): McpServe
     async (params) => {
       try {
         return addRelationship(params);
+      } catch (err) {
+        return {
+          content: [{ type: 'text' as const, text: `Error: ${err instanceof Error ? err.message : String(err)}` }],
+          isError: true,
+        };
+      }
+    },
+  );
+
+  function renameNode(params: {
+    node_id: string;
+    new_title: string;
+    new_path?: string;
+  }) {
+    const { node_id, new_title, new_path: explicitNewPath } = params;
+
+    // Check node exists in DB
+    const nodeRow = db.prepare('SELECT id, title FROM nodes WHERE id = ?').get(node_id) as
+      | { id: string; title: string }
+      | undefined;
+    if (!nodeRow) {
+      return {
+        content: [{ type: 'text' as const, text: `Error: Node not found: ${node_id}` }],
+        isError: true,
+      };
+    }
+
+    // Check file exists on disk
+    const absPath = join(vaultPath, node_id);
+    if (!existsSync(absPath)) {
+      return {
+        content: [{
+          type: 'text' as const,
+          text: `Error: File not found on disk: ${node_id}. Database and filesystem are out of sync.`,
+        }],
+        isError: true,
+      };
+    }
+
+    // Read + parse existing file
+    const raw = readFileSync(absPath, 'utf-8');
+    const parsed = parseFile(node_id, raw);
+    const oldTitle = typeof parsed.frontmatter.title === 'string'
+      ? parsed.frontmatter.title
+      : node_id.replace(/\.md$/, '').split('/').pop()!;
+    const types = parsed.types;
+
+    // No-op: same title, no explicit new path
+    if (new_title === oldTitle && !explicitNewPath) {
+      return returnCurrentNode(node_id);
+    }
+
+    // Extract existing fields (exclude meta-keys)
+    const existingFields: Record<string, unknown> = {};
+    for (const [key, value] of Object.entries(parsed.frontmatter)) {
+      if (key === 'title' || key === 'types') continue;
+      existingFields[key] = value;
+    }
+
+    // Derive new path
+    const newPath = explicitNewPath ?? generateFilePath(new_title, types, existingFields, db);
+
+    // Check new path doesn't collide (unless same path)
+    if (newPath !== node_id && existsSync(join(vaultPath, newPath))) {
+      return {
+        content: [{
+          type: 'text' as const,
+          text: `Error: File already exists at ${newPath}. Use a different title or provide an explicit new_path.`,
+        }],
+        isError: true,
+      };
+    }
+
+    // TODO: implement rename pipeline (Tasks 4-5)
+    return returnCurrentNode(node_id);
+  }
+
+  server.tool(
+    'rename-node',
+    'Rename a node and update all wiki-link references to it across the vault.',
+    {
+      node_id: z.string().describe('Vault-relative file path of the node to rename, e.g. "people/alice.md"'),
+      new_title: z.string().describe('New title for the node'),
+      new_path: z.string().optional()
+        .describe('Explicit new file path. If omitted, derived from new_title via schema filename_template.'),
+    },
+    async (params) => {
+      try {
+        return renameNode(params);
       } catch (err) {
         return {
           content: [{ type: 'text' as const, text: `Error: ${err instanceof Error ? err.message : String(err)}` }],

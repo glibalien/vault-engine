@@ -29,3 +29,34 @@ export function updateBodyReferences(body: string, oldTitle: string, newTitle: s
 
   return result;
 }
+
+function escapeRegExp(str: string): string {
+  return str.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+}
+
+function replaceInValue(value: unknown, re: RegExp, newTitle: string): unknown {
+  if (typeof value === 'string') {
+    return value.replace(re, (_match: string, alias?: string) =>
+      alias ? `[[${newTitle}${alias}]]` : `[[${newTitle}]]`
+    );
+  }
+  if (Array.isArray(value)) {
+    return value.map(item => replaceInValue(item, re, newTitle));
+  }
+  return value;
+}
+
+export function updateFrontmatterReferences(
+  fields: Record<string, unknown>,
+  oldTitle: string,
+  newTitle: string,
+): Record<string, unknown> {
+  const escaped = escapeRegExp(oldTitle);
+  const re = new RegExp(`\\[\\[${escaped}(\\|[^\\]]+)?\\]\\]`, 'gi');
+
+  const result: Record<string, unknown> = {};
+  for (const [key, value] of Object.entries(fields)) {
+    result[key] = replaceInValue(value, re, newTitle);
+  }
+  return result;
+}

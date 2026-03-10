@@ -32,6 +32,13 @@ function serializeScalar(value: unknown): string {
   return quoteString(String(value));
 }
 
+export function serializeFrontmatter(
+  entries: Array<{ key: string; value: unknown }>,
+): string {
+  if (entries.length === 0) return '';
+  return entries.map(({ key, value }) => `${key}: ${serializeValue(value)}`).join('\n') + '\n';
+}
+
 export function serializeValue(value: unknown): string {
   if (Array.isArray(value)) {
     const items = value.map(item => serializeScalar(item));

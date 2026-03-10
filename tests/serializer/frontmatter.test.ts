@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { serializeValue } from '../../src/serializer/frontmatter.js';
+import { serializeValue, serializeFrontmatter } from '../../src/serializer/frontmatter.js';
 
 describe('serializeValue', () => {
   it('serializes plain strings unquoted', () => {
@@ -90,5 +90,39 @@ describe('serializeValue', () => {
 
   it('quotes strings with square brackets (non-wiki-link)', () => {
     expect(serializeValue('[item]')).toBe('"[item]"');
+  });
+});
+
+describe('serializeFrontmatter', () => {
+  it('serializes ordered entries as YAML lines', () => {
+    const result = serializeFrontmatter([
+      { key: 'title', value: 'Review proposal' },
+      { key: 'status', value: 'todo' },
+    ]);
+    expect(result).toBe('title: Review proposal\nstatus: todo\n');
+  });
+
+  it('handles mixed value types', () => {
+    const result = serializeFrontmatter([
+      { key: 'title', value: 'Q1 Meeting' },
+      { key: 'types', value: ['meeting', 'task'] },
+      { key: 'date', value: new Date('2025-03-06') },
+      { key: 'attendees', value: ['[[Alice Smith]]', '[[Bob Jones]]'] },
+      { key: 'status', value: 'todo' },
+      { key: 'billable', value: false },
+      { key: 'priority', value: 3 },
+    ]);
+    const lines = result.split('\n');
+    expect(lines[0]).toBe('title: Q1 Meeting');
+    expect(lines[1]).toBe('types: [meeting, task]');
+    expect(lines[2]).toBe('date: 2025-03-06');
+    expect(lines[3]).toBe('attendees: ["[[Alice Smith]]", "[[Bob Jones]]"]');
+    expect(lines[4]).toBe('status: todo');
+    expect(lines[5]).toBe('billable: false');
+    expect(lines[6]).toBe('priority: 3');
+  });
+
+  it('returns empty string for empty entries', () => {
+    expect(serializeFrontmatter([])).toBe('');
   });
 });

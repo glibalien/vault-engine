@@ -346,4 +346,104 @@ describe('create-node', () => {
     expect(data).toHaveLength(1);
     expect(data[0].id).toBe('Searchable Task.md');
   });
+
+  it('resolves references in the created node', async () => {
+    const { loadSchemas } = await import('../../src/schema/loader.js');
+    const { indexFile: indexFileSync } = await import('../../src/sync/indexer.js');
+    const { parseFile: parseFileSync } = await import('../../src/parser/index.js');
+    const { writeFileSync, mkdirSync } = await import('node:fs');
+    loadSchemas(db, join(import.meta.dirname, '../fixtures'));
+
+    // First, create a target node (Alice) on disk and index it
+    const aliceContent = '---\ntitle: Alice\ntypes: [person]\nrole: Engineer\n---\n';
+    mkdirSync(join(vaultPath, 'people'), { recursive: true });
+    writeFileSync(join(vaultPath, 'people/Alice.md'), aliceContent, 'utf-8');
+    const aliceParsed = parseFileSync('people/Alice.md', aliceContent);
+    db.transaction(() => {
+      indexFileSync(db, aliceParsed, 'people/Alice.md', new Date().toISOString(), aliceContent);
+    })();
+
+    // Now create a task that references Alice
+    const result = await client.callTool({
+      name: 'create-node',
+      arguments: {
+        title: 'Assigned Task',
+        types: ['task'],
+        fields: { status: 'todo' },
+        relationships: [
+          { target: 'Alice', rel_type: 'assignee' },
+        ],
+      },
+    });
+
+    expect(result.isError).toBeFalsy();
+
+    // Check that the relationship is resolved
+    const rels = db.prepare(
+      'SELECT target_id, resolved_target_id FROM relationships WHERE source_id = ?'
+    ).all('tasks/Assigned Task.md') as Array<{ target_id: string; resolved_target_id: string | null }>;
+
+    const assigneeRel = rels.find(r => r.target_id === 'Alice');
+    expect(assigneeRel).toBeDefined();
+    expect(assigneeRel!.resolved_target_id).toBe('people/Alice.md');
+  });
+
+  it('appends relationships to body for schema-less nodes', async () => {
+    const result = await client.callTool({
+      name: 'create-node',
+      arguments: {
+        title: 'Loose Note',
+        body: 'Some thoughts.',
+        relationships: [
+          { target: 'Idea A', rel_type: 'related' },
+          { target: 'Idea B', rel_type: 'related' },
+        ],
+      },
+    });
+
+    expect(result.isError).toBeFalsy();
+    const content = readFileSync(join(vaultPath, 'Loose Note.md'), 'utf-8');
+    expect(content).toContain('Some thoughts.');
+    expect(content).toContain('[[Idea A]]');
+    expect(content).toContain('[[Idea B]]');
+  });
+
+  it('returns error when schema template requires a field not provided', async () => {
+    const { loadSchemas } = await import('../../src/schema/loader.js');
+    loadSchemas(db, join(import.meta.dirname, '../fixtures'));
+
+    // meeting schema template: "meetings/{{date}}-{{title}}.md"
+    // Omit the required 'date' field
+    const result = await client.callTool({
+      name: 'create-node',
+      arguments: {
+        title: 'No Date Meeting',
+        types: ['meeting'],
+      },
+    });
+
+    expect(result.isError).toBe(true);
+    const text = (result.content as Array<{ text: string }>)[0].text;
+    expect(text).toContain('date');
+    expect(text).toContain('no value');
+  });
+
+  it('overwrites existing scalar field via relationship for schema-less nodes', async () => {
+    const result = await client.callTool({
+      name: 'create-node',
+      arguments: {
+        title: 'Override Test',
+        fields: { assignee: 'placeholder' },
+        relationships: [
+          { target: 'Alice', rel_type: 'assignee' },
+        ],
+      },
+    });
+
+    expect(result.isError).toBeFalsy();
+    const content = readFileSync(join(vaultPath, 'Override Test.md'), 'utf-8');
+    // Relationship should overwrite the placeholder value
+    expect(content).toContain('[[Alice]]');
+    expect(content).not.toContain('placeholder');
+  });
 });

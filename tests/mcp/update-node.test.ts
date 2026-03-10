@@ -290,4 +290,129 @@ describe('update-node', () => {
     expect(content).toContain('New content.');
   });
 
+  it('returns validation warnings after field update', async () => {
+    const { loadSchemas } = await import('../../src/schema/loader.js');
+    loadSchemas(db, join(import.meta.dirname, '../fixtures'));
+
+    await createTestNode({
+      title: 'Valid Task',
+      types: ['task'],
+      fields: { status: 'todo', priority: 'high' },
+    });
+
+    // Update with invalid enum value
+    const result = await client.callTool({
+      name: 'update-node',
+      arguments: {
+        node_id: 'tasks/Valid Task.md',
+        fields: { priority: 'extreme' },
+      },
+    });
+
+    expect(result.isError).toBeFalsy();
+    const data = JSON.parse((result.content as Array<{ text: string }>)[0].text);
+    // Node updated despite warnings
+    expect(data.node.fields.priority).toBe('extreme');
+    expect(data.warnings.length).toBeGreaterThan(0);
+    expect(data.warnings.some((w: any) => w.rule === 'invalid_enum')).toBe(true);
+  });
+
+  it('preserves schema field order in serialized output', async () => {
+    const { loadSchemas } = await import('../../src/schema/loader.js');
+    loadSchemas(db, join(import.meta.dirname, '../fixtures'));
+
+    await createTestNode({
+      title: 'Ordered Task',
+      types: ['task'],
+      fields: { status: 'todo', priority: 'high', assignee: '[[Bob]]' },
+    });
+
+    // Update to add due_date — output should preserve schema field order
+    const result = await client.callTool({
+      name: 'update-node',
+      arguments: {
+        node_id: 'tasks/Ordered Task.md',
+        fields: { due_date: '2026-04-01' },
+      },
+    });
+
+    expect(result.isError).toBeFalsy();
+    // Schema frontmatter_fields order: [status, assignee, due_date, priority]
+    const content = readFileSync(join(vaultPath, 'tasks/Ordered Task.md'), 'utf-8');
+    const statusIdx = content.indexOf('status:');
+    const assigneeIdx = content.indexOf('assignee:');
+    const dueDateIdx = content.indexOf('due_date:');
+    const priorityIdx = content.indexOf('priority:');
+    expect(statusIdx).toBeLessThan(assigneeIdx);
+    expect(assigneeIdx).toBeLessThan(dueDateIdx);
+    expect(dueDateIdx).toBeLessThan(priorityIdx);
+  });
+
+  it('updated node is queryable via get-node with new values', async () => {
+    await createTestNode({
+      title: 'Queryable',
+      fields: { status: 'todo' },
+      body: 'Original content.',
+    });
+
+    await client.callTool({
+      name: 'update-node',
+      arguments: {
+        node_id: 'Queryable.md',
+        fields: { status: 'done' },
+        body: 'Updated content with xylophone.',
+      },
+    });
+
+    // get-node should return updated data
+    const result = await client.callTool({
+      name: 'get-node',
+      arguments: { node_id: 'Queryable.md' },
+    });
+
+    const data = JSON.parse((result.content as Array<{ text: string }>)[0].text);
+    expect(data.fields.status).toBe('done');
+    expect(data.content_text).toContain('xylophone');
+  });
+
+  it('resolves references after adding wiki-link field', async () => {
+    const { writeFileSync: fsWriteFileSync, mkdirSync: fsMkdirSync } = await import('node:fs');
+    const { parseFile: parseFileSync } = await import('../../src/parser/index.js');
+    const { indexFile: indexFileSync } = await import('../../src/sync/indexer.js');
+
+    // Create target node on disk and index it
+    const aliceContent = '---\ntitle: Alice\ntypes: [person]\n---\n';
+    fsMkdirSync(join(vaultPath, 'people'), { recursive: true });
+    fsWriteFileSync(join(vaultPath, 'people/Alice.md'), aliceContent, 'utf-8');
+    const aliceParsed = parseFileSync('people/Alice.md', aliceContent);
+    db.transaction(() => {
+      indexFileSync(db, aliceParsed, 'people/Alice.md', new Date().toISOString(), aliceContent);
+    })();
+
+    // Create a node without the reference
+    await createTestNode({
+      title: 'Unlinked Task',
+      fields: { status: 'todo' },
+    });
+
+    // Update to add the reference
+    const result = await client.callTool({
+      name: 'update-node',
+      arguments: {
+        node_id: 'Unlinked Task.md',
+        fields: { assignee: '[[Alice]]' },
+      },
+    });
+
+    expect(result.isError).toBeFalsy();
+
+    // Check relationship resolution
+    const rels = db.prepare(
+      'SELECT target_id, resolved_target_id FROM relationships WHERE source_id = ?'
+    ).all('Unlinked Task.md') as Array<{ target_id: string; resolved_target_id: string | null }>;
+
+    const assigneeRel = rels.find(r => r.target_id === 'Alice');
+    expect(assigneeRel).toBeDefined();
+    expect(assigneeRel!.resolved_target_id).toBe('people/Alice.md');
+  });
 });

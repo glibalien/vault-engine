@@ -372,6 +372,20 @@ export function createServer(db: Database.Database, vaultPath: string): McpServe
     };
   }
 
+  function returnCurrentNode(nodeId: string) {
+    const row = db.prepare(`
+      SELECT id, file_path, node_type, content_text, content_md, updated_at
+      FROM nodes WHERE id = ?
+    `).get(nodeId) as {
+      id: string; file_path: string; node_type: string;
+      content_text: string; content_md: string | null; updated_at: string;
+    };
+    const [node] = hydrateNodes([row]);
+    return {
+      content: [{ type: 'text' as const, text: JSON.stringify({ node, warnings: [] }) }],
+    };
+  }
+
   function addRelationship(params: {
     source_id: string;
     target: string;
@@ -396,7 +410,87 @@ export function createServer(db: Database.Database, vaultPath: string): McpServe
       };
     }
 
-    // Placeholder — body append fallback
+    // Read + parse existing file
+    const raw = readFileSync(absPath, 'utf-8');
+    const parsed = parseFile(source_id, raw);
+    const types = parsed.types;
+
+    // Extract inner target for comparison (strips [[ ]] and alias)
+    const innerTarget = target.match(/^\[\[([^\]|]+)/)?.[1] ?? '';
+
+    // Force body if rel_type is 'wiki-link'
+    if (rel_type === 'wiki-link') {
+      const bodyLinks = parsed.wikiLinks.filter(l => l.source === 'body');
+      if (bodyLinks.some(l => l.target.toLowerCase() === innerTarget.toLowerCase())) {
+        return returnCurrentNode(source_id);
+      }
+      return updateNode({ node_id: source_id, append_body: target });
+    }
+
+    // Check schemas
+    const schemaCheck = db.prepare('SELECT 1 FROM schemas WHERE name = ?');
+    const hasSchemas = types.some(t => schemaCheck.get(t) !== undefined);
+
+    if (hasSchemas) {
+      const mergeResult = mergeSchemaFields(db, types);
+      const mergedField = mergeResult.fields[rel_type];
+
+      if (mergedField) {
+        const isListType = mergedField.type.startsWith('list<');
+        if (isListType) {
+          const existing = parsed.frontmatter[rel_type];
+          const currentArray: unknown[] = Array.isArray(existing) ? existing : (existing != null ? [existing] : []);
+          const alreadyExists = currentArray.some((item: unknown) => {
+            if (typeof item !== 'string') return false;
+            const inner = item.match(/^\[\[([^\]|]+)/)?.[1];
+            return inner != null && inner.toLowerCase() === innerTarget.toLowerCase();
+          });
+          if (alreadyExists) {
+            return returnCurrentNode(source_id);
+          }
+          return updateNode({
+            node_id: source_id,
+            fields: { [rel_type]: [...currentArray, target] },
+          });
+        } else {
+          // Scalar field
+          return updateNode({
+            node_id: source_id,
+            fields: { [rel_type]: target },
+          });
+        }
+      }
+    }
+
+    // Schema-less fallback: check existing frontmatter
+    if (!hasSchemas && rel_type !== 'title' && rel_type !== 'types') {
+      const existing = parsed.frontmatter[rel_type];
+      if (Array.isArray(existing)) {
+        const alreadyExists = existing.some((item: unknown) => {
+          if (typeof item !== 'string') return false;
+          const inner = item.match(/^\[\[([^\]|]+)/)?.[1];
+          return inner != null && inner.toLowerCase() === innerTarget.toLowerCase();
+        });
+        if (alreadyExists) {
+          return returnCurrentNode(source_id);
+        }
+        return updateNode({
+          node_id: source_id,
+          fields: { [rel_type]: [...existing, target] },
+        });
+      } else if (rel_type in parsed.frontmatter) {
+        return updateNode({
+          node_id: source_id,
+          fields: { [rel_type]: target },
+        });
+      }
+    }
+
+    // Body fallback
+    const bodyLinks = parsed.wikiLinks.filter(l => l.source === 'body');
+    if (bodyLinks.some(l => l.target.toLowerCase() === innerTarget.toLowerCase())) {
+      return returnCurrentNode(source_id);
+    }
     return updateNode({ node_id: source_id, append_body: target });
   }
 

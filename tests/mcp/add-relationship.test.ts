@@ -1,5 +1,5 @@
 import { describe, it, expect, beforeEach, afterEach } from 'vitest';
-import { mkdtempSync, rmSync } from 'node:fs';
+import { mkdtempSync, rmSync, readFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 import Database from 'better-sqlite3';
@@ -77,5 +77,61 @@ describe('add-relationship', () => {
     expect(result.isError).toBe(true);
     const text = (result.content as Array<{ text: string }>)[0].text;
     expect(text).toContain('File not found on disk');
+  });
+
+  it('sets scalar reference field via schema (task assignee)', async () => {
+    const { loadSchemas } = await import('../../src/schema/loader.js');
+    loadSchemas(db, join(import.meta.dirname, '../fixtures'));
+
+    await createTestNode({
+      title: 'Review PR',
+      types: ['task'],
+      fields: { status: 'todo' },
+    });
+
+    const result = await client.callTool({
+      name: 'add-relationship',
+      arguments: {
+        source_id: 'tasks/Review PR.md',
+        target: 'Alice',
+        rel_type: 'assignee',
+      },
+    });
+
+    expect(result.isError).toBeFalsy();
+    const data = JSON.parse((result.content as Array<{ text: string }>)[0].text);
+    expect(data.node.fields.assignee).toBe('[[Alice]]');
+
+    // Verify file content
+    const content = readFileSync(join(vaultPath, 'tasks/Review PR.md'), 'utf-8');
+    expect(content).toContain('assignee: "[[Alice]]"');
+    // Existing fields preserved
+    expect(content).toContain('status: todo');
+  });
+
+  it('overwrites existing scalar reference field via schema', async () => {
+    const { loadSchemas } = await import('../../src/schema/loader.js');
+    loadSchemas(db, join(import.meta.dirname, '../fixtures'));
+
+    await createTestNode({
+      title: 'Reassign Task',
+      types: ['task'],
+      fields: { status: 'todo' },
+      relationships: [{ target: 'Alice', rel_type: 'assignee' }],
+    });
+
+    const result = await client.callTool({
+      name: 'add-relationship',
+      arguments: {
+        source_id: 'tasks/Reassign Task.md',
+        target: 'Bob',
+        rel_type: 'assignee',
+      },
+    });
+
+    expect(result.isError).toBeFalsy();
+    const content = readFileSync(join(vaultPath, 'tasks/Reassign Task.md'), 'utf-8');
+    expect(content).toContain('[[Bob]]');
+    expect(content).not.toContain('[[Alice]]');
   });
 });

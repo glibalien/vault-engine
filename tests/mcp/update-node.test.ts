@@ -229,4 +229,65 @@ describe('update-node', () => {
     expect(data.node.fields.new_field).toBe('hello');
     expect(data.node.fields.old_field).toBeUndefined();
   });
+
+  it('replaces body content', async () => {
+    await createTestNode({
+      title: 'Body Test',
+      fields: { status: 'todo' },
+      body: 'Original body content.',
+    });
+
+    const result = await client.callTool({
+      name: 'update-node',
+      arguments: {
+        node_id: 'Body Test.md',
+        body: 'Completely new body.',
+      },
+    });
+
+    expect(result.isError).toBeFalsy();
+    const content = readFileSync(join(vaultPath, 'Body Test.md'), 'utf-8');
+    expect(content).toContain('Completely new body.');
+    expect(content).not.toContain('Original body');
+
+    // Existing fields preserved
+    expect(content).toContain('status: todo');
+  });
+
+  it('appends to existing body content', async () => {
+    await createTestNode({
+      title: 'Append Test',
+      body: 'First paragraph.',
+    });
+
+    const result = await client.callTool({
+      name: 'update-node',
+      arguments: {
+        node_id: 'Append Test.md',
+        append_body: 'Second paragraph.',
+      },
+    });
+
+    expect(result.isError).toBeFalsy();
+    const content = readFileSync(join(vaultPath, 'Append Test.md'), 'utf-8');
+    expect(content).toContain('First paragraph.');
+    expect(content).toContain('Second paragraph.');
+  });
+
+  it('appends body when node has no existing body', async () => {
+    await createTestNode({ title: 'No Body' });
+
+    const result = await client.callTool({
+      name: 'update-node',
+      arguments: {
+        node_id: 'No Body.md',
+        append_body: 'New content.',
+      },
+    });
+
+    expect(result.isError).toBeFalsy();
+    const content = readFileSync(join(vaultPath, 'No Body.md'), 'utf-8');
+    expect(content).toContain('New content.');
+  });
+
 });

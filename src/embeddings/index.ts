@@ -1,0 +1,10 @@
+export type { Chunk, EmbeddingProvider, EmbeddingConfig } from './types.js';
+export { chunkFile, estimateTokens } from './chunker.js';
+export { createProvider } from './provider-factory.js';
+export { OllamaProvider } from './providers/ollama.js';
+export { OpenAIProvider } from './providers/openai.js';
+export { loadVecExtension, createVecTable, getVecDimensions, dropVecTable } from './vec.js';
+export { startEmbeddingWorker } from './worker.js';
+export type { EmbeddingWorker, WorkerOptions } from './worker.js';
+export { semanticSearch, getPendingEmbeddingCount } from './search.js';
+export type { SemanticSearchOptions, SemanticSearchResult, SemanticSearchFilter } from './search.js';

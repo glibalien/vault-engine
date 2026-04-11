@@ -38,7 +38,7 @@ const writeLock = new WriteLockManager();
 const watcher = startWatcher(vaultPath, db, mutex, writeLock);
 const reconciler = startReconciler(vaultPath, db, mutex);
 
-const serverFactory = () => createServer(db);
+const serverFactory = () => createServer(db, { writeLock, vaultPath });
 
 if (args.transport === 'stdio' || args.transport === 'both') {
   const server = serverFactory();

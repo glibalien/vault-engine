@@ -1,0 +1,232 @@
+// src/schema/crud.ts
+
+import type Database from 'better-sqlite3';
+
+// ── Types ─────────────────────────────────────────────────────────────
+
+export interface SchemaDefinition {
+  name: string;
+  display_name: string | null;
+  icon: string | null;
+  filename_template: string | null;
+  metadata: unknown;
+}
+
+export interface ClaimInput {
+  field: string;
+  label?: string;
+  description?: string;
+  sort_order?: number;
+  required?: boolean;
+  default_value?: unknown;
+}
+
+export interface CreateSchemaInput {
+  name: string;
+  display_name?: string;
+  icon?: string;
+  filename_template?: string;
+  field_claims: ClaimInput[];
+  metadata?: unknown;
+}
+
+export interface UpdateSchemaInput {
+  display_name?: string;
+  icon?: string;
+  filename_template?: string;
+  field_claims?: ClaimInput[];
+  metadata?: unknown;
+}
+
+// ── Row → SchemaDefinition ────────────────────────────────────────────
+
+interface SchemaRow {
+  name: string;
+  display_name: string | null;
+  icon: string | null;
+  filename_template: string | null;
+  metadata: string | null;
+}
+
+function rowToDefinition(row: SchemaRow): SchemaDefinition {
+  return {
+    name: row.name,
+    display_name: row.display_name,
+    icon: row.icon,
+    filename_template: row.filename_template,
+    metadata: row.metadata !== null ? JSON.parse(row.metadata) : null,
+  };
+}
+
+// ── Claim validation ──────────────────────────────────────────────────
+
+interface GlobalFieldRow {
+  name: string;
+  per_type_overrides_allowed: number;
+}
+
+function validateClaims(db: Database.Database, claims: ClaimInput[]): void {
+  for (const claim of claims) {
+    const gf = db
+      .prepare(`SELECT name, per_type_overrides_allowed FROM global_fields WHERE name = ?`)
+      .get(claim.field) as GlobalFieldRow | undefined;
+
+    if (!gf) {
+      throw new Error(
+        `Global field '${claim.field}' does not exist. Create it first with create-global-field.`,
+      );
+    }
+
+    const hasSemanticOverride = claim.required !== undefined || claim.default_value !== undefined;
+    if (hasSemanticOverride && gf.per_type_overrides_allowed !== 1) {
+      throw new Error(
+        `Field '${claim.field}' does not allow per-type overrides. ` +
+          `Set per_type_overrides_allowed = true on the global field to use required or default_value on a claim.`,
+      );
+    }
+  }
+}
+
+// ── Insert claims ─────────────────────────────────────────────────────
+
+function insertClaims(db: Database.Database, schemaName: string, claims: ClaimInput[]): void {
+  const stmt = db.prepare(`
+    INSERT INTO schema_field_claims (schema_name, field, label, description, sort_order, required, default_value)
+    VALUES (?, ?, ?, ?, ?, ?, ?)
+  `);
+
+  for (const claim of claims) {
+    const requiredInt =
+      claim.required === undefined ? null : claim.required ? 1 : 0;
+    const defaultValueJson =
+      claim.default_value !== undefined ? JSON.stringify(claim.default_value) : null;
+
+    stmt.run(
+      schemaName,
+      claim.field,
+      claim.label ?? null,
+      claim.description ?? null,
+      claim.sort_order ?? null,
+      requiredInt,
+      defaultValueJson,
+    );
+  }
+}
+
+// ── getSchemaDefinition ───────────────────────────────────────────────
+
+export function getSchemaDefinition(
+  db: Database.Database,
+  name: string,
+): SchemaDefinition | null {
+  const row = db
+    .prepare(`SELECT name, display_name, icon, filename_template, metadata FROM schemas WHERE name = ?`)
+    .get(name) as SchemaRow | undefined;
+  return row ? rowToDefinition(row) : null;
+}
+
+// ── createSchemaDefinition ────────────────────────────────────────────
+
+export function createSchemaDefinition(
+  db: Database.Database,
+  input: CreateSchemaInput,
+): SchemaDefinition {
+  validateClaims(db, input.field_claims);
+
+  const metadataJson = input.metadata !== undefined ? JSON.stringify(input.metadata) : null;
+
+  const tx = db.transaction(() => {
+    db.prepare(`
+      INSERT INTO schemas (name, display_name, icon, filename_template, field_claims, metadata)
+      VALUES (?, ?, ?, ?, '[]', ?)
+    `).run(
+      input.name,
+      input.display_name ?? null,
+      input.icon ?? null,
+      input.filename_template ?? null,
+      metadataJson,
+    );
+
+    insertClaims(db, input.name, input.field_claims);
+  });
+
+  tx();
+
+  return getSchemaDefinition(db, input.name)!;
+}
+
+// ── updateSchemaDefinition ────────────────────────────────────────────
+
+export function updateSchemaDefinition(
+  db: Database.Database,
+  name: string,
+  input: UpdateSchemaInput,
+): SchemaDefinition {
+  const current = getSchemaDefinition(db, name);
+  if (!current) {
+    throw new Error(`Schema '${name}' not found`);
+  }
+
+  if (input.field_claims !== undefined) {
+    validateClaims(db, input.field_claims);
+  }
+
+  const tx = db.transaction(() => {
+    const updates: string[] = [];
+    const params: unknown[] = [];
+
+    if (input.display_name !== undefined) {
+      updates.push('display_name = ?');
+      params.push(input.display_name);
+    }
+    if (input.icon !== undefined) {
+      updates.push('icon = ?');
+      params.push(input.icon);
+    }
+    if (input.filename_template !== undefined) {
+      updates.push('filename_template = ?');
+      params.push(input.filename_template);
+    }
+    if (input.metadata !== undefined) {
+      updates.push('metadata = ?');
+      params.push(JSON.stringify(input.metadata));
+    }
+
+    if (updates.length > 0) {
+      params.push(name);
+      db.prepare(`UPDATE schemas SET ${updates.join(', ')} WHERE name = ?`).run(...params);
+    }
+
+    if (input.field_claims !== undefined) {
+      db.prepare(`DELETE FROM schema_field_claims WHERE schema_name = ?`).run(name);
+      insertClaims(db, name, input.field_claims);
+    }
+  });
+
+  tx();
+
+  return getSchemaDefinition(db, name)!;
+}
+
+// ── deleteSchemaDefinition ────────────────────────────────────────────
+
+export function deleteSchemaDefinition(
+  db: Database.Database,
+  name: string,
+): { affected_nodes: number } {
+  const current = getSchemaDefinition(db, name);
+  if (!current) {
+    throw new Error(`Schema '${name}' not found`);
+  }
+
+  const affectedNodes = (
+    db
+      .prepare(`SELECT COUNT(*) as cnt FROM node_types WHERE schema_type = ?`)
+      .get(name) as { cnt: number }
+  ).cnt;
+
+  // CASCADE removes schema_field_claims
+  db.prepare(`DELETE FROM schemas WHERE name = ?`).run(name);
+
+  return { affected_nodes: affectedNodes };
+}

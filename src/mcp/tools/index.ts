@@ -35,10 +35,10 @@ export function registerAllTools(server: McpServer, db: Database.Database, ctx?:
   registerDescribeGlobalField(server, db);
   registerQueryNodes(server, db);
   registerGetNode(server, db);
-  registerCreateGlobalField(server, db);
-  registerUpdateGlobalField(server, db);
+  registerCreateGlobalField(server, db, ctx);
+  registerUpdateGlobalField(server, db, ctx);
   registerRenameGlobalField(server, db, ctx);
-  registerDeleteGlobalField(server, db);
+  registerDeleteGlobalField(server, db, ctx);
   registerCreateSchema(server, db, ctx);
   registerUpdateSchema(server, db, ctx);
   registerDeleteSchema(server, db, ctx);

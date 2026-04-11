@@ -153,7 +153,7 @@ export function startWatcher(
  * Parses the file, diffs against DB state, populates defaults for
  * newly-added types, and calls executeMutation.
  */
-function processFileChange(
+export function processFileChange(
   absPath: string,
   relPath: string,
   db: Database.Database,

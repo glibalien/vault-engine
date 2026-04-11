@@ -4,6 +4,7 @@ import { z } from 'zod';
 import { toolResult, toolErrorResult } from './errors.js';
 import { updateSchemaDefinition } from '../../schema/crud.js';
 import { diffClaims, propagateSchemaChange } from '../../schema/propagate.js';
+import { renderSchemaFile } from '../../schema/render.js';
 import type { WriteLockManager } from '../../sync/write-lock.js';
 
 const fieldClaimSchema = z.object({
@@ -60,6 +61,9 @@ export function registerUpdateSchema(server: McpServer, db: Database.Database, c
           const diff = diffClaims(oldClaims, newClaims);
           propagation = propagateSchemaChange(db, ctx.writeLock, ctx.vaultPath, name, diff);
         }
+
+        // Re-render schema YAML file
+        if (ctx?.vaultPath) renderSchemaFile(db, ctx.vaultPath, name);
 
         return toolResult({ ...result, propagation });
       } catch (err) {

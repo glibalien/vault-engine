@@ -13,6 +13,7 @@ import { startWatcher } from './sync/watcher.js';
 import { startReconciler } from './sync/reconciler.js';
 import { IndexMutex } from './sync/mutex.js';
 import { WriteLockManager } from './sync/write-lock.js';
+import { startupSchemaRender } from './schema/render.js';
 
 const args = parseArgs(process.argv.slice(2));
 
@@ -33,10 +34,12 @@ const indexStart = Date.now();
 await fullIndex(vaultPath, db);
 console.log(`Indexing complete in ${Date.now() - indexStart}ms`);
 
+startupSchemaRender(db, vaultPath);
+
 const mutex = new IndexMutex();
 const writeLock = new WriteLockManager();
 const watcher = startWatcher(vaultPath, db, mutex, writeLock);
-const reconciler = startReconciler(vaultPath, db, mutex);
+const reconciler = startReconciler(vaultPath, db, mutex, writeLock);
 
 const serverFactory = () => createServer(db, { writeLock, vaultPath });
 

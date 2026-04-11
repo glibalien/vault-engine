@@ -3,10 +3,11 @@ import type Database from 'better-sqlite3';
 import { z } from 'zod';
 import { toolResult, toolErrorResult } from './errors.js';
 import { createGlobalField } from '../../global-fields/crud.js';
+import { renderFieldsFile } from '../../schema/render.js';
 
 const fieldTypeEnum = z.enum(['string', 'number', 'date', 'boolean', 'reference', 'enum', 'list']);
 
-export function registerCreateGlobalField(server: McpServer, db: Database.Database): void {
+export function registerCreateGlobalField(server: McpServer, db: Database.Database, ctx?: { vaultPath?: string }): void {
   server.tool(
     'create-global-field',
     'Creates a new global field definition in the field pool.',
@@ -24,6 +25,7 @@ export function registerCreateGlobalField(server: McpServer, db: Database.Databa
     async (params) => {
       try {
         const result = createGlobalField(db, params);
+        if (ctx?.vaultPath) renderFieldsFile(db, ctx.vaultPath);
         return toolResult(result);
       } catch (err) {
         return toolErrorResult('INVALID_PARAMS', err instanceof Error ? err.message : String(err));

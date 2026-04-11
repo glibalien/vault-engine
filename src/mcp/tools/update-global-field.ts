@@ -3,10 +3,13 @@ import type Database from 'better-sqlite3';
 import { z } from 'zod';
 import { toolResult, toolErrorResult } from './errors.js';
 import { updateGlobalField } from '../../global-fields/crud.js';
+import { renderFieldsFile, renderSchemaFile } from '../../schema/render.js';
+import { rerenderNodesWithField } from '../../schema/propagate.js';
+import type { WriteLockManager } from '../../sync/write-lock.js';
 
 const fieldTypeEnum = z.enum(['string', 'number', 'date', 'boolean', 'reference', 'enum', 'list']);
 
-export function registerUpdateGlobalField(server: McpServer, db: Database.Database): void {
+export function registerUpdateGlobalField(server: McpServer, db: Database.Database, ctx?: { writeLock?: WriteLockManager; vaultPath?: string }): void {
   server.tool(
     'update-global-field',
     'Updates an existing global field definition. For type changes, omit confirm to preview impact; set confirm=true to apply.',
@@ -25,6 +28,22 @@ export function registerUpdateGlobalField(server: McpServer, db: Database.Databa
     async ({ name, ...rest }) => {
       try {
         const result = updateGlobalField(db, name, rest);
+
+        if (ctx?.vaultPath) {
+          renderFieldsFile(db, ctx.vaultPath);
+          // Re-render schema files that have claims on this field
+          const claimingSchemas = db.prepare('SELECT DISTINCT schema_name FROM schema_field_claims WHERE field = ?')
+            .all(name) as Array<{ schema_name: string }>;
+          for (const { schema_name } of claimingSchemas) {
+            renderSchemaFile(db, ctx.vaultPath, schema_name);
+          }
+          // If type change was confirmed, re-render affected nodes
+          if (rest.confirm && rest.field_type && ctx.writeLock) {
+            const nodes_rerendered = rerenderNodesWithField(db, ctx.writeLock, ctx.vaultPath, name);
+            return toolResult({ ...result, nodes_rerendered });
+          }
+        }
+
         return toolResult(result);
       } catch (err) {
         return toolErrorResult('INVALID_PARAMS', err instanceof Error ? err.message : String(err));

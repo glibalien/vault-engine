@@ -11,7 +11,7 @@
     "test": "vitest run",
     "test:watch": "vitest",
     "start:http": "node dist/index.js --transport http",
-    "test:perf": "vitest run tests/perf/"
+    "test:perf": "vitest run tests/perf/ --config vitest.perf.config.ts"
   },
   "engines": {
     "node": ">=20"

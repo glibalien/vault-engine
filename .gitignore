@@ -1,0 +1,7 @@
+node_modules/
+dist/
+.vault-engine/
+*.db
+*.db-wal
+*.db-shm
+.env

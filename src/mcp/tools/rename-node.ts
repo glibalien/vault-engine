@@ -5,12 +5,20 @@ import type Database from 'better-sqlite3';
 import { z } from 'zod';
 import { join, dirname } from 'node:path';
 import { existsSync, renameSync, mkdirSync } from 'node:fs';
+import { unified } from 'unified';
+import remarkParse from 'remark-parse';
+import remarkFrontmatter from 'remark-frontmatter';
+import remarkGfm from 'remark-gfm';
+import type { Node, Parent } from 'unist';
+import type { Text } from 'mdast';
 import { toolResult, toolErrorResult } from './errors.js';
 import { resolveNodeIdentity } from './resolve-identity.js';
 import { executeMutation } from '../../pipeline/execute.js';
 import { reconstructValue } from '../../pipeline/classify-value.js';
 import { resolveTarget } from '../../resolver/resolve.js';
 import type { WriteLockManager } from '../../sync/write-lock.js';
+
+const SKIP_TYPES = new Set(['code', 'inlineCode', 'yaml']);
 
 const paramsShape = {
   node_id: z.string().optional(),
@@ -146,16 +154,9 @@ export function registerRenameNode(
             }
           }
 
-          // Update body wiki-links
-          let newBody = refNode.body;
-          for (const target of targetsPointingToNode) {
-            // Replace [[Old Title]] with [[New Title]], preserving aliases
-            const escaped = target.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
-            const linkPattern = new RegExp(`\\[\\[${escaped}(\\|[^\\]]*)?\\]\\]`, 'g');
-            newBody = newBody.replace(linkPattern, (_match, alias) => {
-              return alias ? `[[${params.new_title}${alias}]]` : `[[${params.new_title}]]`;
-            });
-          }
+          // Update body wiki-links using AST-aware replacement
+          // (skips code blocks, inline code, and YAML frontmatter)
+          const newBody = rewriteBodyWikiLinks(refNode.body, targetsPointingToNode, params.new_title);
           if (newBody !== refNode.body) changed = true;
 
           if (changed) {
@@ -190,4 +191,64 @@ export function registerRenameNode(
       }
     },
   );
+}
+
+/**
+ * Rewrite wiki-links in body text using AST-aware traversal.
+ * Only modifies wiki-links in text nodes — skips code blocks, inline code, and YAML.
+ * Preserves aliases: [[old|alias]] → [[new|alias]].
+ */
+export function rewriteBodyWikiLinks(body: string, targets: string[], newTitle: string): string {
+  if (targets.length === 0) return body;
+
+  const processor = unified()
+    .use(remarkParse)
+    .use(remarkFrontmatter, ['yaml'])
+    .use(remarkGfm);
+
+  const tree = processor.parse(body);
+  const targetSet = new Set(targets);
+
+  // Collect replacement ranges: [startOffset, endOffset, replacementText]
+  const replacements: Array<[number, number, string]> = [];
+
+  function walk(node: Node): void {
+    if (SKIP_TYPES.has(node.type)) return;
+
+    if (node.type === 'text' && node.position) {
+      const text = (node as Text).value;
+      const nodeStart = node.position.start.offset!;
+
+      const re = /\[\[([^\]|]+)(?:\|([^\]]+))?\]\]/g;
+      let m: RegExpExecArray | null;
+      while ((m = re.exec(text)) !== null) {  // RegExp.exec, not child_process
+        if (targetSet.has(m[1])) {
+          const alias = m[2];
+          const absStart = nodeStart + m.index;
+          const absEnd = absStart + m[0].length;
+          const rep = alias ? `[[${newTitle}|${alias}]]` : `[[${newTitle}]]`;
+          replacements.push([absStart, absEnd, rep]);
+        }
+      }
+    }
+
+    if ('children' in node) {
+      for (const child of (node as Parent).children) {
+        walk(child);
+      }
+    }
+  }
+
+  walk(tree);
+
+  if (replacements.length === 0) return body;
+
+  // Apply in reverse order to preserve offsets
+  let result = body;
+  for (let i = replacements.length - 1; i >= 0; i--) {
+    const [start, end, rep] = replacements[i];
+    result = result.slice(0, start) + rep + result.slice(end);
+  }
+
+  return result;
 }

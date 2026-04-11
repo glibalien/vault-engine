@@ -79,7 +79,7 @@ export function registerGetNode(server: McpServer, db: Database.Database): void 
       }
 
       // Get types
-      const types = (db.prepare('SELECT schema_type FROM node_types WHERE node_id = ?')
+      const types = (db.prepare('SELECT schema_type FROM node_types WHERE node_id = ? ORDER BY rowid')
         .all(node.id) as Array<{ schema_type: string }>).map(t => t.schema_type);
 
       // Get fields

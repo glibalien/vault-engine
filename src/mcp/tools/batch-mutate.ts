@@ -10,6 +10,7 @@ import { resolveNodeIdentity } from './resolve-identity.js';
 import { executeMutation } from '../../pipeline/execute.js';
 import { PipelineError } from '../../pipeline/types.js';
 import { reconstructValue } from '../../pipeline/classify-value.js';
+import { backupFile, restoreFile, cleanupBackups } from '../../pipeline/file-writer.js';
 import type { WriteLockManager } from '../../sync/write-lock.js';
 
 const operationSchema = z.object({
@@ -33,6 +34,14 @@ export function registerBatchMutate(
     paramsShape,
     async (params) => {
       const results: Array<{ op: string; node_id: string; file_path: string }> = [];
+      const tmpDir = join(vaultPath, '.vault-engine', 'tmp');
+
+      // Track file state for rollback: files that existed before (backed up)
+      // and files that were created new (to be deleted on rollback)
+      const backups: Array<{ filePath: string; backupPath: string }> = [];
+      const createdFiles: string[] = [];
+
+      let batchError: { failed_at: number; error: { op: string; message: string } } | null = null as { failed_at: number; error: { op: string; message: string } } | null;
 
       const txn = db.transaction(() => {
         for (let i = 0; i < params.operations.length; i++) {
@@ -47,10 +56,10 @@ export function registerBatchMutate(
               const path = opParams.path as string | undefined;
 
               const filePath = path ? `${path}/${title}.md` : `${title}.md`;
+              const absPath = join(vaultPath, filePath);
 
-              // Conflict check
               const existing = db.prepare('SELECT id FROM nodes WHERE file_path = ?').get(filePath);
-              if (existing || existsSync(join(vaultPath, filePath))) {
+              if (existing || existsSync(absPath)) {
                 throw new PipelineError('INVALID_PARAMS', `File path "${filePath}" already exists`);
               }
 
@@ -63,6 +72,7 @@ export function registerBatchMutate(
                 fields,
                 body,
               });
+              if (result.file_written) createdFiles.push(absPath);
               results.push({ op: 'create', node_id: result.node_id, file_path: result.file_path });
 
             } else if (op === 'update') {
@@ -74,6 +84,12 @@ export function registerBatchMutate(
               if (!resolved.ok) throw new PipelineError(resolved.code, resolved.message);
 
               const { node } = resolved;
+              const absPath = join(vaultPath, node.file_path);
+
+              // Back up the existing file before mutation
+              const bp = backupFile(absPath, tmpDir);
+              if (bp) backups.push({ filePath: absPath, backupPath: bp });
+
               const currentTypes = (db.prepare('SELECT schema_type FROM node_types WHERE node_id = ?')
                 .all(node.node_id) as Array<{ schema_type: string }>).map(t => t.schema_type);
               const currentFields: Record<string, unknown> = {};
@@ -86,8 +102,7 @@ export function registerBatchMutate(
               const finalFields = { ...currentFields };
               if (setFields) {
                 for (const [key, value] of Object.entries(setFields)) {
-                  if (value === null) delete finalFields[key];
-                  else finalFields[key] = value;
+                  finalFields[key] = value; // null passes through as deletion intent
                 }
               }
 
@@ -113,6 +128,10 @@ export function registerBatchMutate(
               const { node } = resolved;
               const absPath = join(vaultPath, node.file_path);
 
+              // Back up the file before deleting
+              const bp = backupFile(absPath, tmpDir);
+              if (bp) backups.push({ filePath: absPath, backupPath: bp });
+
               const rowInfo = db.prepare('SELECT rowid FROM nodes WHERE id = ?').get(node.node_id) as { rowid: number } | undefined;
               if (rowInfo) db.prepare('DELETE FROM nodes_fts WHERE rowid = ?').run(rowInfo.rowid);
               db.prepare('INSERT INTO edits_log (node_id, timestamp, event_type, details) VALUES (?, ?, ?, ?)').run(
@@ -125,8 +144,11 @@ export function registerBatchMutate(
             }
           } catch (err) {
             if (err instanceof PipelineError) {
-              throw { failed_at: i, error: { op, message: err.message } };
+              batchError = { failed_at: i, error: { op, message: err.message } };
+            } else {
+              batchError = { failed_at: i, error: { op, message: err instanceof Error ? err.message : String(err) } };
             }
+            // Throw to trigger SQLite transaction rollback
             throw err;
           }
         }
@@ -136,13 +158,32 @@ export function registerBatchMutate(
 
       try {
         const applied = txn();
+        // Success: clean up backups
+        cleanupBackups(backups.map(b => b.backupPath));
         return toolResult({ applied: true, results: applied });
-      } catch (err: unknown) {
-        if (err && typeof err === 'object' && 'failed_at' in err) {
-          const e = err as { failed_at: number; error: { op: string; message: string } };
-          return toolResult({ applied: false, failed_at: e.failed_at, error: e.error });
+      } catch {
+        // DB transaction rolled back. Now revert file writes.
+        // 1. Restore backed-up files (updates and deletes)
+        for (const { filePath, backupPath } of backups) {
+          try {
+            restoreFile(backupPath, filePath);
+          } catch {
+            // Best effort
+          }
         }
-        return toolErrorResult('INTERNAL_ERROR', err instanceof Error ? err.message : String(err));
+        // 2. Delete newly created files
+        for (const absPath of createdFiles) {
+          try {
+            unlinkSync(absPath);
+          } catch {
+            // Best effort
+          }
+        }
+
+        if (batchError) {
+          return toolResult({ applied: false, failed_at: batchError.failed_at, error: batchError.error });
+        }
+        return toolErrorResult('INTERNAL_ERROR', 'Batch operation failed');
       }
     },
   );

@@ -185,6 +185,36 @@ describe('executeMutation — tool path update', () => {
   });
 });
 
+// ── Null deletion of defaulted fields ──────────────────────────────────
+
+describe('executeMutation — null deletion intent', () => {
+  it('explicit null on a field with a default removes the field (no re-default)', () => {
+    createGlobalField(db, { name: 'status', field_type: 'string', default_value: 'open' });
+    createSchemaDefinition(db, { name: 'task', field_claims: [{ field: 'status' }] });
+
+    // Create with the default
+    const created = executeMutation(db, writeLock, vaultPath, makeMutation({
+      types: ['task'],
+      fields: { status: 'open' },
+    }));
+
+    // "Update" with explicit null — should delete the field, NOT re-default
+    const result = executeMutation(db, writeLock, vaultPath, makeMutation({
+      node_id: created.node_id,
+      types: ['task'],
+      fields: { status: null },
+    }));
+
+    // status should NOT be in coerced_state (null = deletion intent)
+    expect(result.validation.coerced_state.status).toBeUndefined();
+
+    // status should NOT be in DB
+    const field = db.prepare('SELECT * FROM node_fields WHERE node_id = ? AND field_name = ?')
+      .get(result.node_id, 'status');
+    expect(field).toBeUndefined();
+  });
+});
+
 // ── No-op write rule ──────────────────────────────────────────────────
 
 describe('executeMutation — no-op write rule', () => {
@@ -279,6 +309,15 @@ describe('executeMutation — relationships', () => {
 
     const rels = db.prepare('SELECT target, rel_type FROM relationships WHERE source_id = ?').all(result.node_id) as { target: string; rel_type: string }[];
     expect(rels.some(r => r.target === 'Vault Engine' && r.rel_type === 'project')).toBe(true);
+  });
+
+  it('derives relationships from orphan fields with wiki-links', () => {
+    const result = executeMutation(db, writeLock, vaultPath, makeMutation({
+      fields: { random_ref: '[[Some Node]]' },
+    }));
+
+    const rels = db.prepare('SELECT target, rel_type FROM relationships WHERE source_id = ?').all(result.node_id) as { target: string; rel_type: string }[];
+    expect(rels.some(r => r.target === 'Some Node' && r.rel_type === 'random_ref')).toBe(true);
   });
 
   it('derives relationships from body wiki-links', () => {

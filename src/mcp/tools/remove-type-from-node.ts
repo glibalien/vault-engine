@@ -48,7 +48,7 @@ export function registerRemoveTypeFromNode(
 
       const resultingTypes = currentTypes.filter(t => t !== params.type);
 
-      // Determine which fields become orphans
+      // Determine which fields become orphans — only fields the node actually has
       const removedClaims = db.prepare('SELECT field FROM schema_field_claims WHERE schema_name = ?')
         .all(params.type) as Array<{ field: string }>;
       const remainingClaims = new Set<string>();
@@ -57,9 +57,13 @@ export function registerRemoveTypeFromNode(
           .all(rt) as Array<{ field: string }>;
         for (const c of claims) remainingClaims.add(c.field);
       }
+      const nodeFieldNames = new Set(
+        (db.prepare('SELECT field_name FROM node_fields WHERE node_id = ?')
+          .all(node.node_id) as Array<{ field_name: string }>).map(r => r.field_name)
+      );
       const wouldOrphanFields = removedClaims
         .map(c => c.field)
-        .filter(f => !remainingClaims.has(f));
+        .filter(f => !remainingClaims.has(f) && nodeFieldNames.has(f));
 
       // Confirmation gate for typeless result
       if (resultingTypes.length === 0 && !params.confirm) {

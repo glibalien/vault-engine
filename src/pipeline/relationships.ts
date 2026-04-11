@@ -50,13 +50,19 @@ export function deriveRelationships(
       }
     }
 
-    // Orphan fields with value_raw_text — extract wiki-links from raw text
-    if (!gf && fieldName in orphanRawValues) {
-      const raw = orphanRawValues[fieldName];
-      WIKILINK_PATTERN.lastIndex = 0;
-      let match: RegExpExecArray | null;
-      while ((match = WIKILINK_PATTERN.exec(raw)) !== null) {  // RegExp.exec, not child_process
-        addRel(match[1], fieldName, fieldName);
+    // Orphan fields — extract wiki-links from raw text or from the value itself
+    if (!gf) {
+      // Prefer value_raw_text if available (watcher path)
+      const textToScan = (fieldName in orphanRawValues)
+        ? orphanRawValues[fieldName]
+        : (typeof value === 'string' ? value : (Array.isArray(value) ? JSON.stringify(value) : null));
+
+      if (textToScan) {
+        WIKILINK_PATTERN.lastIndex = 0;
+        let match: RegExpExecArray | null;
+        while ((match = WIKILINK_PATTERN.exec(textToScan)) !== null) {  // RegExp.exec, not child_process
+          addRel(match[1], fieldName, fieldName);
+        }
       }
     }
   }

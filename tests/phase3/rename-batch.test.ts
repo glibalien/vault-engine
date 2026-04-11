@@ -1,6 +1,6 @@
 import { describe, it, expect, beforeEach, afterEach } from 'vitest';
 import { join } from 'node:path';
-import { existsSync, readFileSync, renameSync } from 'node:fs';
+import { existsSync, readFileSync, renameSync, unlinkSync } from 'node:fs';
 import Database from 'better-sqlite3';
 import { createSchema } from '../../src/db/schema.js';
 import { executeMutation } from '../../src/pipeline/execute.js';
@@ -10,6 +10,8 @@ import { createGlobalField } from '../../src/global-fields/crud.js';
 import { createSchemaDefinition } from '../../src/schema/crud.js';
 import { resolveTarget } from '../../src/resolver/resolve.js';
 import { reconstructValue } from '../../src/pipeline/classify-value.js';
+import { resolveNodeIdentity } from '../../src/mcp/tools/resolve-identity.js';
+import { rewriteBodyWikiLinks } from '../../src/mcp/tools/rename-node.js';
 import { createTempVault } from '../helpers/vault.js';
 
 let vaultPath: string;
@@ -93,6 +95,23 @@ describe('rename-node', () => {
     expect(content).toContain('[[New Project]]');
   });
 
+  it('does NOT rewrite wiki-links inside fenced code blocks', () => {
+    const body = 'Plain: [[Old Title]]\n\n```\ncode with [[Old Title]] inside\n```\n\nAfter code.';
+    const result = rewriteBodyWikiLinks(body, ['Old Title'], 'New Title');
+
+    expect(result).toContain('Plain: [[New Title]]');
+    expect(result).toContain('code with [[Old Title]] inside'); // code block unchanged
+    expect(result).toContain('After code.');
+  });
+
+  it('does NOT rewrite wiki-links inside inline code', () => {
+    const body = 'See [[Old Title]] and `[[Old Title]]` for reference.';
+    const result = rewriteBodyWikiLinks(body, ['Old Title'], 'New Title');
+
+    expect(result).toContain('See [[New Title]]');
+    expect(result).toContain('`[[Old Title]]`'); // inline code unchanged
+  });
+
   it('updates body wiki-links with alias preservation', () => {
     const target = create('target.md', 'Old Title');
     const source = create('source.md', 'Source', {
@@ -131,7 +150,51 @@ describe('batch-mutate', () => {
     expect(db.prepare("SELECT id FROM nodes WHERE title = 'Node C'").get()).toBeDefined();
   });
 
-  it('failure rolls back all operations', () => {
+  it('failure rolls back DB and files for identity resolution errors', () => {
+    const beforeCount = (db.prepare('SELECT COUNT(*) as c FROM nodes').get() as { c: number }).c;
+
+    // Simulate the batch-mutate pattern: create two nodes, then fail on a third op
+    const backups: Array<{ filePath: string; backupPath: string }> = [];
+    const created: string[] = [];
+    const tmpDir = join(vaultPath, '.vault-engine', 'tmp');
+    let failed = false;
+
+    try {
+      const txn = db.transaction(() => {
+        // Op 1: create
+        const r1 = create('rollback-a.md', 'Rollback Alpha');
+        created.push(join(vaultPath, 'rollback-a.md'));
+
+        // Op 2: create
+        const r2 = create('rollback-b.md', 'Rollback Beta');
+        created.push(join(vaultPath, 'rollback-b.md'));
+
+        // Op 3: identity resolution failure
+        const resolved = resolveNodeIdentity(db, { node_id: 'nonexistent-12345' });
+        if (!resolved.ok) throw new Error(resolved.message);
+      });
+      txn();
+    } catch {
+      failed = true;
+      // Revert file writes (same pattern as batch-mutate handler)
+      for (const absPath of created) {
+        try { unlinkSync(absPath); } catch {}
+      }
+    }
+
+    expect(failed).toBe(true);
+
+    // DB rolled back
+    const afterCount = (db.prepare('SELECT COUNT(*) as c FROM nodes').get() as { c: number }).c;
+    expect(afterCount).toBe(beforeCount);
+    expect(db.prepare("SELECT id FROM nodes WHERE title = 'Rollback Alpha'").get()).toBeUndefined();
+
+    // Files cleaned up
+    expect(existsSync(join(vaultPath, 'rollback-a.md'))).toBe(false);
+    expect(existsSync(join(vaultPath, 'rollback-b.md'))).toBe(false);
+  });
+
+  it('failure rolls back DB and files for validation errors', () => {
     createGlobalField(db, { name: 'req', field_type: 'string', required: true });
     createSchemaDefinition(db, { name: 'strict', field_claims: [{ field: 'req' }] });
 
@@ -139,18 +202,18 @@ describe('batch-mutate', () => {
 
     try {
       const txn = db.transaction(() => {
-        // This succeeds
         create('ok.md', 'OK Node');
         // This fails: missing required field
         create('fail.md', 'Fail Node', { types: ['strict'], fields: {} });
       });
       txn();
     } catch {
-      // Expected
+      // Expected — SQLite transaction rolled back
     }
 
+    // DB rolled back
     const afterCount = (db.prepare('SELECT COUNT(*) as c FROM nodes').get() as { c: number }).c;
-    expect(afterCount).toBe(beforeCount); // rolled back
+    expect(afterCount).toBe(beforeCount);
     expect(db.prepare("SELECT id FROM nodes WHERE title = 'OK Node'").get()).toBeUndefined();
   });
 

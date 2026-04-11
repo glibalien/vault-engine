@@ -1,6 +1,8 @@
 import { describe, it, expect } from 'vitest';
+import Database from 'better-sqlite3';
 import { createTestDb } from '../helpers/db.js';
 import { createSchema } from '../../src/db/schema.js';
+import { upgradeToPhase2 } from '../../src/db/migrate.js';
 
 describe('createSchema', () => {
   it('creates all required tables', () => {
@@ -103,5 +105,100 @@ describe('createSchema', () => {
   it('is idempotent (calling createSchema twice does not error)', () => {
     const db = createTestDb();
     expect(() => createSchema(db)).not.toThrow();
+  });
+
+  it('creates schema_field_claims table', () => {
+    const db = createTestDb();
+    const tables = db.prepare(
+      "SELECT name FROM sqlite_master WHERE type='table' AND name='schema_field_claims'"
+    ).all();
+    expect(tables).toHaveLength(1);
+  });
+
+  it('global_fields has required, per_type_overrides_allowed, and list_item_type columns', () => {
+    const db = createTestDb();
+    const columns = db.prepare('PRAGMA table_info(global_fields)').all() as { name: string }[];
+    const names = columns.map(c => c.name);
+    expect(names).toContain('required');
+    expect(names).toContain('per_type_overrides_allowed');
+    expect(names).toContain('list_item_type');
+  });
+
+  it('cascades schema deletion to schema_field_claims', () => {
+    const db = createTestDb();
+    db.prepare("INSERT INTO schemas (name) VALUES (?)").run('note');
+    db.prepare("INSERT INTO global_fields (name, field_type) VALUES (?, ?)").run('project', 'text');
+    db.prepare(
+      "INSERT INTO schema_field_claims (schema_name, field) VALUES (?, ?)"
+    ).run('note', 'project');
+
+    db.prepare("DELETE FROM schemas WHERE name = ?").run('note');
+
+    const claims = db.prepare(
+      "SELECT * FROM schema_field_claims WHERE schema_name = ?"
+    ).all('note');
+    expect(claims).toHaveLength(0);
+  });
+
+  it('schema_field_claims has idx_sfc_field index', () => {
+    const db = createTestDb();
+    const indexes = db.prepare(
+      "SELECT name FROM sqlite_master WHERE type='index' AND name='idx_sfc_field'"
+    ).all();
+    expect(indexes).toHaveLength(1);
+  });
+});
+
+describe('upgradeToPhase2', () => {
+  it('runs without error on a fresh Phase 2 DB', () => {
+    const db = createTestDb();
+    expect(() => upgradeToPhase2(db)).not.toThrow();
+  });
+
+  it('is idempotent — running twice does not error', () => {
+    const db = createTestDb();
+    upgradeToPhase2(db);
+    expect(() => upgradeToPhase2(db)).not.toThrow();
+  });
+
+  it('upgrades a Phase 1 DB (missing new columns) to Phase 2', () => {
+    // Simulate Phase 1: create schema without the new columns/table
+    const db = new Database(':memory:');
+    db.pragma('journal_mode = WAL');
+    db.pragma('foreign_keys = ON');
+    // Build a minimal Phase 1 schema (no new columns, no schema_field_claims)
+    db.prepare(`
+      CREATE TABLE IF NOT EXISTS global_fields (
+        name TEXT PRIMARY KEY,
+        field_type TEXT NOT NULL,
+        enum_values TEXT,
+        reference_target TEXT,
+        description TEXT,
+        default_value TEXT
+      )
+    `).run();
+    db.prepare(`
+      CREATE TABLE IF NOT EXISTS schemas (
+        name TEXT PRIMARY KEY,
+        display_name TEXT,
+        icon TEXT,
+        filename_template TEXT,
+        field_claims TEXT NOT NULL DEFAULT '[]',
+        metadata TEXT
+      )
+    `).run();
+
+    upgradeToPhase2(db);
+
+    const columns = db.prepare('PRAGMA table_info(global_fields)').all() as { name: string }[];
+    const names = columns.map(c => c.name);
+    expect(names).toContain('required');
+    expect(names).toContain('per_type_overrides_allowed');
+    expect(names).toContain('list_item_type');
+
+    const tables = db.prepare(
+      "SELECT name FROM sqlite_master WHERE type='table' AND name='schema_field_claims'"
+    ).all();
+    expect(tables).toHaveLength(1);
   });
 });

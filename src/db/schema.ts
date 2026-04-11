@@ -28,7 +28,10 @@ export function createSchema(db: Database.Database): void {
       enum_values TEXT,
       reference_target TEXT,
       description TEXT,
-      default_value TEXT
+      default_value TEXT,
+      required INTEGER NOT NULL DEFAULT 0,
+      per_type_overrides_allowed INTEGER NOT NULL DEFAULT 0,
+      list_item_type TEXT
     );
 
     CREATE TABLE IF NOT EXISTS schemas (
@@ -39,6 +42,18 @@ export function createSchema(db: Database.Database): void {
       field_claims TEXT NOT NULL DEFAULT '[]',
       metadata TEXT
     );
+
+    CREATE TABLE IF NOT EXISTS schema_field_claims (
+      schema_name TEXT NOT NULL REFERENCES schemas(name) ON DELETE CASCADE,
+      field TEXT NOT NULL REFERENCES global_fields(name),
+      label TEXT,
+      description TEXT,
+      sort_order INTEGER DEFAULT 1000,
+      required INTEGER,
+      default_value TEXT,
+      PRIMARY KEY (schema_name, field)
+    );
+    CREATE INDEX IF NOT EXISTS idx_sfc_field ON schema_field_claims(field);
 
     CREATE TABLE IF NOT EXISTS node_fields (
       node_id TEXT NOT NULL REFERENCES nodes(id) ON DELETE CASCADE,

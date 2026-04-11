@@ -12,7 +12,7 @@ const dbPath = args.dbPath ?? resolve(process.cwd(), '.vault-engine', 'vault.db'
 
 const db = openDatabase(dbPath);
 
-const serverFactory = () => createServer();
+const serverFactory = () => createServer(db);
 
 if (args.transport === 'stdio' || args.transport === 'both') {
   const server = serverFactory();

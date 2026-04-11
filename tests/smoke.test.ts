@@ -2,6 +2,7 @@ import { describe, it, expect, beforeAll, afterAll } from 'vitest';
 import { createHttpApp } from '../src/transport/http.js';
 import { createServer } from '../src/mcp/server.js';
 import { openDatabase } from '../src/db/connection.js';
+import { createSchema } from '../src/db/schema.js';
 import { join } from 'node:path';
 import { mkdtempSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
@@ -25,6 +26,7 @@ describe('Phase 0 smoke test', () => {
     tmpDir = mkdtempSync(join(tmpdir(), 'vault-engine-test-'));
     const dbPath = join(tmpDir, '.vault-engine', 'vault.db');
     db = openDatabase(dbPath);
+    createSchema(db);
   });
 
   afterAll(() => {
@@ -34,7 +36,7 @@ describe('Phase 0 smoke test', () => {
 
   it('vault-stats returns Phase 0 stub via MCP over HTTP', async () => {
     // No auth config — smoke test validates the MCP tool, not the OAuth layer
-    const app = createHttpApp(() => createServer());
+    const app = createHttpApp(() => createServer(db));
 
     const mcpHeaders = {
       Accept: 'application/json, text/event-stream',
@@ -80,11 +82,9 @@ describe('Phase 0 smoke test', () => {
     expect(content[0].type).toBe('text');
 
     const parsed = JSON.parse(content[0].text);
-    expect(parsed).toEqual({
-      status: 'ok',
-      phase: 0,
-      message: 'Phase 0 stub',
-    });
+    expect(parsed.node_count).toBe(0);
+    expect(parsed.type_counts).toEqual([]);
+    expect(parsed.schema_count).toBe(0);
   });
 
   it('.vault-engine/ directory is created by openDatabase', () => {

@@ -306,7 +306,7 @@ interface EffectiveField {
   resolved_description: string | null;
   resolved_order: number;
   resolved_required: boolean;
-  resolved_default: any;
+  resolved_default_value: any;
   claiming_types: string[];
 }
 
@@ -365,6 +365,7 @@ interface ValidationResult {
 interface CoercedValue {
   field: string;
   value: any;
+  original?: any;  // populated when changed: true and source: 'provided' (pre-coercion value for Phase 3 edits log)
   source: 'provided' | 'defaulted' | 'orphan';
   changed: boolean;  // true if value differs from input (coercion applied)
 }
@@ -397,7 +398,7 @@ Given `(proposed_fields: Record<string, any>, types: string[], db)`:
 
 **Step 2: Check required fields and defaults.** For each field in the effective field set:
 - If `required` and missing from `proposed_fields`: issue `REQUIRED_MISSING`.
-- If missing and has a `default`: include in `coerced_state` with `source: 'defaulted'`.
+- If missing and has a `default_value`: include in `coerced_state` with `source: 'defaulted'`.
 - Explicit `null` overrides defaults — `null` is deletion intent. If the field was required, `REQUIRED_MISSING` is raised. The default is not applied. This is the only way for the agent to say "I really mean no value here."
 
 **Step 3: Validate and coerce each provided field.** For each field in `proposed_fields` that IS in the effective field set:
@@ -536,6 +537,8 @@ For existing DBs (Phase 1 already ran), a separate upgrade path runs conditional
 
 All migration operations run in a **single transaction** — if any fails, the migration rolls back. No half-migrated DB state.
 
+The existing `schemas.field_claims` JSON column is left in place with its `'[]'` default. No migration touches it. It remains as a dead column in Phase 2; Phase 3 will drop or repurpose it when the renderer lands.
+
 ### Migration block (upgrade path)
 
 ```sql
@@ -598,6 +601,8 @@ CREATE INDEX IF NOT EXISTS idx_sfc_field ON schema_field_claims(field);
 - Update global field type change: preview returns coercible/uncoercible, confirm applies with orphaning of uncoercible values
 
 ### MCP tool tests (pre-populated DB)
+
+The 10 schema/global-field CRUD tools are covered by the integration tests above; this section covers tools whose primary value is the response shape rather than the DB mutation.
 
 - `get-node` conformance: claimed_fields, orphan_fields, unfilled_claims for single-type, multi-type, and schemaless nodes
 - `describe-schema`: node_count, field_coverage (multi-type denominator correctness), orphan_field_names (interpretation (a) — includes fields claimed by other schemas)

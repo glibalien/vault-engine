@@ -54,6 +54,9 @@ export function createSchema(db: Database.Database): void {
     CREATE INDEX IF NOT EXISTS idx_node_fields_value_number ON node_fields(value_number);
     CREATE INDEX IF NOT EXISTS idx_node_fields_value_date ON node_fields(value_date);
 
+    -- Relationships store raw target strings (model A: query-time resolution).
+    -- No resolved_target_id column — resolution happens at query time via
+    -- src/resolver/resolve.ts. See that file for rationale and upgrade path.
     CREATE TABLE IF NOT EXISTS relationships (
       id INTEGER PRIMARY KEY AUTOINCREMENT,
       source_id TEXT NOT NULL REFERENCES nodes(id) ON DELETE CASCADE,

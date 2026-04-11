@@ -1,3 +1,10 @@
+// Query-time resolution (model A): relationships store raw target strings only.
+// There is no resolved_target_id column or resolution pass during indexing.
+// Resolution happens here, at query time, via four-tier basename matching.
+// This is simpler and fast enough at 7k nodes. If query latency becomes a
+// problem, switch to model B: add a resolved_target_id column to relationships
+// and populate it during indexing with a resolution pass after each index.
+
 import type Database from 'better-sqlite3';
 import { basename } from 'node:path';
 

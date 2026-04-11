@@ -10,7 +10,8 @@
     "start": "node dist/index.js",
     "test": "vitest run",
     "test:watch": "vitest",
-    "start:http": "node dist/index.js --transport http"
+    "start:http": "node dist/index.js --transport http",
+    "test:perf": "vitest run tests/perf/ --config vitest.perf.config.ts"
   },
   "engines": {
     "node": ">=20"
@@ -21,7 +22,9 @@
     "better-sqlite3": "^12.8.0",
     "chokidar": "^5.0.0",
     "express": "^5.2.1",
+    "nanoid": "^5.1.7",
     "remark-frontmatter": "^5.0.0",
+    "remark-gfm": "^4.0.1",
     "remark-parse": "^11.0.0",
     "remark-stringify": "^11.0.0",
     "sqlite-vec": "^0.1.9",

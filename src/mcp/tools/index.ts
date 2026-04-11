@@ -23,6 +23,7 @@ import { registerUpdateNode } from './update-node.js';
 import { registerDeleteNode } from './delete-node.js';
 import { registerAddTypeToNode } from './add-type-to-node.js';
 import { registerRemoveTypeFromNode } from './remove-type-from-node.js';
+import { registerRenameNode } from './rename-node.js';
 
 export function registerAllTools(server: McpServer, db: Database.Database, ctx?: { writeLock?: import('../../sync/write-lock.js').WriteLockManager; vaultPath?: string }): void {
   registerVaultStats(server, db);
@@ -51,5 +52,6 @@ export function registerAllTools(server: McpServer, db: Database.Database, ctx?:
     registerDeleteNode(server, db, ctx.writeLock, ctx.vaultPath);
     registerAddTypeToNode(server, db, ctx.writeLock, ctx.vaultPath);
     registerRemoveTypeFromNode(server, db, ctx.writeLock, ctx.vaultPath);
+    registerRenameNode(server, db, ctx.writeLock, ctx.vaultPath);
   }
 }

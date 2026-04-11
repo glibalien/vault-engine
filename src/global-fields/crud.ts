@@ -190,7 +190,21 @@ export function updateGlobalField(
   const isTypeChange = input.field_type !== undefined && input.field_type !== current.field_type;
 
   if (!isTypeChange) {
-    // Non-type-change: update fields directly
+    // Non-type-change: validate invariants after applying updates
+    const effectiveType = current.field_type;
+    const effectiveEnumValues = input.enum_values !== undefined ? input.enum_values : current.enum_values;
+    const effectiveListItemType = input.list_item_type !== undefined ? input.list_item_type : current.list_item_type;
+
+    if (effectiveType === 'enum' && (!effectiveEnumValues || effectiveEnumValues.length === 0)) {
+      throw new Error('enum field_type requires non-empty enum_values');
+    }
+    if (effectiveType === 'list' && !effectiveListItemType) {
+      throw new Error('list field_type requires list_item_type');
+    }
+    if (effectiveListItemType === 'list') {
+      throw new Error('Nested lists are not allowed (list_item_type cannot be list)');
+    }
+
     const updates: string[] = [];
     const params: unknown[] = [];
 

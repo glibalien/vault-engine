@@ -277,4 +277,17 @@ describe('updateGlobalField', () => {
     ).get() as { value_text: string | null };
     expect(n2.value_text).toBe('not-a-number');
   });
+
+  it('rejects clearing enum_values on an enum field', () => {
+    createGlobalField(db, { name: 'status', field_type: 'enum', enum_values: ['open', 'closed'] });
+    expect(() => updateGlobalField(db, 'status', { enum_values: [] })).toThrow(/enum_values/);
+  });
+
+  it('rejects clearing list_item_type on a list field', () => {
+    createGlobalField(db, { name: 'tags', field_type: 'list', list_item_type: 'string' });
+    // Attempting to set list_item_type to null should fail
+    expect(() => updateGlobalField(db, 'tags', { list_item_type: undefined as any })).not.toThrow();
+    // But explicitly setting it to something invalid should fail
+    expect(() => updateGlobalField(db, 'tags', { list_item_type: 'list' as any })).toThrow(/nested/i);
+  });
 });

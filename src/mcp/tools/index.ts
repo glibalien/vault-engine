@@ -8,6 +8,16 @@ import { registerListGlobalFields } from './list-global-fields.js';
 import { registerDescribeGlobalField } from './describe-global-field.js';
 import { registerQueryNodes } from './query-nodes.js';
 import { registerGetNode } from './get-node.js';
+import { registerCreateGlobalField } from './create-global-field.js';
+import { registerUpdateGlobalField } from './update-global-field.js';
+import { registerRenameGlobalField } from './rename-global-field.js';
+import { registerDeleteGlobalField } from './delete-global-field.js';
+import { registerCreateSchema } from './create-schema.js';
+import { registerUpdateSchema } from './update-schema.js';
+import { registerDeleteSchema } from './delete-schema.js';
+import { registerValidateNode } from './validate-node.js';
+import { registerInferFieldType } from './infer-field-type.js';
+import { registerListFieldValues } from './list-field-values.js';
 
 export function registerAllTools(server: McpServer, db: Database.Database): void {
   registerVaultStats(server, db);
@@ -18,4 +28,14 @@ export function registerAllTools(server: McpServer, db: Database.Database): void
   registerDescribeGlobalField(server, db);
   registerQueryNodes(server, db);
   registerGetNode(server, db);
+  registerCreateGlobalField(server, db);
+  registerUpdateGlobalField(server, db);
+  registerRenameGlobalField(server, db);
+  registerDeleteGlobalField(server, db);
+  registerCreateSchema(server, db);
+  registerUpdateSchema(server, db);
+  registerDeleteSchema(server, db);
+  registerValidateNode(server, db);
+  registerInferFieldType(server, db);
+  registerListFieldValues(server, db);
 }

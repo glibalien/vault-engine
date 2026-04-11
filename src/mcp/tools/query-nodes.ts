@@ -1,7 +1,9 @@
 import type { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import type Database from 'better-sqlite3';
 import { z } from 'zod';
+import { basename } from 'node:path';
 import { toolResult } from './errors.js';
+import { resolveTarget } from '../../resolver/resolve.js';
 
 const ISO_DATE_RE = /^\d{4}-\d{2}-\d{2}/;
 
@@ -118,14 +120,34 @@ export function registerQueryNodes(server: McpServer, db: Database.Database): vo
         }
 
         if (dir === 'incoming' || dir === 'both') {
-          const alias = `r${joinIdx++}`;
-          let joinCond = `INNER JOIN relationships ${alias} ON ${alias}.target = n.title AND ${alias}.source_id IN (SELECT id FROM nodes WHERE title = ? OR file_path = ?)`;
-          sqlParams.push(ref.target, ref.target);
-          if (ref.rel_type) {
-            joinCond += ` AND ${alias}.rel_type = ?`;
-            sqlParams.push(ref.rel_type);
+          // "Incoming to X" means: find nodes that link TO X.
+          // Result nodes are the sources of those relationships.
+          // Strategy: resolve the target param to a node, collect all raw strings
+          // that could refer to it, then match relationships whose target is one of those.
+          const resolved = resolveTarget(db, ref.target);
+          if (!resolved) {
+            // Target doesn't resolve — no incoming results possible
+            whereClauses.push('1 = 0');
+          } else {
+            const targetNode = db.prepare('SELECT file_path, title FROM nodes WHERE id = ?')
+              .get(resolved.id) as { file_path: string; title: string | null };
+            // Collect all raw strings that wiki-links might use to refer to this node
+            const possibleTargets: string[] = [];
+            if (targetNode.title) possibleTargets.push(targetNode.title);
+            possibleTargets.push(targetNode.file_path);
+            possibleTargets.push(basename(targetNode.file_path, '.md'));
+            const unique = [...new Set(possibleTargets)];
+
+            const alias = `r${joinIdx++}`;
+            const placeholders = unique.map(() => '?').join(', ');
+            let joinCond = `INNER JOIN relationships ${alias} ON ${alias}.source_id = n.id AND ${alias}.target IN (${placeholders})`;
+            sqlParams.push(...unique);
+            if (ref.rel_type) {
+              joinCond += ` AND ${alias}.rel_type = ?`;
+              sqlParams.push(ref.rel_type);
+            }
+            joins.push(joinCond);
           }
-          joins.push(joinCond);
         }
       }
 

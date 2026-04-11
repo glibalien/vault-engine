@@ -47,6 +47,13 @@ describe('resolveTarget', () => {
     expect(result).toEqual({ id: 'n6', title: 'Meeting' });
   });
 
+  it('resolves by title when basename differs', () => {
+    // n4 has file_path 'Notes/café.md' but title 'Café Notes'
+    // 'Café Notes' doesn't match any basename, but matches the title
+    const result = resolveTarget(db, 'Café Notes');
+    expect(result).toEqual({ id: 'n4', title: 'Café Notes' });
+  });
+
   it('returns null for unresolvable target', () => {
     const result = resolveTarget(db, 'Nonexistent Note');
     expect(result).toBeNull();

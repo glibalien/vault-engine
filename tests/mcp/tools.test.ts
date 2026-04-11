@@ -270,6 +270,17 @@ describe('query-nodes', () => {
     expect(result.nodes[0].id).toBe('n1');
   });
 
+  it('filters by incoming reference', async () => {
+    const handler = getToolHandler(registerQueryNodes);
+    // n1 has a wiki-link to 'Quick Note', which is n2's title.
+    // Incoming to 'Quick Note' should return n1 (the source of the link).
+    const result = parseResult(await handler({
+      references: { target: 'Quick Note', direction: 'incoming' },
+    }) as any) as any;
+    expect(result.total).toBe(1);
+    expect(result.nodes[0].id).toBe('n1');
+  });
+
   it('enforces max limit of 200', async () => {
     const handler = getToolHandler(registerQueryNodes);
     // limit > 200 should be clamped by zod validation

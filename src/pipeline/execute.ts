@@ -196,9 +196,10 @@ export function executeMutation(
     const fileContent = renderNode(renderInput);
     const renderedHash = sha256(fileContent);
 
-    // No-op write rule: if hash matches on-disk file, rollback
+    // No-op write rule: if hash matches on-disk file AND node exists in DB, rollback
+    // For new nodes (node_id is null), always commit — the DB needs the node even if the file is canonical
     const existingContent = readFileOrNull(absPath);
-    if (existingContent !== null && sha256(existingContent) === renderedHash) {
+    if (mutation.node_id !== null && existingContent !== null && sha256(existingContent) === renderedHash) {
       // Complete no-op: no file write, no DB changes, no edits log
       return {
         node_id: mutation.node_id ?? '',

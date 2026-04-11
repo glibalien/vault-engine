@@ -97,9 +97,9 @@ describe('list-types', () => {
     const result = parseResult(await handler({}) as any) as any;
     expect(result).toEqual(
       expect.arrayContaining([
-        { type: 'note', count: 2 },
-        { type: 'meeting', count: 1 },
-        { type: 'task', count: 1 },
+        { type: 'note', count: 2, has_schema: false, claim_count: null },
+        { type: 'meeting', count: 1, has_schema: false, claim_count: null },
+        { type: 'task', count: 1, has_schema: false, claim_count: null },
       ])
     );
   });
@@ -131,12 +131,34 @@ describe('describe-schema', () => {
       'INSERT INTO schemas (name, display_name, icon, filename_template, field_claims, metadata) VALUES (?, ?, ?, ?, ?, ?)'
     ).run('meeting', 'Meeting', '📅', 'meetings/{title}.md', '["date","attendees"]', '{"auto_create":true}');
 
+    // Seed global fields and claims for the enriched handler
+    db.prepare(
+      'INSERT INTO global_fields (name, field_type) VALUES (?, ?)'
+    ).run('date', 'date');
+    db.prepare(
+      'INSERT INTO global_fields (name, field_type) VALUES (?, ?)'
+    ).run('attendees', 'list');
+    db.prepare(
+      'INSERT INTO schema_field_claims (schema_name, field, sort_order) VALUES (?, ?, ?)'
+    ).run('meeting', 'date', 1);
+    db.prepare(
+      'INSERT INTO schema_field_claims (schema_name, field, sort_order) VALUES (?, ?, ?)'
+    ).run('meeting', 'attendees', 2);
+
     const handler = getToolHandler(registerDescribeSchema);
     const result = parseResult(await handler({ name: 'meeting' }) as any) as any;
     expect(result.name).toBe('meeting');
     expect(result.display_name).toBe('Meeting');
-    expect(result.field_claims).toEqual(['date', 'attendees']);
+    expect(result.field_claims).toHaveLength(2);
+    expect(result.field_claims[0].field).toBe('date');
+    expect(result.field_claims[1].field).toBe('attendees');
     expect(result.metadata).toEqual({ auto_create: true });
+    expect(result.node_count).toBe(0);
+    expect(result.field_coverage).toEqual({
+      date: { have_value: 0, total: 0 },
+      attendees: { have_value: 0, total: 0 },
+    });
+    expect(result.orphan_field_names).toEqual([]);
   });
 });
 

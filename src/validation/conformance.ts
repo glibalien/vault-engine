@@ -16,8 +16,8 @@ export function getNodeConformance(
   const types_without_schemas: string[] = [];
 
   // Step 1: classify each type by schema presence
-  const schemaExistsStmt = db.prepare<[string], { exists: number }>(
-    'SELECT 1 AS exists FROM schemas WHERE name = ?',
+  const schemaExistsStmt = db.prepare<[string], { found: number }>(
+    'SELECT 1 AS found FROM schemas WHERE name = ?',
   );
 
   for (const type of types) {

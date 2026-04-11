@@ -4,6 +4,7 @@ import { z } from 'zod';
 import { basename } from 'node:path';
 import { toolResult, toolErrorResult } from './errors.js';
 import { resolveTarget } from '../../resolver/resolve.js';
+import { getNodeConformance } from '../../validation/conformance.js';
 
 const paramsShape = {
   node_id: z.string().optional(),
@@ -173,6 +174,7 @@ export function registerGetNode(server: McpServer, db: Database.Database): void 
           file_mtime: node.file_mtime,
           indexed_at: node.indexed_at,
         },
+        conformance: getNodeConformance(db, node.id, types),
       });
     },
   );

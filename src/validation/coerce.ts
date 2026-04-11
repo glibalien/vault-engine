@@ -182,11 +182,11 @@ function stringToReference(value: string): CoercionResult {
 
 // ── list coercion ───────────────────────────────────────────────────
 
-function coerceList(value: unknown, itemType?: FieldType): CoercionResult {
+function coerceList(value: unknown, itemType?: FieldType, itemOptions?: CoercionOptions): CoercionResult {
   if (!Array.isArray(value)) {
     // single value → list: try wrapping
     if (itemType) {
-      const elementResult = coerceValue(value, itemType);
+      const elementResult = coerceValue(value, itemType, itemOptions);
       if (elementResult.ok) {
         return success([elementResult.value], true, 'SINGLE_TO_LIST');
       }
@@ -207,7 +207,7 @@ function coerceList(value: unknown, itemType?: FieldType): CoercionResult {
   let anyChanged = false;
 
   for (let i = 0; i < value.length; i++) {
-    const r = coerceValue(value[i], itemType);
+    const r = coerceValue(value[i], itemType, itemOptions);
     if (r.ok) {
       coerced.push(r.value);
       if (r.changed) anyChanged = true;
@@ -244,7 +244,7 @@ export function coerceValue(
 
   // ── list ──
   if (targetType === 'list') {
-    return coerceList(value, options?.list_item_type);
+    return coerceList(value, options?.list_item_type, options);
   }
 
   // ── enum ──

@@ -296,6 +296,101 @@ describe('list element coercion', () => {
   });
 });
 
+// ── list<enum> coercion ────────────────────────────────────────────
+
+describe('list<enum> coercion', () => {
+  const opts = { list_item_type: 'enum' as const, enum_values: ['work', 'personal'] };
+
+  it('valid values pass through', () => {
+    expectSuccess(coerceValue(['work'], 'list', opts), ['work'], false);
+  });
+
+  it('multiple valid values pass through', () => {
+    expectSuccess(coerceValue(['work', 'personal'], 'list', opts), ['work', 'personal'], false);
+  });
+
+  it('case-insensitive coercion on elements', () => {
+    const result = coerceValue(['WORK', 'Personal'], 'list', opts);
+    expect(result.ok).toBe(true);
+    if (result.ok) {
+      expect(result.value).toEqual(['work', 'personal']);
+      expect(result.changed).toBe(true);
+      expect(result.code).toBe('LIST_ELEMENT_COERCION');
+    }
+  });
+
+  it('invalid element reports enum error, not "No enum_values provided"', () => {
+    const result = expectFailure(coerceValue(['foo'], 'list', opts));
+    expect(result.element_errors).toBeDefined();
+    expect(result.element_errors!.length).toBe(1);
+    expect(result.element_errors![0].index).toBe(0);
+    expect(result.element_errors![0].reason).not.toContain('No enum_values provided');
+    expect(result.element_errors![0].reason).toContain('not a valid enum value');
+  });
+
+  it('scalar string coerces to single-element list then validates enum', () => {
+    const result = coerceValue('work', 'list', opts);
+    expect(result.ok).toBe(true);
+    if (result.ok) {
+      expect(result.value).toEqual(['work']);
+      expect(result.changed).toBe(true);
+      expect(result.code).toBe('SINGLE_TO_LIST');
+    }
+  });
+
+  it('scalar string with case coercion wraps and normalizes', () => {
+    const result = coerceValue('PERSONAL', 'list', opts);
+    expect(result.ok).toBe(true);
+    if (result.ok) {
+      expect(result.value).toEqual(['personal']);
+      expect(result.changed).toBe(true);
+    }
+  });
+
+  it('scalar invalid enum rejects with meaningful error', () => {
+    const result = expectFailure(coerceValue('nope', 'list', opts));
+    expect(result.reason).toContain('Cannot wrap value into list');
+  });
+});
+
+// ── list<reference> coercion ───────────────────────────────────────
+
+describe('list<reference> coercion', () => {
+  const opts = { list_item_type: 'reference' as const };
+
+  it('valid references pass through', () => {
+    expectSuccess(coerceValue(['Alice', 'Bob'], 'list', opts), ['Alice', 'Bob'], false);
+  });
+
+  it('bracketed references are stripped', () => {
+    const result = coerceValue(['[[Alice]]', '[[Bob]]'], 'list', opts);
+    expect(result.ok).toBe(true);
+    if (result.ok) {
+      expect(result.value).toEqual(['Alice', 'Bob']);
+      expect(result.changed).toBe(true);
+    }
+  });
+
+  it('scalar reference coerces to single-element list', () => {
+    const result = coerceValue('Alice', 'list', opts);
+    expect(result.ok).toBe(true);
+    if (result.ok) {
+      expect(result.value).toEqual(['Alice']);
+      expect(result.changed).toBe(true);
+      expect(result.code).toBe('SINGLE_TO_LIST');
+    }
+  });
+
+  it('scalar bracketed reference coerces and strips', () => {
+    const result = coerceValue('[[Alice]]', 'list', opts);
+    expect(result.ok).toBe(true);
+    if (result.ok) {
+      expect(result.value).toEqual(['Alice']);
+      expect(result.changed).toBe(true);
+    }
+  });
+});
+
 // ── unsupported coercions ───────────────────────────────────────────
 
 describe('unsupported coercions', () => {

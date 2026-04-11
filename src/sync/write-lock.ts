@@ -13,4 +13,13 @@ export class WriteLockManager {
       this.locks.delete(filePath);
     }
   }
+
+  withLockSync<T>(filePath: string, fn: () => T): T {
+    this.locks.add(filePath);
+    try {
+      return fn();
+    } finally {
+      this.locks.delete(filePath);
+    }
+  }
 }

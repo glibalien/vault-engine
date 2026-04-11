@@ -156,10 +156,15 @@ function toEnum(value: unknown, enumValues: string[]): CoercionResult {
 
 function stringToReference(value: string): CoercionResult {
   const trimmed = value.trim();
+  // DB stores canonical target without [[brackets]].
+  // The renderer re-wraps based on field type. Strip brackets if present.
   if (trimmed.startsWith('[[') && trimmed.endsWith(']]')) {
-    return success(trimmed, false);
+    // Extract target, handling aliases: [[target|alias]] → target
+    const inner = trimmed.slice(2, -2);
+    const target = inner.includes('|') ? inner.split('|')[0] : inner;
+    return success(target, true);
   }
-  return success(`[[${trimmed}]]`, true);
+  return success(trimmed, false);
 }
 
 // ── list coercion ───────────────────────────────────────────────────

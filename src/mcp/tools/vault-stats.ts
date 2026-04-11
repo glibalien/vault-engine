@@ -23,7 +23,12 @@ export function registerVaultStats(server: McpServer, db: Database.Database): vo
       ).get() as { count: number }).count;
 
       const orphanCount = (db.prepare(
-        "SELECT COUNT(*) as count FROM node_fields WHERE source = 'orphan'"
+        `SELECT COUNT(*) as count FROM node_fields nf
+         WHERE NOT EXISTS (
+           SELECT 1 FROM node_types nt
+           JOIN schema_field_claims sfc ON sfc.schema_name = nt.schema_type AND sfc.field = nf.field_name
+           WHERE nt.node_id = nf.node_id
+         )`
       ).get() as { count: number }).count;
 
       const schemaCount = (db.prepare(

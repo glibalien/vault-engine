@@ -167,3 +167,32 @@ describe('validate-node', () => {
     expect(priorityCoerced.value).toBe(5);
   });
 });
+
+describe('vault-stats orphan_count lifecycle', () => {
+  it('reflects query-time orphan classification through schema create/delete', async () => {
+    const statsHandler = getToolHandler('vault-stats');
+
+    // seedData created: 1 node (n1) with 3 fields (status, priority, custom_field)
+    // and a 'task' schema claiming status + priority + due_date.
+    // So: status and priority are claimed (2), custom_field is orphan (1).
+    const stats1 = parseResult(await statsHandler({}) as any) as any;
+    expect(stats1.orphan_count).toBe(1); // only custom_field
+
+    // Delete the schema — all 3 fields become orphans
+    const deleteHandler = getToolHandler('delete-schema');
+    await deleteHandler({ name: 'task' });
+
+    const stats2 = parseResult(await statsHandler({}) as any) as any;
+    expect(stats2.orphan_count).toBe(3); // all fields are orphans now
+
+    // Re-create the schema — orphan count drops back
+    createSchemaDefinition(db, {
+      name: 'task',
+      display_name: 'Task',
+      field_claims: [{ field: 'status' }, { field: 'priority' }, { field: 'due_date' }],
+    });
+
+    const stats3 = parseResult(await statsHandler({}) as any) as any;
+    expect(stats3.orphan_count).toBe(1); // custom_field is orphan again
+  });
+});

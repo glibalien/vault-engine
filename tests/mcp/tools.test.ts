@@ -74,7 +74,8 @@ describe('vault-stats', () => {
     );
     expect(result.field_count).toBe(3);
     expect(result.relationship_count).toBe(1);
-    expect(result.orphan_count).toBe(1);
+    // No schemas exist, so all 3 field values are orphans (query-time join, Principle 2)
+    expect(result.orphan_count).toBe(3);
     expect(result.schema_count).toBe(0);
   });
 

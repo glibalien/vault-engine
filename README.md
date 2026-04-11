@@ -4,7 +4,7 @@ Database-authoritative knowledge graph engine for markdown vaults, with MCP tool
 
 ## Charter
 
-All design decisions flow from the charter: [`~/Documents/archbrain/Notes/Vault Engine - Charter.md`](../Documents/archbrain/Notes/Vault%20Engine%20-%20Charter.md)
+All design decisions flow from the charter: `Vault Engine - Charter.md` (in the archbrain vault).
 
 ## Quick Start
 

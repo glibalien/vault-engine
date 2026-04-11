@@ -62,6 +62,7 @@ export function createSchema(db: Database.Database): void {
       value_number REAL,
       value_date TEXT,
       value_json TEXT,
+      value_raw_text TEXT,
       source TEXT NOT NULL DEFAULT 'frontmatter',
       PRIMARY KEY (node_id, field_name)
     );
@@ -96,6 +97,12 @@ export function createSchema(db: Database.Database): void {
       node_id TEXT PRIMARY KEY REFERENCES nodes(id) ON DELETE CASCADE,
       content_text TEXT,
       embedded_at INTEGER
+    );
+
+    CREATE TABLE IF NOT EXISTS schema_file_hashes (
+      file_path TEXT PRIMARY KEY,
+      content_hash TEXT NOT NULL,
+      rendered_at INTEGER NOT NULL
     );
 
     CREATE VIRTUAL TABLE IF NOT EXISTS nodes_fts USING fts5(

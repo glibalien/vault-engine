@@ -2,10 +2,23 @@
 
 import type { FieldType } from './types.js';
 
+export type CoercionCode =
+  | 'STRING_TO_NUMBER'
+  | 'STRING_TO_DATE'
+  | 'STRING_TO_BOOLEAN'
+  | 'STRING_TO_ENUM'
+  | 'STRING_TO_REFERENCE'
+  | 'NUMBER_TO_STRING'
+  | 'DATE_TO_STRING'
+  | 'BOOLEAN_TO_STRING'
+  | 'SINGLE_TO_LIST'
+  | 'LIST_ELEMENT_COERCION';
+
 export interface CoercionSuccess {
   ok: true;
   value: unknown;
   changed: boolean;
+  code?: CoercionCode;
 }
 
 export interface CoercionFailure {
@@ -24,8 +37,8 @@ interface CoercionOptions {
   list_item_type?: FieldType;
 }
 
-function success(value: unknown, changed: boolean): CoercionSuccess {
-  return { ok: true, value, changed };
+function success(value: unknown, changed: boolean, code?: CoercionCode): CoercionSuccess {
+  return code ? { ok: true, value, changed, code } : { ok: true, value, changed };
 }
 
 function failure(
@@ -55,7 +68,7 @@ function stringToNumber(value: string): CoercionResult {
   if (Number.isNaN(n) || !Number.isFinite(n)) {
     return failure(`Cannot convert "${value}" to number`, 'string', 'number');
   }
-  return success(n, true);
+  return success(n, true, 'STRING_TO_NUMBER');
 }
 
 // ── string → date ────────────────────────────────────────────────────
@@ -92,15 +105,15 @@ function stringToDate(value: string): CoercionResult {
     return failure(`Impossible date (day ${day}): "${value}"`, 'string', 'date');
   }
 
-  return success(trimmed, true);
+  return success(trimmed, true, 'STRING_TO_DATE');
 }
 
 // ── string → boolean ────────────────────────────────────────────────
 
 function stringToBoolean(value: string): CoercionResult {
   const lower = value.trim().toLowerCase();
-  if (lower === 'true' || lower === 'yes') return success(true, true);
-  if (lower === 'false' || lower === 'no') return success(false, true);
+  if (lower === 'true' || lower === 'yes') return success(true, true, 'STRING_TO_BOOLEAN');
+  if (lower === 'false' || lower === 'no') return success(false, true, 'STRING_TO_BOOLEAN');
   return failure(
     `Cannot convert "${value}" to boolean. Accepted: true/false/yes/no`,
     'string',
@@ -140,8 +153,8 @@ function toEnum(value: unknown, enumValues: string[]): CoercionResult {
   const trimmed = str.trim();
 
   for (const ev of enumValues) {
-    if (ev === trimmed) return success(ev, typeof value !== 'string' || str !== trimmed);
-    if (ev.toLowerCase() === trimmed.toLowerCase()) return success(ev, true);
+    if (ev === trimmed) return success(ev, typeof value !== 'string' || str !== trimmed, (typeof value !== 'string' || str !== trimmed) ? 'STRING_TO_ENUM' : undefined);
+    if (ev.toLowerCase() === trimmed.toLowerCase()) return success(ev, true, 'STRING_TO_ENUM');
   }
 
   return failure(
@@ -156,10 +169,15 @@ function toEnum(value: unknown, enumValues: string[]): CoercionResult {
 
 function stringToReference(value: string): CoercionResult {
   const trimmed = value.trim();
+  // DB stores canonical target without [[brackets]].
+  // The renderer re-wraps based on field type. Strip brackets if present.
   if (trimmed.startsWith('[[') && trimmed.endsWith(']]')) {
-    return success(trimmed, false);
+    // Extract target, handling aliases: [[target|alias]] → target
+    const inner = trimmed.slice(2, -2);
+    const target = inner.includes('|') ? inner.split('|')[0] : inner;
+    return success(target, true, 'STRING_TO_REFERENCE');
   }
-  return success(`[[${trimmed}]]`, true);
+  return success(trimmed, false);
 }
 
 // ── list coercion ───────────────────────────────────────────────────
@@ -170,7 +188,7 @@ function coerceList(value: unknown, itemType?: FieldType): CoercionResult {
     if (itemType) {
       const elementResult = coerceValue(value, itemType);
       if (elementResult.ok) {
-        return success([elementResult.value], true);
+        return success([elementResult.value], true, 'SINGLE_TO_LIST');
       }
       return failure(
         `Cannot wrap value into list: ${elementResult.reason}`,
@@ -207,7 +225,7 @@ function coerceList(value: unknown, itemType?: FieldType): CoercionResult {
     );
   }
 
-  return success(coerced, anyChanged);
+  return success(coerced, anyChanged, anyChanged ? 'LIST_ELEMENT_COERCION' : undefined);
 }
 
 // ── main function ───────────────────────────────────────────────────
@@ -262,17 +280,17 @@ export function coerceValue(
 
   // ── number → string ──
   if (typeof value === 'number' && targetType === 'string') {
-    return success(String(value), true);
+    return success(String(value), true, 'NUMBER_TO_STRING');
   }
 
   // ── Date object → string ──
   if (value instanceof Date && targetType === 'string') {
-    return success(value.toISOString(), true);
+    return success(value.toISOString(), true, 'DATE_TO_STRING');
   }
 
   // ── boolean → string ──
   if (typeof value === 'boolean' && targetType === 'string') {
-    return success(String(value), true);
+    return success(String(value), true, 'BOOLEAN_TO_STRING');
   }
 
   return failure(

@@ -3,6 +3,7 @@ import type Database from 'better-sqlite3';
 import { z } from 'zod';
 import { toolResult, toolErrorResult } from './errors.js';
 import { createSchemaDefinition } from '../../schema/crud.js';
+import { renderSchemaFile } from '../../schema/render.js';
 
 const fieldClaimSchema = z.object({
   field: z.string(),
@@ -13,7 +14,7 @@ const fieldClaimSchema = z.object({
   default_value: z.unknown().optional(),
 });
 
-export function registerCreateSchema(server: McpServer, db: Database.Database): void {
+export function registerCreateSchema(server: McpServer, db: Database.Database, ctx?: { vaultPath?: string }): void {
   server.tool(
     'create-schema',
     'Creates a new schema definition with field claims. Referenced global fields must already exist.',
@@ -26,8 +27,14 @@ export function registerCreateSchema(server: McpServer, db: Database.Database): 
       metadata: z.unknown().optional().describe('Arbitrary metadata'),
     },
     async (params) => {
+      // Reserved prefix check
+      if (params.name.startsWith('_')) {
+        return toolErrorResult('INVALID_PARAMS', "Schema names starting with '_' are reserved for engine-managed files.");
+      }
+
       try {
         const result = createSchemaDefinition(db, params);
+        if (ctx?.vaultPath) renderSchemaFile(db, ctx.vaultPath, params.name);
         return toolResult(result);
       } catch (err) {
         return toolErrorResult('INVALID_PARAMS', err instanceof Error ? err.message : String(err));

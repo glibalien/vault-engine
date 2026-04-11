@@ -18,8 +18,15 @@ import { registerDeleteSchema } from './delete-schema.js';
 import { registerValidateNode } from './validate-node.js';
 import { registerInferFieldType } from './infer-field-type.js';
 import { registerListFieldValues } from './list-field-values.js';
+import { registerCreateNode } from './create-node.js';
+import { registerUpdateNode } from './update-node.js';
+import { registerDeleteNode } from './delete-node.js';
+import { registerAddTypeToNode } from './add-type-to-node.js';
+import { registerRemoveTypeFromNode } from './remove-type-from-node.js';
+import { registerRenameNode } from './rename-node.js';
+import { registerBatchMutate } from './batch-mutate.js';
 
-export function registerAllTools(server: McpServer, db: Database.Database): void {
+export function registerAllTools(server: McpServer, db: Database.Database, ctx?: { writeLock?: import('../../sync/write-lock.js').WriteLockManager; vaultPath?: string }): void {
   registerVaultStats(server, db);
   registerListTypes(server, db);
   registerListSchemas(server, db);
@@ -28,14 +35,25 @@ export function registerAllTools(server: McpServer, db: Database.Database): void
   registerDescribeGlobalField(server, db);
   registerQueryNodes(server, db);
   registerGetNode(server, db);
-  registerCreateGlobalField(server, db);
-  registerUpdateGlobalField(server, db);
-  registerRenameGlobalField(server, db);
-  registerDeleteGlobalField(server, db);
-  registerCreateSchema(server, db);
-  registerUpdateSchema(server, db);
-  registerDeleteSchema(server, db);
+  registerCreateGlobalField(server, db, ctx);
+  registerUpdateGlobalField(server, db, ctx);
+  registerRenameGlobalField(server, db, ctx);
+  registerDeleteGlobalField(server, db, ctx);
+  registerCreateSchema(server, db, ctx);
+  registerUpdateSchema(server, db, ctx);
+  registerDeleteSchema(server, db, ctx);
   registerValidateNode(server, db);
   registerInferFieldType(server, db);
   registerListFieldValues(server, db);
+
+  // Phase 3 mutation tools (require writeLock and vaultPath)
+  if (ctx?.writeLock && ctx?.vaultPath) {
+    registerCreateNode(server, db, ctx.writeLock, ctx.vaultPath);
+    registerUpdateNode(server, db, ctx.writeLock, ctx.vaultPath);
+    registerDeleteNode(server, db, ctx.writeLock, ctx.vaultPath);
+    registerAddTypeToNode(server, db, ctx.writeLock, ctx.vaultPath);
+    registerRemoveTypeFromNode(server, db, ctx.writeLock, ctx.vaultPath);
+    registerRenameNode(server, db, ctx.writeLock, ctx.vaultPath);
+    registerBatchMutate(server, db, ctx.writeLock, ctx.vaultPath);
+  }
 }

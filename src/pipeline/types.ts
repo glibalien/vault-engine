@@ -1,0 +1,36 @@
+// src/pipeline/types.ts
+//
+// Types for the write pipeline (Section 5 of Phase 3 spec).
+
+import type { ValidationResult, ValidationIssue } from '../validation/types.js';
+
+export interface ProposedMutation {
+  source: 'tool' | 'watcher';
+  node_id: string | null;           // null for create-node
+  file_path: string;                 // vault-relative path
+  title: string;
+  types: string[];
+  fields: Record<string, unknown>;   // proposed field values
+  body: string;
+  raw_field_texts?: Record<string, string>;  // watcher path: pre-stripped text for wiki-link fields
+}
+
+export interface PipelineResult {
+  node_id: string;
+  file_path: string;
+  validation: ValidationResult;
+  rendered_hash: string;
+  edits_logged: number;               // count of edits log entries created
+  file_written: boolean;              // false if hash matched (no-op)
+}
+
+export class PipelineError extends Error {
+  constructor(
+    public readonly code: string,
+    message: string,
+    public readonly validation?: ValidationResult,
+  ) {
+    super(message);
+    this.name = 'PipelineError';
+  }
+}

@@ -271,11 +271,11 @@ describe('updateGlobalField', () => {
     expect(n1.value_number).toBe(42);
     expect(n1.value_text).toBeNull();
 
-    // n2: uncoercible, left as-is
+    // n2: uncoercible, removed from node_fields
     const n2 = db.prepare(
       `SELECT value_text FROM node_fields WHERE node_id = 'n2' AND field_name = 'count'`,
-    ).get() as { value_text: string | null };
-    expect(n2.value_text).toBe('not-a-number');
+    ).get();
+    expect(n2).toBeUndefined();
   });
 
   it('rejects clearing enum_values on an enum field', () => {

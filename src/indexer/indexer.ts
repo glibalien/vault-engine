@@ -2,10 +2,14 @@ import { readdirSync, readFileSync, statSync } from 'node:fs';
 import { join, relative, sep } from 'node:path';
 import type Database from 'better-sqlite3';
 import { nanoid } from 'nanoid';
+import { parse as parseYaml } from 'yaml';
 import { parseMarkdown } from '../parser/parse.js';
+import { splitFrontmatter } from '../parser/frontmatter.js';
 import type { WikiLink, YamlValue } from '../parser/types.js';
 import { sha256 } from './hash.js';
 import { shouldIgnore } from './ignore.js';
+
+const WIKILINK_RE = /\[\[([^\]|]+)(?:\|([^\]]+))?\]\]/;
 
 const BATCH_SIZE = 100;
 
@@ -50,8 +54,8 @@ function prepareStatements(db: Database.Database): Statements {
     insertType: db.prepare('INSERT INTO node_types (node_id, schema_type) VALUES (?, ?)'),
     deleteFields: db.prepare('DELETE FROM node_fields WHERE node_id = ?'),
     insertField: db.prepare(`
-      INSERT INTO node_fields (node_id, field_name, value_text, value_number, value_date, value_json, source)
-      VALUES (@node_id, @field_name, @value_text, @value_number, @value_date, @value_json, @source)
+      INSERT INTO node_fields (node_id, field_name, value_text, value_number, value_date, value_json, value_raw_text, source)
+      VALUES (@node_id, @field_name, @value_text, @value_number, @value_date, @value_json, @value_raw_text, @source)
     `),
     deleteRelationships: db.prepare('DELETE FROM relationships WHERE source_id = ?'),
     insertRelationship: db.prepare(
@@ -94,6 +98,39 @@ function classifyValue(v: YamlValue): FieldColumns {
 
 // ── Core index logic for a single file ─────────────────────────────
 
+/**
+ * Extract raw field texts (pre-wiki-link-stripping) from the YAML frontmatter.
+ * Returns a map of field names to their raw string values for fields containing [[...]].
+ * Populated unconditionally regardless of claim status (Phase 2 Principle 2).
+ */
+function extractRawFieldTexts(raw: string): Record<string, string> {
+  const { yaml: yamlStr } = splitFrontmatter(raw);
+  if (!yamlStr) return {};
+
+  let rawParsed: unknown;
+  try {
+    rawParsed = parseYaml(yamlStr);
+  } catch {
+    return {};
+  }
+  if (rawParsed === null || typeof rawParsed !== 'object' || Array.isArray(rawParsed)) return {};
+
+  const result: Record<string, string> = {};
+  for (const [key, rawValue] of Object.entries(rawParsed as Record<string, unknown>)) {
+    if (key === 'title' || key === 'types') continue;
+    if (typeof rawValue === 'string' && WIKILINK_RE.test(rawValue)) {
+      result[key] = rawValue;
+    }
+    if (Array.isArray(rawValue)) {
+      const hasLinks = rawValue.some(v => typeof v === 'string' && WIKILINK_RE.test(String(v)));
+      if (hasLinks) {
+        result[key] = JSON.stringify(rawValue);
+      }
+    }
+  }
+  return result;
+}
+
 function doIndex(
   stmts: Statements,
   raw: string,
@@ -104,6 +141,7 @@ function doIndex(
   existingId: string | null,
 ): string {
   const parsed = parseMarkdown(raw, filePath);
+  const rawFieldTexts = extractRawFieldTexts(raw);
   const nodeId = existingId ?? nanoid();
   const now = Date.now();
 
@@ -147,6 +185,7 @@ function doIndex(
       node_id: nodeId,
       field_name: fieldName,
       ...cols,
+      value_raw_text: rawFieldTexts[fieldName] ?? null,
       source: 'frontmatter',
     });
   }

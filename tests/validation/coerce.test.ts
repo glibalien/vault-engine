@@ -201,16 +201,16 @@ describe('string → enum', () => {
 // ── string → reference ──────────────────────────────────────────────
 
 describe('string → reference', () => {
-  it('bare value wraps with [[]]', () => {
-    expectSuccess(coerceValue('Alice', 'reference'), '[[Alice]]', true);
+  it('bare value passes through as canonical target', () => {
+    expectSuccess(coerceValue('Alice', 'reference'), 'Alice', false);
   });
 
-  it('already wrapped passes through', () => {
-    expectSuccess(coerceValue('[[Alice]]', 'reference'), '[[Alice]]', false);
+  it('wrapped value strips [[brackets]]', () => {
+    expectSuccess(coerceValue('[[Alice]]', 'reference'), 'Alice', true);
   });
 
-  it('alias preserved', () => {
-    expectSuccess(coerceValue('[[Alice|nickname]]', 'reference'), '[[Alice|nickname]]', false);
+  it('alias stripped: [[target|alias]] → target', () => {
+    expectSuccess(coerceValue('[[Alice|nickname]]', 'reference'), 'Alice', true);
   });
 });
 

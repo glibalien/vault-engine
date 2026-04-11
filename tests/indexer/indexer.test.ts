@@ -186,6 +186,40 @@ describe('fullIndex', () => {
     expect(results.c).toBeGreaterThan(0);
   });
 
+  it('populates value_raw_text for fields containing wiki-links', () => {
+    fullIndex(vaultPath, db);
+    const node = db.prepare("SELECT id FROM nodes WHERE file_path = 'frontmatter-wikilinks.md'").get() as { id: string };
+
+    // project: "[[Vault Engine]]" — single string with wiki-link
+    const projectField = db.prepare(
+      'SELECT value_text, value_raw_text FROM node_fields WHERE node_id = ? AND field_name = ?'
+    ).get(node.id, 'project') as { value_text: string; value_raw_text: string | null };
+    expect(projectField.value_text).toBe('Vault Engine'); // stripped
+    expect(projectField.value_raw_text).toBe('[[Vault Engine]]');
+
+    // people: ["[[Alice]]", "[[Bob]]"] — array with wiki-links
+    const peopleField = db.prepare(
+      'SELECT value_json, value_raw_text FROM node_fields WHERE node_id = ? AND field_name = ?'
+    ).get(node.id, 'people') as { value_json: string; value_raw_text: string | null };
+    expect(JSON.parse(peopleField.value_json)).toEqual(['Alice', 'Bob']); // stripped
+    expect(peopleField.value_raw_text).not.toBeNull();
+    const rawPeople = JSON.parse(peopleField.value_raw_text!);
+    expect(rawPeople).toEqual(['[[Alice]]', '[[Bob]]']);
+  });
+
+  it('value_raw_text is null for fields without wiki-links', () => {
+    fullIndex(vaultPath, db);
+    const node = db.prepare("SELECT id FROM nodes WHERE file_path = 'multi-type.md'").get() as { id: string };
+
+    // status should be a plain string without wiki-links
+    const field = db.prepare(
+      'SELECT value_raw_text FROM node_fields WHERE node_id = ? AND field_name = ?'
+    ).get(node.id, 'status') as { value_raw_text: string | null } | undefined;
+    if (field) {
+      expect(field.value_raw_text).toBeNull();
+    }
+  });
+
   it('handles malformed YAML without crashing', () => {
     fullIndex(vaultPath, db);
     const node = db.prepare("SELECT title FROM nodes WHERE file_path = 'malformed-yaml.md'").get() as { title: string };

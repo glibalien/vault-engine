@@ -112,11 +112,11 @@ describe('full lifecycle end-to-end', () => {
     expect(n1Priority.value_number).toBe(5);
     expect(n1Priority.value_text).toBeNull();
 
-    // n2's priority should be left as-is (uncoercible 'high' stays in value_text)
+    // n2's priority should be removed (uncoercible 'high' can't satisfy number type)
     const n2Priority = db.prepare(
-      'SELECT value_number, value_text FROM node_fields WHERE node_id = ? AND field_name = ?'
-    ).get('n2', 'priority') as { value_number: number | null; value_text: string | null };
-    expect(n2Priority.value_text).toBe('high');
+      'SELECT * FROM node_fields WHERE node_id = ? AND field_name = ?'
+    ).get('n2', 'priority');
+    expect(n2Priority).toBeUndefined();
 
     // ── Step 8: deleteSchemaDefinition ─────────────────────────────────
     const deleteResult = deleteSchemaDefinition(db, 'task');

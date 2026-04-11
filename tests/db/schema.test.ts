@@ -2,7 +2,7 @@ import { describe, it, expect } from 'vitest';
 import Database from 'better-sqlite3';
 import { createTestDb } from '../helpers/db.js';
 import { createSchema } from '../../src/db/schema.js';
-import { upgradeToPhase2 } from '../../src/db/migrate.js';
+import { upgradeToPhase2, upgradeToPhase3 } from '../../src/db/migrate.js';
 import { getNodeConformance } from '../../src/validation/conformance.js';
 
 describe('createSchema', () => {
@@ -123,6 +123,27 @@ describe('createSchema', () => {
     expect(names).toContain('required');
     expect(names).toContain('per_type_overrides_allowed');
     expect(names).toContain('list_item_type');
+  });
+
+  it('node_fields has value_raw_text column', () => {
+    const db = createTestDb();
+    const columns = db.prepare('PRAGMA table_info(node_fields)').all() as { name: string }[];
+    const names = columns.map(c => c.name);
+    expect(names).toContain('value_raw_text');
+  });
+
+  it('creates schema_file_hashes table', () => {
+    const db = createTestDb();
+    const tables = db.prepare(
+      "SELECT name FROM sqlite_master WHERE type='table' AND name='schema_file_hashes'"
+    ).all();
+    expect(tables).toHaveLength(1);
+
+    const columns = db.prepare('PRAGMA table_info(schema_file_hashes)').all() as { name: string }[];
+    const names = columns.map(c => c.name);
+    expect(names).toContain('file_path');
+    expect(names).toContain('content_hash');
+    expect(names).toContain('rendered_at');
   });
 
   it('cascades schema deletion to schema_field_claims', () => {
@@ -269,5 +290,69 @@ describe('upgradeToPhase2', () => {
     expect(result.types_without_schemas).toContain('note');
     expect(result.orphan_fields).toContain('project');
     expect(result.claimed_fields).toHaveLength(0);
+  });
+});
+
+describe('upgradeToPhase3', () => {
+  it('runs without error on a fresh Phase 3 DB', () => {
+    const db = createTestDb();
+    expect(() => upgradeToPhase3(db)).not.toThrow();
+  });
+
+  it('is idempotent — running twice does not error', () => {
+    const db = createTestDb();
+    upgradeToPhase3(db);
+    expect(() => upgradeToPhase3(db)).not.toThrow();
+  });
+
+  it('upgrades a Phase 2 DB (missing value_raw_text and schema_file_hashes) to Phase 3', () => {
+    // Simulate Phase 2: node_fields without value_raw_text, no schema_file_hashes
+    const db = new Database(':memory:');
+    db.pragma('journal_mode = WAL');
+    db.pragma('foreign_keys = ON');
+
+    // db.exec is the better-sqlite3 method for running multi-statement SQL,
+    // not child_process.exec — this is safe, no shell involved.
+    const runSql = db.exec.bind(db);
+    runSql(`
+      CREATE TABLE nodes (
+        id TEXT PRIMARY KEY,
+        file_path TEXT UNIQUE NOT NULL,
+        title TEXT,
+        body TEXT,
+        content_hash TEXT,
+        file_mtime INTEGER,
+        indexed_at INTEGER
+      );
+      CREATE TABLE node_fields (
+        node_id TEXT NOT NULL REFERENCES nodes(id) ON DELETE CASCADE,
+        field_name TEXT NOT NULL,
+        value_text TEXT,
+        value_number REAL,
+        value_date TEXT,
+        value_json TEXT,
+        source TEXT NOT NULL DEFAULT 'frontmatter',
+        PRIMARY KEY (node_id, field_name)
+      );
+    `);
+
+    // Insert a row before migration to verify existing data is preserved
+    db.prepare("INSERT INTO nodes (id, file_path, title) VALUES (?, ?, ?)").run('n1', 'test.md', 'Test');
+    db.prepare("INSERT INTO node_fields (node_id, field_name, value_text, source) VALUES (?, ?, ?, ?)").run('n1', 'project', 'VE', 'frontmatter');
+
+    upgradeToPhase3(db);
+
+    // value_raw_text column exists and defaults to NULL
+    const columns = db.prepare('PRAGMA table_info(node_fields)').all() as { name: string }[];
+    expect(columns.map(c => c.name)).toContain('value_raw_text');
+
+    const row = db.prepare("SELECT value_raw_text FROM node_fields WHERE node_id = 'n1'").get() as { value_raw_text: string | null };
+    expect(row.value_raw_text).toBeNull();
+
+    // schema_file_hashes table exists
+    const tables = db.prepare(
+      "SELECT name FROM sqlite_master WHERE type='table' AND name='schema_file_hashes'"
+    ).all();
+    expect(tables).toHaveLength(1);
   });
 });

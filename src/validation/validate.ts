@@ -104,6 +104,7 @@ export function validateProposedState(
       };
       if (result.changed) {
         entry.original = value;
+        if (result.code) entry.coercion_code = result.code;
       }
       coerced_state[fieldName] = entry;
     } else {
@@ -175,6 +176,7 @@ export function validateProposedState(
       };
       if (result.changed) {
         entry.original = value;
+        if (result.code) entry.coercion_code = result.code;
       }
       coerced_state[fieldName] = entry;
     } else {

@@ -268,6 +268,8 @@ The correct sequence: append the type, run the merge on the full new type set, u
 
 **Consequence:** During the broken-YAML window, the DB and file disagree. The DB has the pre-edit structured state; the file has broken YAML. This is acceptable — the disagreement is temporary (user will fix the YAML) and the DB's structured state is the correct one to preserve. The reconciler will not "fix" this because the file's mtime is newer but the content can't be parsed; it logs the same parse error.
 
+**File behavior:** The engine does NOT re-render the file during the broken-YAML window. Re-rendering would mean overwriting the user's in-progress edit with canonical state derived from the pre-edit DB, which is hostile to a user who is mid-edit. The file stays in the user's broken-YAML state until they save again with valid YAML, at which point the watcher processes normally. This is the same principle as Section 10's hash-check refusal for schema YAML — the engine doesn't destroy human edits without explicit user action.
+
 ## 25. Hash check is outside the mutex; in-pipeline check is inside
 
 **Clarification:** The watcher's pre-pipeline hash check (watcher.ts lines 64-75) runs OUTSIDE the mutex for performance — most events are rejected here without acquiring the mutex. The pipeline's no-op rule (Section 5, Stage 5) runs INSIDE the mutex and DB transaction. The pre-pipeline check is an optimization; the in-pipeline check is the correctness guarantee. Both are needed: the outer check avoids mutex contention for unchanged files; the inner check catches the race where a file changes between the outer check and the pipeline execution.

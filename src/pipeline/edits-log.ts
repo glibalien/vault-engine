@@ -37,7 +37,9 @@ export function buildDeviationEntries(
           field: cv.field,
           original_value: cv.original,
           coerced_value: cv.value,
-          coercions: [], // populated by caller if coercion details available
+          coercions: cv.coercion_code
+            ? [{ step: `${cv.original} → ${cv.value}`, code: cv.coercion_code }]
+            : [],
           node_types: nodeTypes,
         },
       });

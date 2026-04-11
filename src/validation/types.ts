@@ -64,6 +64,7 @@ export interface CoercedValue {
   original?: unknown;  // populated when changed: true and source: 'provided'
   source: 'provided' | 'defaulted' | 'orphan';
   changed: boolean;
+  coercion_code?: string;  // e.g. STRING_TO_NUMBER — populated when changed && source === 'provided'
 }
 
 export interface ValidationIssue {

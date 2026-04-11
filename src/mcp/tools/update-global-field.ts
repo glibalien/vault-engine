@@ -39,7 +39,10 @@ export function registerUpdateGlobalField(server: McpServer, db: Database.Databa
           }
           // If type change was confirmed, re-render affected nodes
           if (rest.confirm && rest.field_type && ctx.writeLock) {
-            const nodes_rerendered = rerenderNodesWithField(db, ctx.writeLock, ctx.vaultPath, name);
+            // Pass uncoercible node IDs so they get re-rendered even though
+            // their node_fields rows for this field were deleted
+            const uncoercibleIds = result.uncoercible?.map(u => u.node_id);
+            const nodes_rerendered = rerenderNodesWithField(db, ctx.writeLock, ctx.vaultPath, name, uncoercibleIds);
             return toolResult({ ...result, nodes_rerendered });
           }
         }

@@ -9,6 +9,8 @@ import { executeMutation } from '../../pipeline/execute.js';
 import { PipelineError } from '../../pipeline/types.js';
 import { populateDefaults } from '../../pipeline/populate-defaults.js';
 import { reconstructValue } from '../../pipeline/classify-value.js';
+import { writeEditsLogEntries } from '../../pipeline/edits-log.js';
+import type { EditsLogEntry } from '../../pipeline/edits-log.js';
 import type { WriteLockManager } from '../../sync/write-lock.js';
 
 const paramsShape = {
@@ -92,6 +94,24 @@ export function registerAddTypeToNode(
           fields: mergedFields,
           body: currentBody,
         });
+
+        // Log field-defaulted entries for defaults populated by add-type-to-node.
+        // The pipeline sees these as 'provided' since they're pre-merged, so we
+        // log them here with the correct source information.
+        if (populated.length > 0) {
+          const entries: EditsLogEntry[] = populated.map(p => ({
+            node_id: result.node_id,
+            event_type: 'field-defaulted',
+            details: {
+              source: 'tool' as const,
+              field: p.field,
+              default_value: p.default_value,
+              default_source: p.default_source,
+              node_types: newTypes,
+            },
+          }));
+          writeEditsLogEntries(db, entries);
+        }
 
         return toolResult({
           node_id: result.node_id,

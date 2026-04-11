@@ -293,9 +293,17 @@ export function rerenderNodesWithField(
   writeLock: WriteLockManager,
   vaultPath: string,
   fieldName: string,
+  additionalNodeIds?: string[],
 ): number {
-  const nodeIds = (db.prepare('SELECT DISTINCT node_id FROM node_fields WHERE field_name = ?')
+  const fromField = (db.prepare('SELECT DISTINCT node_id FROM node_fields WHERE field_name = ?')
     .all(fieldName) as Array<{ node_id: string }>).map(r => r.node_id);
+
+  // Merge with additional IDs (e.g. nodes whose field was deleted during type change)
+  const nodeIdSet = new Set(fromField);
+  if (additionalNodeIds) {
+    for (const id of additionalNodeIds) nodeIdSet.add(id);
+  }
+  const nodeIds = Array.from(nodeIdSet);
 
   if (nodeIds.length === 0) return 0;
 

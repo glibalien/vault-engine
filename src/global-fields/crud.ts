@@ -321,6 +321,29 @@ export function updateGlobalField(
       const cols = classifyCoercedValue(c.new_value);
       updateStmt.run(cols.value_text, cols.value_number, cols.value_date, cols.value_json, c.node_id, name);
     }
+
+    // Remove uncoercible values — the old value can't satisfy the new type,
+    // so the field becomes unfilled. The schema claim remains; the node will
+    // show this field in unfilled_claims until a valid value is provided.
+    if (uncoercible.length > 0) {
+      const deleteStmt = db.prepare(
+        `DELETE FROM node_fields WHERE node_id = ? AND field_name = ?`,
+      );
+      const logStmt = db.prepare(
+        `INSERT INTO edits_log (node_id, timestamp, event_type, details) VALUES (?, ?, ?, ?)`,
+      );
+      const now = Date.now();
+      for (const u of uncoercible) {
+        deleteStmt.run(u.node_id, name);
+        logStmt.run(u.node_id, now, 'value-removed', JSON.stringify({
+          source: 'tool',
+          trigger: `update-global-field type change: ${current.field_type} → ${newType}`,
+          field: name,
+          removed_value: u.value,
+          reason: u.reason,
+        }));
+      }
+    }
   });
 
   applyTx();

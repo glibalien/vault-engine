@@ -223,6 +223,44 @@ describe('mergeFieldClaims', () => {
     expect(ef.resolved_required).toBe(true);
   });
 
+  it('conflicted fields appear in conflicted_fields map with global definition', () => {
+    const globals = new Map([
+      ['status', makeGlobal({ name: 'status', field_type: 'enum', enum_values: ['open', 'closed'], per_type_overrides_allowed: true })],
+    ]);
+    const claims = new Map([
+      ['task', [makeClaim({ schema_name: 'task', field: 'status', required: true })]],
+      ['project', [makeClaim({ schema_name: 'project', field: 'status', required: false })]],
+    ]);
+
+    const result = mergeFieldClaims(['task', 'project'], claims, globals);
+
+    expect(result.ok).toBe(false);
+    if (result.ok) return;
+    expect(result.conflicted_fields.size).toBe(1);
+    const cf = result.conflicted_fields.get('status')!;
+    expect(cf.field).toBe('status');
+    expect(cf.global_field).toBe(globals.get('status'));
+    expect(cf.claiming_types).toEqual(['task', 'project']);
+  });
+
+  it('conflicted_fields preserves presentation metadata', () => {
+    const globals = new Map([
+      ['status', makeGlobal({ name: 'status', per_type_overrides_allowed: true })],
+    ]);
+    const claims = new Map([
+      ['task', [makeClaim({ schema_name: 'task', field: 'status', required: true, label: 'Status', sort_order: 100 })]],
+      ['project', [makeClaim({ schema_name: 'project', field: 'status', required: false })]],
+    ]);
+
+    const result = mergeFieldClaims(['task', 'project'], claims, globals);
+
+    expect(result.ok).toBe(false);
+    if (result.ok) return;
+    const cf = result.conflicted_fields.get('status')!;
+    expect(cf.resolved_label).toBe('Status');
+    expect(cf.resolved_order).toBe(100);
+  });
+
   it('skips claims referencing unknown global fields', () => {
     const globals = new Map<string, GlobalFieldDefinition>(); // empty
     const claims = new Map([

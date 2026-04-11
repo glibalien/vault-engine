@@ -6,6 +6,38 @@ import type Database from 'better-sqlite3';
  * Safe to run on a database that already has the Phase 2 schema — all
  * operations are guarded by existence checks so the function is idempotent.
  */
+/**
+ * Upgrade an existing Phase 2 database to Phase 3.
+ *
+ * Adds: node_fields.value_raw_text column, schema_file_hashes table.
+ * Idempotent — safe to run on a database that already has the Phase 3 schema.
+ */
+export function upgradeToPhase3(db: Database.Database): void {
+  const run = db.transaction(() => {
+    // --- node_fields: add value_raw_text column if missing ---
+    const nfColumns = (
+      db.prepare('PRAGMA table_info(node_fields)').all() as { name: string }[]
+    ).map(c => c.name);
+
+    if (!nfColumns.includes('value_raw_text')) {
+      db.prepare(
+        'ALTER TABLE node_fields ADD COLUMN value_raw_text TEXT'
+      ).run();
+    }
+
+    // --- schema_file_hashes table ---
+    db.prepare(`
+      CREATE TABLE IF NOT EXISTS schema_file_hashes (
+        file_path TEXT PRIMARY KEY,
+        content_hash TEXT NOT NULL,
+        rendered_at INTEGER NOT NULL
+      )
+    `).run();
+  });
+
+  run();
+}
+
 export function upgradeToPhase2(db: Database.Database): void {
   const run = db.transaction(() => {
     // --- global_fields: add three new columns if missing ---

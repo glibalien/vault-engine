@@ -258,6 +258,165 @@ describe('validateProposedState', () => {
     expect(result.coerced_state.count.source).toBe('orphan');
   });
 
+  // ── Merge-conflict recovery (Phase 3) ────────────────────────────────
+
+  it('merge conflict with provided value — value validated against global field and included in coerced_state', () => {
+    const globals = new Map([
+      ['status', gf({ name: 'status', field_type: 'enum', enum_values: ['open', 'closed'], per_type_overrides_allowed: true })],
+    ]);
+    const claims = new Map([
+      ['task', [claim({ schema_name: 'task', field: 'status', required: true })]],
+      ['project', [claim({ schema_name: 'project', field: 'status', required: false })]],
+    ]);
+
+    const result = validateProposedState(
+      { status: 'open' },
+      ['task', 'project'],
+      claims,
+      globals,
+    );
+
+    // Still not valid (MERGE_CONFLICT is error-severity), but value is in coerced_state
+    expect(result.valid).toBe(false);
+    expect(result.coerced_state.status).toBeDefined();
+    expect(result.coerced_state.status.value).toBe('open');
+    expect(result.coerced_state.status.source).toBe('provided');
+    expect(result.coerced_state.status.changed).toBe(false);
+    expect(result.issues.some(i => i.code === 'MERGE_CONFLICT')).toBe(true);
+  });
+
+  it('merge conflict with provided value that needs coercion — coerced value in coerced_state', () => {
+    const globals = new Map([
+      ['status', gf({ name: 'status', field_type: 'enum', enum_values: ['open', 'closed'], per_type_overrides_allowed: true })],
+    ]);
+    const claims = new Map([
+      ['task', [claim({ schema_name: 'task', field: 'status', required: true })]],
+      ['project', [claim({ schema_name: 'project', field: 'status', required: false })]],
+    ]);
+
+    const result = validateProposedState(
+      { status: 'OPEN' },  // case mismatch, should be coerced
+      ['task', 'project'],
+      claims,
+      globals,
+    );
+
+    expect(result.coerced_state.status).toBeDefined();
+    expect(result.coerced_state.status.value).toBe('open');
+    expect(result.coerced_state.status.changed).toBe(true);
+    expect(result.coerced_state.status.original).toBe('OPEN');
+  });
+
+  it('merge conflict with invalid provided value — TYPE_MISMATCH alongside MERGE_CONFLICT', () => {
+    const globals = new Map([
+      ['priority', gf({ name: 'priority', field_type: 'number', per_type_overrides_allowed: true })],
+    ]);
+    const claims = new Map([
+      ['task', [claim({ schema_name: 'task', field: 'priority', required: true })]],
+      ['project', [claim({ schema_name: 'project', field: 'priority', required: false })]],
+    ]);
+
+    const result = validateProposedState(
+      { priority: 'not-a-number' },
+      ['task', 'project'],
+      claims,
+      globals,
+    );
+
+    expect(result.valid).toBe(false);
+    const codes = result.issues.map(i => i.code);
+    expect(codes).toContain('MERGE_CONFLICT');
+    expect(codes).toContain('TYPE_MISMATCH');
+    expect(result.coerced_state.priority).toBeUndefined();
+  });
+
+  it('merge conflict without provided value — field omitted from coerced_state', () => {
+    const globals = new Map([
+      ['status', gf({ name: 'status', per_type_overrides_allowed: true })],
+    ]);
+    const claims = new Map([
+      ['task', [claim({ schema_name: 'task', field: 'status', required: true })]],
+      ['project', [claim({ schema_name: 'project', field: 'status', required: false })]],
+    ]);
+
+    const result = validateProposedState(
+      {},
+      ['task', 'project'],
+      claims,
+      globals,
+    );
+
+    expect(result.valid).toBe(false);
+    expect(result.coerced_state.status).toBeUndefined();
+    expect(result.issues.some(i => i.code === 'MERGE_CONFLICT')).toBe(true);
+  });
+
+  it('Case 4: required agrees, default conflicts, no value — both REQUIRED_MISSING and MERGE_CONFLICT', () => {
+    const globals = new Map([
+      ['status', gf({ name: 'status', required: true, per_type_overrides_allowed: true })],
+    ]);
+    const claims = new Map([
+      ['task', [claim({ schema_name: 'task', field: 'status', default_value: 'open' })]],
+      ['project', [claim({ schema_name: 'project', field: 'status', default_value: 'active' })]],
+    ]);
+
+    const result = validateProposedState(
+      {},
+      ['task', 'project'],
+      claims,
+      globals,
+    );
+
+    expect(result.valid).toBe(false);
+    const codes = result.issues.map(i => i.code);
+    expect(codes).toContain('MERGE_CONFLICT');
+    expect(codes).toContain('REQUIRED_MISSING');
+    expect(result.coerced_state.status).toBeUndefined();
+  });
+
+  it('merge conflict with null value — field omitted, no error', () => {
+    const globals = new Map([
+      ['status', gf({ name: 'status', per_type_overrides_allowed: true })],
+    ]);
+    const claims = new Map([
+      ['task', [claim({ schema_name: 'task', field: 'status', required: true })]],
+      ['project', [claim({ schema_name: 'project', field: 'status', required: false })]],
+    ]);
+
+    const result = validateProposedState(
+      { status: null },
+      ['task', 'project'],
+      claims,
+      globals,
+    );
+
+    // null is deletion intent — field excluded
+    expect(result.coerced_state.status).toBeUndefined();
+    // MERGE_CONFLICT still reported
+    expect(result.issues.some(i => i.code === 'MERGE_CONFLICT')).toBe(true);
+  });
+
+  it('conflicted field is not classified as orphan', () => {
+    const globals = new Map([
+      ['status', gf({ name: 'status', per_type_overrides_allowed: true })],
+    ]);
+    const claims = new Map([
+      ['task', [claim({ schema_name: 'task', field: 'status', required: true })]],
+      ['project', [claim({ schema_name: 'project', field: 'status', required: false })]],
+    ]);
+
+    const result = validateProposedState(
+      { status: 'hello' },
+      ['task', 'project'],
+      claims,
+      globals,
+    );
+
+    expect(result.orphan_fields).not.toContain('status');
+    expect(result.coerced_state.status).toBeDefined();
+    expect(result.coerced_state.status.source).toBe('provided');
+  });
+
   it('list element failure — list<number> with bad element', () => {
     const globals = new Map([
       ['scores', gf({ name: 'scores', field_type: 'list', list_item_type: 'number' })],

@@ -4,6 +4,7 @@ import type {
   GlobalFieldDefinition,
   FieldClaim,
   EffectiveFieldSet,
+  ConflictedFieldSet,
   CoercedValue,
   ValidationIssue,
   ValidationResult,
@@ -27,12 +28,14 @@ export function validateProposedState(
   const mergeResult = mergeFieldClaims(types, claimsByType, globalFields);
 
   let effectiveFields: EffectiveFieldSet;
+  let conflictedFields: ConflictedFieldSet = new Map();
   const conflictFieldNames = new Set<string>();
 
   if (mergeResult.ok) {
     effectiveFields = mergeResult.effective_fields;
   } else {
     effectiveFields = mergeResult.partial_fields;
+    conflictedFields = mergeResult.conflicted_fields;
     for (const conflict of mergeResult.conflicts) {
       conflictFieldNames.add(conflict.field);
       issues.push({
@@ -90,6 +93,77 @@ export function validateProposedState(
     const result = coerceValue(value, ef.global_field.field_type, {
       enum_values: ef.global_field.enum_values ?? undefined,
       list_item_type: ef.global_field.list_item_type ?? undefined,
+    });
+
+    if (result.ok) {
+      const entry: CoercedValue = {
+        field: fieldName,
+        value: result.value,
+        source: 'provided',
+        changed: result.changed,
+      };
+      if (result.changed) {
+        entry.original = value;
+      }
+      coerced_state[fieldName] = entry;
+    } else {
+      const fail = result as CoercionFailure;
+      let code: IssueCode;
+      if (fail.closest_matches) {
+        code = 'ENUM_MISMATCH';
+      } else if (fail.element_errors) {
+        code = 'LIST_ITEM_COERCION_FAILED';
+      } else {
+        code = 'TYPE_MISMATCH';
+      }
+
+      const details: Record<string, unknown> = {};
+      if (fail.closest_matches) details.closest_matches = fail.closest_matches;
+      if (fail.element_errors) details.element_errors = fail.element_errors;
+
+      issues.push({
+        field: fieldName,
+        severity: 'error',
+        code,
+        message: fail.reason,
+        details: Object.keys(details).length > 0 ? details : undefined,
+      });
+    }
+  }
+
+  // ── Step 3b: Handle conflicted fields (Phase 3 merge-conflict recovery) ──
+  // Provided values for conflicted fields are validated against the global
+  // field definition. Unprovided values are omitted (the engine can't
+  // determine the correct default when claims disagree).
+  for (const [fieldName, cf] of conflictedFields) {
+    const provided = fieldName in proposedFields;
+    const value = proposedFields[fieldName];
+
+    if (provided && value === null) {
+      // Null is deletion intent — field omitted, no coerced_state entry
+      continue;
+    }
+
+    if (!provided) {
+      // Case 4: if types agree on required but disagree on default,
+      // REQUIRED_MISSING is surfaced alongside the MERGE_CONFLICT already emitted
+      // We can't check resolved_required because it's conflicted — but we can
+      // check if ALL claiming types' resolved required (via global) is true
+      if (cf.global_field.required) {
+        issues.push({
+          field: fieldName,
+          severity: 'error',
+          code: 'REQUIRED_MISSING',
+          message: `Required field "${fieldName}" is missing and default is conflicted`,
+        });
+      }
+      continue;
+    }
+
+    // Validate provided value against global field definition
+    const result = coerceValue(value, cf.global_field.field_type, {
+      enum_values: cf.global_field.enum_values ?? undefined,
+      list_item_type: cf.global_field.list_item_type ?? undefined,
     });
 
     if (result.ok) {

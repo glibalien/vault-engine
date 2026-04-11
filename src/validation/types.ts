@@ -43,9 +43,20 @@ export interface MergeConflict {
   conflicting_claims: Array<{ type: string; value: unknown }>;
 }
 
+export interface ConflictedField {
+  field: string;
+  global_field: GlobalFieldDefinition;
+  claiming_types: string[];
+  resolved_order: number;
+  resolved_label: string | null;
+  resolved_description: string | null;
+}
+
+export type ConflictedFieldSet = Map<string, ConflictedField>;
+
 export type MergeResult =
   | { ok: true; effective_fields: EffectiveFieldSet }
-  | { ok: false; conflicts: MergeConflict[]; partial_fields: EffectiveFieldSet };
+  | { ok: false; conflicts: MergeConflict[]; partial_fields: EffectiveFieldSet; conflicted_fields: ConflictedFieldSet };
 
 export interface CoercedValue {
   field: string;

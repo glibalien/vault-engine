@@ -5,6 +5,8 @@ import type {
   FieldClaim,
   EffectiveField,
   EffectiveFieldSet,
+  ConflictedField,
+  ConflictedFieldSet,
   MergeConflict,
   MergeResult,
 } from './types.js';
@@ -19,6 +21,7 @@ export function mergeFieldClaims(
   globalFields: Map<string, GlobalFieldDefinition>,
 ): MergeResult {
   const effectiveFields: EffectiveFieldSet = new Map();
+  const conflictedFields: ConflictedFieldSet = new Map();
   const conflicts: MergeConflict[] = [];
 
   // Track per-field: ordered list of (type, claim) pairs
@@ -124,7 +127,15 @@ export function mergeFieldClaims(
 
     if (fieldConflicts.length > 0) {
       conflicts.push(...fieldConflicts);
-      // Don't add to effective fields
+      // Add to conflicted_fields with global definition for Phase 3 recovery
+      conflictedFields.set(fieldName, {
+        field: fieldName,
+        global_field: globalField,
+        claiming_types: claimingTypes,
+        resolved_order: resolvedOrder,
+        resolved_label: resolvedLabel,
+        resolved_description: resolvedDescription,
+      });
     } else {
       effectiveFields.set(fieldName, {
         field: fieldName,
@@ -140,7 +151,7 @@ export function mergeFieldClaims(
   }
 
   if (conflicts.length > 0) {
-    return { ok: false, conflicts, partial_fields: effectiveFields };
+    return { ok: false, conflicts, partial_fields: effectiveFields, conflicted_fields: conflictedFields };
   }
   return { ok: true, effective_fields: effectiveFields };
 }

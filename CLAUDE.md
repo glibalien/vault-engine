@@ -46,7 +46,11 @@ npm run start:http   # node dist/index.js --transport http
 - `db/connection.ts` opens the DB with WAL mode and foreign keys enabled.
 - ESM throughout (`"type": "module"` in package.json, `.js` extensions in imports)
 - **YAML `nullStr: ''`** in render options — null values serialize as bare `key:` not `key: null`. This is critical for Obsidian compatibility: `types: []` (flow notation) mangles when Obsidian adds items; implicit null `types:` does not.
+- **YAML `uniqueKeys: false`** in parse options — Obsidian's property editor can create duplicate YAML keys (e.g. two `types:` entries). The parser tolerates this (last value wins) instead of throwing.
+- **Watcher write-skip**: the watcher does NOT rewrite a file unless the pipeline made substantive changes (defaults added, values coerced, values retained, or title added). Cosmetic-only differences (field ordering, YAML formatting) are DB-synced without touching the file. This prevents clobbering Obsidian mid-edit.
 - **Watcher cosmetic-skip**: the watcher does NOT rewrite a file if the only change would be adding a filename-derived title. This prevents clobbering Obsidian mid-edit. See `processFileChange` in `src/sync/watcher.ts`.
+- **Shared query builder**: `src/mcp/query-builder.ts` — single SQL builder used by both `query-nodes` and `update-node` query mode. Supports negation filters (`without_types`, `without_fields`).
+- **Bulk mutate**: `update-node` query mode supports `add_types`, `remove_types`, `set_fields` across filtered node sets. Best-effort execution (not transactional). Dry-run defaults to true in query mode.
 
 ## Phased delivery
 

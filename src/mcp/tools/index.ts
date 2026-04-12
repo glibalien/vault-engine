@@ -25,8 +25,9 @@ import { registerAddTypeToNode } from './add-type-to-node.js';
 import { registerRemoveTypeFromNode } from './remove-type-from-node.js';
 import { registerRenameNode } from './rename-node.js';
 import { registerBatchMutate } from './batch-mutate.js';
+import { registerReadEmbedded } from './read-embedded.js';
 
-export function registerAllTools(server: McpServer, db: Database.Database, ctx?: { writeLock?: import('../../sync/write-lock.js').WriteLockManager; writeGate?: import('../../sync/write-gate.js').WriteGate; vaultPath?: string; extractionCache?: import('../../extraction/cache.js').ExtractionCache }): void {
+export function registerAllTools(server: McpServer, db: Database.Database, ctx?: { writeLock?: import('../../sync/write-lock.js').WriteLockManager; writeGate?: import('../../sync/write-gate.js').WriteGate; vaultPath?: string; extractionCache?: import('../../extraction/cache.js').ExtractionCache; extractorRegistry?: import('../../extraction/registry.js').ExtractorRegistry }): void {
   registerVaultStats(server, db);
   registerListTypes(server, db);
   registerListSchemas(server, db);
@@ -45,6 +46,11 @@ export function registerAllTools(server: McpServer, db: Database.Database, ctx?:
   registerValidateNode(server, db);
   registerInferFieldType(server, db);
   registerListFieldValues(server, db);
+
+  // Phase 6 extraction tools (require extractionCache and vaultPath)
+  if (ctx?.extractionCache && ctx?.vaultPath) {
+    registerReadEmbedded(server, db, ctx.extractionCache, ctx.vaultPath);
+  }
 
   // Phase 3 mutation tools (require writeLock and vaultPath)
   if (ctx?.writeLock && ctx?.vaultPath) {

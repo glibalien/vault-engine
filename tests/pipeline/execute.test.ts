@@ -458,6 +458,46 @@ describe('executeMutation — stale-file guard', () => {
   });
 });
 
+// ── db_only mode ──────────────────────────────────────────────────────
+
+describe('executeMutation — db_only mode', () => {
+  it('updates DB but does not write file when db_only is true', () => {
+    const result = executeMutation(db, writeLock, vaultPath, makeMutation({
+      source: 'watcher',
+      db_only: true,
+      body: 'Some content.',
+    }));
+
+    expect(result.file_written).toBe(false);
+    expect(result.deferred_write).toBeDefined();
+    expect(result.deferred_write!.file_content).toContain('Some content.');
+
+    // DB IS populated
+    const node = db.prepare('SELECT title, body FROM nodes WHERE id = ?')
+      .get(result.node_id) as { title: string; body: string };
+    expect(node.title).toBe('Test Node');
+    expect(node.body).toBe('Some content.');
+
+    // File does NOT exist on disk
+    expect(existsSync(join(vaultPath, 'test-node.md'))).toBe(false);
+  });
+
+  it('returns no deferred_write when rendered matches DB hash (no-op)', () => {
+    // Create node via tool first
+    const created = executeMutation(db, writeLock, vaultPath, makeMutation());
+
+    // Same data via watcher db_only — should be no-op
+    const result = executeMutation(db, writeLock, vaultPath, makeMutation({
+      source: 'watcher',
+      node_id: created.node_id,
+      db_only: true,
+    }));
+
+    expect(result.file_written).toBe(false);
+    expect(result.deferred_write).toBeUndefined();
+  });
+});
+
 // ── Relationships ─────────────────────────────────────────────────────
 
 describe('executeMutation — relationships', () => {

@@ -252,6 +252,7 @@ export function executeMutation(
     // rewriting it for cosmetic reasons (field ordering, YAML formatting)
     // races with Obsidian's editor and causes field-deletion flicker.
     const needsFileWrite = mutation.source !== 'watcher' ||
+      mutation.node_id === null ||  // new node always needs a write (no file exists yet)
       defaultedFields.length > 0 ||
       mutation.has_populated_defaults === true ||
       mutation.title_from_frontmatter === false ||
@@ -260,8 +261,9 @@ export function executeMutation(
 
     // ── Stage 6: Write (under write lock) ───────────────────────────
     return writeLock.withLockSync(absPath, () => {
-      // Only write file if pipeline made substantive changes
-      if (needsFileWrite) {
+      // Only write file if pipeline made substantive changes AND db_only is not set
+      const shouldWriteFile = needsFileWrite && !mutation.db_only;
+      if (shouldWriteFile) {
         atomicWriteFile(absPath, fileContent, tmpDir);
       }
 
@@ -271,7 +273,7 @@ export function executeMutation(
 
       // When skipping file write, store the source file's hash so the
       // watcher recognizes the unchanged file and doesn't re-trigger.
-      const contentHash = needsFileWrite
+      const contentHash = shouldWriteFile
         ? renderedHash
         : (mutation.source_content_hash ?? renderedHash);
 
@@ -356,13 +358,18 @@ export function executeMutation(
       );
       const editsLogged = writeEditsLogEntries(db, logEntries);
 
+      const deferredWrite = (mutation.db_only && needsFileWrite)
+        ? { file_content: fileContent, rendered_hash: renderedHash }
+        : undefined;
+
       return {
         node_id: nodeId,
         file_path: mutation.file_path,
         validation,
         rendered_hash: contentHash,
         edits_logged: editsLogged,
-        file_written: needsFileWrite,
+        file_written: shouldWriteFile,
+        deferred_write: deferredWrite,
       };
     });
   });

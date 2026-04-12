@@ -245,14 +245,35 @@ export function executeMutation(
       }
     }
 
+    // ── Watcher-path write skip: if the pipeline didn't make substantive
+    // changes (no defaults added, no values coerced, no rejected values
+    // retained from DB), skip the file write and just update the DB.
+    // The file is already the source of truth on the watcher path —
+    // rewriting it for cosmetic reasons (field ordering, YAML formatting)
+    // races with Obsidian's editor and causes field-deletion flicker.
+    const needsFileWrite = mutation.source !== 'watcher' ||
+      defaultedFields.length > 0 ||
+      mutation.has_populated_defaults === true ||
+      mutation.title_from_frontmatter === false ||
+      Object.keys(retainedValues).length > 0 ||
+      Object.values(validation.coerced_state).some(cv => cv.changed);
+
     // ── Stage 6: Write (under write lock) ───────────────────────────
     return writeLock.withLockSync(absPath, () => {
-      // Write file to disk
-      atomicWriteFile(absPath, fileContent, tmpDir);
+      // Only write file if pipeline made substantive changes
+      if (needsFileWrite) {
+        atomicWriteFile(absPath, fileContent, tmpDir);
+      }
 
       // Generate node_id for new nodes
       const nodeId = mutation.node_id ?? nanoid();
       const now = Date.now();
+
+      // When skipping file write, store the source file's hash so the
+      // watcher recognizes the unchanged file and doesn't re-trigger.
+      const contentHash = needsFileWrite
+        ? renderedHash
+        : (mutation.source_content_hash ?? renderedHash);
 
       // Upsert nodes row
       db.prepare(`
@@ -270,7 +291,7 @@ export function executeMutation(
         file_path: mutation.file_path,
         title: mutation.title,
         body: mutation.body,
-        content_hash: renderedHash,
+        content_hash: contentHash,
         file_mtime: now,
         indexed_at: now,
       });
@@ -339,9 +360,9 @@ export function executeMutation(
         node_id: nodeId,
         file_path: mutation.file_path,
         validation,
-        rendered_hash: renderedHash,
+        rendered_hash: contentHash,
         edits_logged: editsLogged,
-        file_written: true,
+        file_written: needsFileWrite,
       };
     });
   });

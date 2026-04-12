@@ -207,6 +207,7 @@ export function processFileChange(
   const nodeId = existing?.id ?? null;
 
   // Detect type additions and populate defaults
+  let hasPopulatedDefaults = false;
   if (nodeId) {
     const currentTypes = (db.prepare('SELECT schema_type FROM node_types WHERE node_id = ?')
       .all(nodeId) as Array<{ schema_type: string }>).map(t => t.schema_type);
@@ -247,6 +248,7 @@ export function processFileChange(
       for (const [field, value] of Object.entries(defaults)) {
         if (!(field in parsedFields)) {
           parsedFields[field] = value;
+          hasPopulatedDefaults = true;
         }
       }
     }
@@ -256,6 +258,7 @@ export function processFileChange(
     for (const [field, value] of Object.entries(defaults)) {
       if (!(field in parsedFields)) {
         parsedFields[field] = value;
+        hasPopulatedDefaults = true;
       }
     }
   }
@@ -274,6 +277,8 @@ export function processFileChange(
       body: parsed.body,
       raw_field_texts: rawFieldTexts,
       source_content_hash: sourceContentHash,
+      has_populated_defaults: hasPopulatedDefaults,
+      title_from_frontmatter: parsed.titleFromFrontmatter,
     });
   } catch {
     // Pipeline errors on watcher path are unexpected (watcher absorbs)

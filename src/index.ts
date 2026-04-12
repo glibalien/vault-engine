@@ -13,6 +13,7 @@ import { startWatcher } from './sync/watcher.js';
 import { startReconciler } from './sync/reconciler.js';
 import { IndexMutex } from './sync/mutex.js';
 import { WriteLockManager } from './sync/write-lock.js';
+import { WriteGate } from './sync/write-gate.js';
 import { startupSchemaRender } from './schema/render.js';
 
 const args = parseArgs(process.argv.slice(2));
@@ -38,10 +39,11 @@ startupSchemaRender(db, vaultPath);
 
 const mutex = new IndexMutex();
 const writeLock = new WriteLockManager();
-const watcher = startWatcher(vaultPath, db, mutex, writeLock);
-const reconciler = startReconciler(vaultPath, db, mutex, writeLock);
+const writeGate = new WriteGate({ quietPeriodMs: 3000 });
+const watcher = startWatcher(vaultPath, db, mutex, writeLock, writeGate);
+const reconciler = startReconciler(vaultPath, db, mutex, writeLock, writeGate);
 
-const serverFactory = () => createServer(db, { writeLock, vaultPath });
+const serverFactory = () => createServer(db, { writeLock, writeGate, vaultPath });
 
 if (args.transport === 'stdio' || args.transport === 'both') {
   const server = serverFactory();
@@ -61,6 +63,7 @@ if (args.transport === 'http' || args.transport === 'both') {
 
 process.on('SIGTERM', async () => {
   console.log('Shutting down...');
+  writeGate.dispose();
   reconciler.stop();
   await watcher.close();
   db.close();
@@ -69,6 +72,7 @@ process.on('SIGTERM', async () => {
 
 process.on('SIGINT', async () => {
   console.log('Shutting down...');
+  writeGate.dispose();
   reconciler.stop();
   await watcher.close();
   db.close();

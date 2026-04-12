@@ -236,86 +236,65 @@ describe('executeMutation — no-op write rule', () => {
 // ── Watcher path ──────────────────────────────────────────────────────
 
 describe('executeMutation — watcher path', () => {
-  it('watcher absorbs valid edit (DB updated, file not rewritten)', () => {
+  it('watcher with db_only updates DB without writing file', () => {
     // Create via tool
     const created = executeMutation(db, writeLock, vaultPath, makeMutation({
       body: 'Original body.',
     }));
 
-    // Simulate watcher edit — change body. No fields to coerce, no
-    // defaults to add, so the watcher should skip the file write.
-    const filePath = join(vaultPath, 'test-node.md');
-    const fileContentBefore = readFileSync(filePath, 'utf-8');
-
     const result = executeMutation(db, writeLock, vaultPath, makeMutation({
       source: 'watcher',
       node_id: created.node_id,
       body: 'Updated body from editor.',
-      source_content_hash: sha256(fileContentBefore),
+      source_content_hash: sha256(readFileSync(join(vaultPath, 'test-node.md'), 'utf-8')),
+      db_only: true,
     }));
 
-    // File NOT rewritten (no substantive pipeline changes)
+    // File NOT written (db_only)
     expect(result.file_written).toBe(false);
-    // But DB IS updated
+    // DB IS updated
     const node = db.prepare('SELECT body FROM nodes WHERE id = ?').get(result.node_id) as { body: string };
     expect(node.body).toBe('Updated body from editor.');
   });
 
-  it('watcher skips file write when no substantive changes', () => {
-    createGlobalField(db, { name: 'status', field_type: 'string' });
-    createSchemaDefinition(db, { name: 'task', field_claims: [{ field: 'status', sort_order: 100 }] });
-
-    // Create node via tool
+  it('watcher without db_only writes file (tool-equivalent behavior)', () => {
     const created = executeMutation(db, writeLock, vaultPath, makeMutation({
-      types: ['task'],
-      fields: { status: 'open' },
+      body: 'Original body.',
     }));
 
-    const filePath = join(vaultPath, 'test-node.md');
-    const fileContentBefore = readFileSync(filePath, 'utf-8');
-
-    // Watcher sends same data — no changes
     const result = executeMutation(db, writeLock, vaultPath, makeMutation({
       source: 'watcher',
       node_id: created.node_id,
-      types: ['task'],
-      fields: { status: 'open' },
-      source_content_hash: sha256(fileContentBefore),
+      body: 'Updated body.',
     }));
 
-    // File NOT rewritten
-    expect(result.file_written).toBe(false);
-    // File unchanged on disk
-    expect(readFileSync(filePath, 'utf-8')).toBe(fileContentBefore);
-    // DB hash matches source file (not rendered hash)
-    const node = db.prepare('SELECT content_hash FROM nodes WHERE id = ?').get(result.node_id) as { content_hash: string };
-    expect(node.content_hash).toBe(sha256(fileContentBefore));
-  });
-
-  it('watcher writes file when defaults are added (new type)', () => {
-    createGlobalField(db, { name: 'priority', field_type: 'string', default_value: 'normal' });
-    createSchemaDefinition(db, { name: 'task', field_claims: [{ field: 'priority' }] });
-
-    // Create node via tool without types
-    const created = executeMutation(db, writeLock, vaultPath, makeMutation());
-    const filePath = join(vaultPath, 'test-node.md');
-
-    // Simulate user adding 'task' type in Obsidian — processFileChange
-    // populates defaults and sets has_populated_defaults.
-    const result = executeMutation(db, writeLock, vaultPath, makeMutation({
-      source: 'watcher',
-      node_id: created.node_id,
-      types: ['task'],
-      fields: { priority: 'normal' },
-      source_content_hash: sha256(readFileSync(filePath, 'utf-8')),
-      has_populated_defaults: true,
-    }));
-
-    // File IS rewritten (defaults were populated by processFileChange)
+    // File IS written (no db_only flag)
     expect(result.file_written).toBe(true);
   });
 
-  it('watcher writes file when values are coerced', () => {
+  it('watcher db_only returns deferred_write for new nodes', () => {
+    createGlobalField(db, { name: 'priority', field_type: 'string', default_value: 'normal' });
+    createSchemaDefinition(db, { name: 'task', field_claims: [{ field: 'priority' }] });
+
+    const result = executeMutation(db, writeLock, vaultPath, makeMutation({
+      source: 'watcher',
+      db_only: true,
+      types: ['task'],
+      fields: { priority: 'normal' },
+    }));
+
+    // File NOT written, but deferred_write has the content
+    expect(result.file_written).toBe(false);
+    expect(result.deferred_write).toBeDefined();
+    expect(result.deferred_write!.file_content).toContain('priority: normal');
+
+    // DB IS populated
+    const field = db.prepare('SELECT value_text FROM node_fields WHERE node_id = ? AND field_name = ?')
+      .get(result.node_id, 'priority') as { value_text: string };
+    expect(field.value_text).toBe('normal');
+  });
+
+  it('watcher db_only coerces values and returns deferred_write', () => {
     createGlobalField(db, { name: 'count', field_type: 'number' });
     createSchemaDefinition(db, { name: 'task', field_claims: [{ field: 'count', sort_order: 100 }] });
 
@@ -324,7 +303,6 @@ describe('executeMutation — watcher path', () => {
       types: ['task'],
       fields: { count: 5 },
     }));
-    const filePath = join(vaultPath, 'test-node.md');
 
     // Watcher sends string '10' — needs coercion to number
     const result = executeMutation(db, writeLock, vaultPath, makeMutation({
@@ -332,11 +310,12 @@ describe('executeMutation — watcher path', () => {
       node_id: created.node_id,
       types: ['task'],
       fields: { count: '10' },
-      source_content_hash: sha256(readFileSync(filePath, 'utf-8')),
+      source_content_hash: sha256(readFileSync(join(vaultPath, 'test-node.md'), 'utf-8')),
+      db_only: true,
     }));
 
-    // File IS rewritten (value was coerced)
-    expect(result.file_written).toBe(true);
+    expect(result.file_written).toBe(false);
+    expect(result.deferred_write).toBeDefined();
     expect(result.validation.coerced_state.count.changed).toBe(true);
     expect(result.validation.coerced_state.count.value).toBe(10);
   });
@@ -352,11 +331,10 @@ describe('executeMutation — watcher path', () => {
     }));
 
     // Simulate user editing the file to have an invalid value
-    // (in real flow, the watcher reads the edited file)
     const filePath = join(vaultPath, 'test-node.md');
     writeFileSync(filePath, '---\ntitle: Test Node\ntypes:\n  - task\nstatus: invalid-value\n---\n', 'utf-8');
 
-    // Watcher sends invalid value (parsed from the edited file)
+    // Watcher sends invalid value — without db_only, writes the corrected file
     const result = executeMutation(db, writeLock, vaultPath, makeMutation({
       source: 'watcher',
       node_id: created.node_id,
@@ -364,7 +342,6 @@ describe('executeMutation — watcher path', () => {
       fields: { status: 'invalid-value' },
     }));
 
-    // Should write (re-renders the file with the retained value)
     expect(result.file_written).toBe(true);
 
     // DB should retain 'open'
@@ -382,72 +359,12 @@ describe('executeMutation — watcher path', () => {
   });
 });
 
-// ── Stale-file guard ─────────────────────────────────────────────────
+// ── Tool path always writes ─────────────────────────────────────────
 
-describe('executeMutation — stale-file guard', () => {
-  it('aborts write when file changed since parsing', () => {
-    // Create a node first
-    const created = executeMutation(db, writeLock, vaultPath, makeMutation({
-      body: 'Original body.',
-    }));
-    expect(created.file_written).toBe(true);
-
-    // Read the file hash as the watcher would at parse time
-    const filePath = join(vaultPath, 'test-node.md');
-    const originalContent = readFileSync(filePath, 'utf-8');
-    const originalHash = sha256(originalContent);
-
-    // Simulate the file being edited by Obsidian AFTER the watcher parsed it
-    writeFileSync(filePath, '---\ntitle: Test Node\ntypes:\n  - task\n---\nEdited by Obsidian.\n', 'utf-8');
-
-    // Watcher mutation with the OLD hash — file is now stale
-    const result = executeMutation(db, writeLock, vaultPath, makeMutation({
-      source: 'watcher',
-      node_id: created.node_id,
-      body: 'Original body.',
-      source_content_hash: originalHash,
-    }));
-
-    // Should NOT write — file changed since parsing
-    expect(result.file_written).toBe(false);
-
-    // File on disk should still be the Obsidian edit, NOT overwritten
-    const fileAfter = readFileSync(filePath, 'utf-8');
-    expect(fileAfter).toContain('Edited by Obsidian.');
-
-    // Should have a stale-file-skipped log entry
-    const logs = db.prepare(
-      "SELECT details FROM edits_log WHERE node_id = ? AND event_type = 'stale-file-skipped'"
-    ).all(created.node_id) as { details: string }[];
-    expect(logs.length).toBe(1);
-  });
-
-  it('proceeds past stale guard when source_content_hash matches', () => {
-    // Create a node
-    const created = executeMutation(db, writeLock, vaultPath, makeMutation());
-    const filePath = join(vaultPath, 'test-node.md');
-    const currentContent = readFileSync(filePath, 'utf-8');
-    const currentHash = sha256(currentContent);
-
-    // Watcher mutation with matching hash — not stale. No fields to
-    // coerce, so watcher write-skip applies (file not rewritten).
-    const result = executeMutation(db, writeLock, vaultPath, makeMutation({
-      source: 'watcher',
-      node_id: created.node_id,
-      body: 'Updated body.',
-      source_content_hash: currentHash,
-    }));
-
-    // Not stale, so DB was updated (body changed)
-    expect(result.file_written).toBe(false);
-    const node = db.prepare('SELECT body FROM nodes WHERE id = ?').get(result.node_id) as { body: string };
-    expect(node.body).toBe('Updated body.');
-  });
-
-  it('tool path ignores source_content_hash (not set)', () => {
+describe('executeMutation — tool path always writes file', () => {
+  it('tool path writes file regardless of prior state', () => {
     const created = executeMutation(db, writeLock, vaultPath, makeMutation());
 
-    // Tool path never sets source_content_hash — should always write
     const result = executeMutation(db, writeLock, vaultPath, makeMutation({
       source: 'tool',
       node_id: created.node_id,
@@ -455,6 +372,46 @@ describe('executeMutation — stale-file guard', () => {
     }));
 
     expect(result.file_written).toBe(true);
+  });
+});
+
+// ── db_only mode ──────────────────────────────────────────────────────
+
+describe('executeMutation — db_only mode', () => {
+  it('updates DB but does not write file when db_only is true', () => {
+    const result = executeMutation(db, writeLock, vaultPath, makeMutation({
+      source: 'watcher',
+      db_only: true,
+      body: 'Some content.',
+    }));
+
+    expect(result.file_written).toBe(false);
+    expect(result.deferred_write).toBeDefined();
+    expect(result.deferred_write!.file_content).toContain('Some content.');
+
+    // DB IS populated
+    const node = db.prepare('SELECT title, body FROM nodes WHERE id = ?')
+      .get(result.node_id) as { title: string; body: string };
+    expect(node.title).toBe('Test Node');
+    expect(node.body).toBe('Some content.');
+
+    // File does NOT exist on disk
+    expect(existsSync(join(vaultPath, 'test-node.md'))).toBe(false);
+  });
+
+  it('returns no deferred_write when rendered matches DB hash (no-op)', () => {
+    // Create node via tool first
+    const created = executeMutation(db, writeLock, vaultPath, makeMutation());
+
+    // Same data via watcher db_only — should be no-op
+    const result = executeMutation(db, writeLock, vaultPath, makeMutation({
+      source: 'watcher',
+      node_id: created.node_id,
+      db_only: true,
+    }));
+
+    expect(result.file_written).toBe(false);
+    expect(result.deferred_write).toBeUndefined();
   });
 });
 

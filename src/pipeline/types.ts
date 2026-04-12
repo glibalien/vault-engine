@@ -13,9 +13,14 @@ export interface ProposedMutation {
   fields: Record<string, unknown>;   // proposed field values
   body: string;
   raw_field_texts?: Record<string, string>;  // watcher path: pre-stripped text for wiki-link fields
-  source_content_hash?: string;              // watcher path: SHA256 of file at parse time — stale-file guard
-  has_populated_defaults?: boolean;           // watcher path: processFileChange added defaults for new types
-  title_from_frontmatter?: boolean;           // watcher path: true if title came from YAML, false if derived
+  source_content_hash?: string;              // watcher path: SHA256 of file at parse time — stored as DB content_hash when file write is skipped
+  db_only?: boolean;                         // when true, skip file write, return deferred write info
+}
+
+/** Returned when db_only is true and the pipeline would have written the file. */
+export interface DeferredWrite {
+  file_content: string;
+  rendered_hash: string;
 }
 
 export interface PipelineResult {
@@ -25,6 +30,7 @@ export interface PipelineResult {
   rendered_hash: string;
   edits_logged: number;               // count of edits log entries created
   file_written: boolean;              // false if hash matched (no-op)
+  deferred_write?: DeferredWrite;     // present when db_only=true and write was needed
 }
 
 export class PipelineError extends Error {

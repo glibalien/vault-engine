@@ -8,6 +8,7 @@ import { fullIndex } from '../../src/indexer/indexer.js';
 import { startWatcher } from '../../src/sync/watcher.js';
 import { IndexMutex } from '../../src/sync/mutex.js';
 import { WriteLockManager } from '../../src/sync/write-lock.js';
+import { WriteGate } from '../../src/sync/write-gate.js';
 import type { FSWatcher } from 'chokidar';
 
 let db: Database.Database;
@@ -49,7 +50,7 @@ The vault engine project.
   fullIndex(vaultPath, db);
 
   mutex = new IndexMutex();
-  watcher = startWatcher(vaultPath, db, mutex, new WriteLockManager(), {
+  watcher = startWatcher(vaultPath, db, mutex, new WriteLockManager(), new WriteGate({ quietPeriodMs: 50 }), {
     debounceMs: 50, maxWaitMs: 200,
   });
   await new Promise(r => setTimeout(r, 100));

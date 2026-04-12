@@ -8,6 +8,7 @@ import { createSchema } from '../../src/db/schema.js';
 import { fullIndex } from '../../src/indexer/indexer.js';
 import { IndexMutex } from '../../src/sync/mutex.js';
 import { WriteLockManager } from '../../src/sync/write-lock.js';
+import { WriteGate } from '../../src/sync/write-gate.js';
 import { startWatcher, processFileChange } from '../../src/sync/watcher.js';
 
 const DEBOUNCE_MS = 50;
@@ -28,6 +29,7 @@ describe('watcher integration', () => {
   let db: Database.Database;
   let mutex: IndexMutex;
   let writeLock: WriteLockManager;
+  let writeGate: WriteGate;
   let watcher: FSWatcher;
 
   beforeEach(async () => {
@@ -53,8 +55,9 @@ describe('watcher integration', () => {
 
     mutex = new IndexMutex();
     writeLock = new WriteLockManager();
+    writeGate = new WriteGate({ quietPeriodMs: 50 }); // fast for tests
 
-    watcher = startWatcher(vaultPath, db, mutex, writeLock, {
+    watcher = startWatcher(vaultPath, db, mutex, writeLock, writeGate, {
       debounceMs: DEBOUNCE_MS,
       maxWaitMs: MAX_WAIT_MS,
     });
@@ -64,6 +67,7 @@ describe('watcher integration', () => {
   });
 
   afterEach(async () => {
+    writeGate.dispose();
     await watcher.close();
     db.close();
     rmSync(vaultPath, { recursive: true, force: true });
@@ -131,16 +135,17 @@ describe('watcher integration', () => {
   });
 });
 
-// ── Cosmetic-skip tests (using processFileChange directly) ──────────
+// ── WriteGate deferred-write tests (using processFileChange directly) ──
 
-describe('processFileChange — cosmetic skip', () => {
+describe('processFileChange — WriteGate deferred writes', () => {
   let vaultPath: string;
   let dbPath: string;
   let db: Database.Database;
   let writeLock: WriteLockManager;
+  let writeGate: WriteGate;
 
   beforeEach(async () => {
-    vaultPath = mkdtempSync(join(tmpdir(), 'vault-cosmetic-test-'));
+    vaultPath = mkdtempSync(join(tmpdir(), 'vault-gate-test-'));
     const { mkdirSync } = await import('node:fs');
     mkdirSync(join(vaultPath, '.vault-engine'), { recursive: true });
     dbPath = join(vaultPath, '.vault-engine', 'test.db');
@@ -149,61 +154,59 @@ describe('processFileChange — cosmetic skip', () => {
     db.pragma('foreign_keys = ON');
     createSchema(db);
     writeLock = new WriteLockManager();
+    writeGate = new WriteGate({ quietPeriodMs: 100 });
   });
 
   afterEach(() => {
+    writeGate.dispose();
     db.close();
     rmSync(vaultPath, { recursive: true, force: true });
   });
 
-  it('skips write when file has no title and no substantive changes', () => {
-    // Create a file with no frontmatter, index it
-    const filePath = join(vaultPath, 'Person.md');
-    writeFileSync(filePath, 'Just some body text.\n', 'utf-8');
-    fullIndex(vaultPath, db);
-
-    // Simulate Obsidian intermediate save: adds empty types key
-    const intermediate = '---\ntypes:\n---\nJust some body text.\n';
-    writeFileSync(filePath, intermediate, 'utf-8');
-
-    // Process through watcher pipeline
-    processFileChange(filePath, 'Person.md', db, writeLock, vaultPath);
-
-    // File should NOT be rewritten (no title injected)
-    const afterContent = readFileSync(filePath, 'utf-8');
-    expect(afterContent).toBe(intermediate);
-    expect(afterContent).not.toContain('title:');
-  });
-
-  it('processes when file has substantive changes (new types)', () => {
-    // Create a file with no frontmatter, index it
-    const filePath = join(vaultPath, 'Person.md');
-    writeFileSync(filePath, 'Body text.\n', 'utf-8');
-    fullIndex(vaultPath, db);
-
-    // User finishes adding types: person
-    writeFileSync(filePath, '---\ntypes:\n  - person\n---\nBody text.\n', 'utf-8');
-
-    processFileChange(filePath, 'Person.md', db, writeLock, vaultPath);
-
-    // File SHOULD be rewritten (types changed)
-    const afterContent = readFileSync(filePath, 'utf-8');
-    expect(afterContent).toContain('title: Person');
-    expect(afterContent).toContain('person');
-  });
-
-  it('processes when file already has a title', () => {
-    // File with title but changed body
+  it('with WriteGate: DB updates immediately, file write deferred', () => {
     const filePath = join(vaultPath, 'Note.md');
     writeFileSync(filePath, '---\ntitle: Note\n---\nOriginal body.\n', 'utf-8');
     fullIndex(vaultPath, db);
 
     writeFileSync(filePath, '---\ntitle: Note\n---\nUpdated body.\n', 'utf-8');
 
+    processFileChange(filePath, 'Note.md', db, writeLock, vaultPath, writeGate);
+
+    // DB is updated immediately
+    const node = db.prepare("SELECT body FROM nodes WHERE file_path = 'Note.md'").get() as { body: string };
+    expect(node.body.trim()).toBe('Updated body.');
+
+    // A deferred write is pending
+    expect(writeGate.isPending('Note.md')).toBe(true);
+  });
+
+  it('without WriteGate: file write is immediate', () => {
+    const filePath = join(vaultPath, 'Note.md');
+    writeFileSync(filePath, '---\ntitle: Note\n---\nOriginal body.\n', 'utf-8');
+    fullIndex(vaultPath, db);
+
+    writeFileSync(filePath, '---\ntitle: Note\n---\nUpdated body.\n', 'utf-8');
+
+    // No writeGate passed — writes immediately
     processFileChange(filePath, 'Note.md', db, writeLock, vaultPath);
 
-    // Should process (title present, body changed)
     const afterContent = readFileSync(filePath, 'utf-8');
     expect(afterContent).toContain('Updated body.');
+  });
+
+  it('processes new types and updates DB (deferred write pending)', () => {
+    const filePath = join(vaultPath, 'Person.md');
+    writeFileSync(filePath, 'Body text.\n', 'utf-8');
+    fullIndex(vaultPath, db);
+
+    writeFileSync(filePath, '---\ntypes:\n  - person\n---\nBody text.\n', 'utf-8');
+
+    processFileChange(filePath, 'Person.md', db, writeLock, vaultPath, writeGate);
+
+    // DB updated with types
+    const types = db.prepare(
+      "SELECT schema_type FROM node_types WHERE node_id = (SELECT id FROM nodes WHERE file_path = 'Person.md')"
+    ).all() as { schema_type: string }[];
+    expect(types.map(t => t.schema_type)).toContain('person');
   });
 });

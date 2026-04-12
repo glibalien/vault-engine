@@ -9,6 +9,7 @@ export interface SchemaDefinition {
   display_name: string | null;
   icon: string | null;
   filename_template: string | null;
+  default_directory: string | null;
   metadata: unknown;
 }
 
@@ -26,6 +27,7 @@ export interface CreateSchemaInput {
   display_name?: string;
   icon?: string;
   filename_template?: string;
+  default_directory?: string;
   field_claims: ClaimInput[];
   metadata?: unknown;
 }
@@ -34,6 +36,7 @@ export interface UpdateSchemaInput {
   display_name?: string;
   icon?: string;
   filename_template?: string;
+  default_directory?: string;
   field_claims?: ClaimInput[];
   metadata?: unknown;
 }
@@ -45,6 +48,7 @@ interface SchemaRow {
   display_name: string | null;
   icon: string | null;
   filename_template: string | null;
+  default_directory: string | null;
   metadata: string | null;
 }
 
@@ -54,6 +58,7 @@ function rowToDefinition(row: SchemaRow): SchemaDefinition {
     display_name: row.display_name,
     icon: row.icon,
     filename_template: row.filename_template,
+    default_directory: row.default_directory,
     metadata: row.metadata !== null ? JSON.parse(row.metadata) : null,
   };
 }
@@ -120,7 +125,7 @@ export function getSchemaDefinition(
   name: string,
 ): SchemaDefinition | null {
   const row = db
-    .prepare(`SELECT name, display_name, icon, filename_template, metadata FROM schemas WHERE name = ?`)
+    .prepare(`SELECT name, display_name, icon, filename_template, default_directory, metadata FROM schemas WHERE name = ?`)
     .get(name) as SchemaRow | undefined;
   return row ? rowToDefinition(row) : null;
 }
@@ -137,13 +142,14 @@ export function createSchemaDefinition(
 
   const tx = db.transaction(() => {
     db.prepare(`
-      INSERT INTO schemas (name, display_name, icon, filename_template, field_claims, metadata)
-      VALUES (?, ?, ?, ?, '[]', ?)
+      INSERT INTO schemas (name, display_name, icon, filename_template, default_directory, field_claims, metadata)
+      VALUES (?, ?, ?, ?, ?, '[]', ?)
     `).run(
       input.name,
       input.display_name ?? null,
       input.icon ?? null,
       input.filename_template ?? null,
+      input.default_directory ?? null,
       metadataJson,
     );
 
@@ -186,6 +192,10 @@ export function updateSchemaDefinition(
     if (input.filename_template !== undefined) {
       updates.push('filename_template = ?');
       params.push(input.filename_template);
+    }
+    if (input.default_directory !== undefined) {
+      updates.push('default_directory = ?');
+      params.push(input.default_directory);
     }
     if (input.metadata !== undefined) {
       updates.push('metadata = ?');

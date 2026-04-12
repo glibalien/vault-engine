@@ -39,21 +39,25 @@ export function registerCreateNode(
       } else if (dirPath) {
         filePath = `${dirPath}/${title}.md`;
       } else {
-        // Check for filename template
-        if (types.length === 1) {
-          const schema = db.prepare('SELECT filename_template FROM schemas WHERE name = ?').get(types[0]) as { filename_template: string | null } | undefined;
+        // Derive from schema: default_directory + filename_template
+        let fileName = `${title}.md`;
+        let dir = '';
+
+        if (types.length >= 1) {
+          const schema = db.prepare('SELECT filename_template, default_directory FROM schemas WHERE name = ?').get(types[0]) as { filename_template: string | null; default_directory: string | null } | undefined;
+          if (schema?.default_directory) {
+            dir = schema.default_directory;
+          }
           if (schema?.filename_template) {
             const derived = evaluateTemplate(schema.filename_template, title, fields);
             if (derived === null) {
               return toolErrorResult('INVALID_PARAMS', 'Filename template has unresolved variables');
             }
-            filePath = derived;
-          } else {
-            filePath = `${title}.md`;
+            fileName = derived;
           }
-        } else {
-          filePath = `${title}.md`;
         }
+
+        filePath = dir ? `${dir}/${fileName}` : fileName;
       }
 
       // Conflict check

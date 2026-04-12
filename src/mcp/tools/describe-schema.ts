@@ -8,6 +8,7 @@ interface SchemaRow {
   display_name: string | null;
   icon: string | null;
   filename_template: string | null;
+  default_directory: string | null;
   metadata: string | null;
 }
 
@@ -47,7 +48,7 @@ export function registerDescribeSchema(server: McpServer, db: Database.Database)
     'Returns full details for a named schema.',
     { name: z.string().describe('Schema name') },
     async ({ name }) => {
-      const row = db.prepare('SELECT name, display_name, icon, filename_template, metadata FROM schemas WHERE name = ?')
+      const row = db.prepare('SELECT name, display_name, icon, filename_template, default_directory, metadata FROM schemas WHERE name = ?')
         .get(name) as SchemaRow | undefined;
 
       if (!row) {
@@ -116,6 +117,7 @@ export function registerDescribeSchema(server: McpServer, db: Database.Database)
         display_name: row.display_name,
         icon: row.icon,
         filename_template: row.filename_template,
+        default_directory: row.default_directory,
         metadata: row.metadata ? JSON.parse(row.metadata) : null,
         field_claims,
         node_count,

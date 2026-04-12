@@ -9,7 +9,7 @@ export function registerListSchemas(server: McpServer, db: Database.Database): v
     {},
     async () => {
       const schemas = db.prepare(
-        'SELECT name, display_name, icon, filename_template FROM schemas ORDER BY name'
+        'SELECT name, display_name, icon, filename_template, default_directory FROM schemas ORDER BY name'
       ).all();
 
       return toolResult(schemas);

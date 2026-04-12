@@ -39,6 +39,7 @@ export function createSchema(db: Database.Database): void {
       display_name TEXT,
       icon TEXT,
       filename_template TEXT,
+      default_directory TEXT,
       field_claims TEXT NOT NULL DEFAULT '[]',
       metadata TEXT
     );

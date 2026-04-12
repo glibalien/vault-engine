@@ -33,7 +33,7 @@ export function renderSchemaFile(
   // Load schema from DB
   const schemaRow = db.prepare('SELECT * FROM schemas WHERE name = ?').get(schemaName) as {
     name: string; display_name: string | null; icon: string | null;
-    filename_template: string | null; metadata: string | null;
+    filename_template: string | null; default_directory: string | null; metadata: string | null;
   } | undefined;
   if (!schemaRow) return false;
 
@@ -58,6 +58,7 @@ export function renderSchemaFile(
   const data: Record<string, unknown> = { name: schemaRow.name };
   if (schemaRow.display_name) data.display_name = schemaRow.display_name;
   if (schemaRow.icon) data.icon = schemaRow.icon;
+  if (schemaRow.default_directory) data.default_directory = schemaRow.default_directory;
   if (schemaRow.filename_template) data.filename_template = schemaRow.filename_template;
 
   data.field_claims = claims.map(c => {

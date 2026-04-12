@@ -1,8 +1,9 @@
 import type { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import type Database from 'better-sqlite3';
 import { toolResult } from './errors.js';
+import type { ExtractorRegistry } from '../../extraction/registry.js';
 
-export function registerVaultStats(server: McpServer, db: Database.Database): void {
+export function registerVaultStats(server: McpServer, db: Database.Database, extractorRegistry?: ExtractorRegistry): void {
   server.tool(
     'vault-stats',
     'Returns vault statistics: node counts, type counts, field count, relationship count, orphan count, schema count.',
@@ -35,14 +36,20 @@ export function registerVaultStats(server: McpServer, db: Database.Database): vo
         'SELECT COUNT(*) as count FROM schemas'
       ).get() as { count: number }).count;
 
-      return toolResult({
+      const resultObj: Record<string, unknown> = {
         node_count: nodeCount,
         type_counts: typeCounts,
         field_count: fieldCount,
         relationship_count: relationshipCount,
         orphan_count: orphanCount,
         schema_count: schemaCount,
-      });
+      };
+
+      if (extractorRegistry) {
+        resultObj.extractors = extractorRegistry.getStatus();
+      }
+
+      return toolResult(resultObj);
     },
   );
 }

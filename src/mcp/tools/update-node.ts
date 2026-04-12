@@ -4,6 +4,8 @@ import type { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import type Database from 'better-sqlite3';
 import { z } from 'zod';
 import { nanoid } from 'nanoid';
+import { dirname, join } from 'node:path';
+import { existsSync } from 'node:fs';
 import { toolResult, toolErrorResult } from './errors.js';
 import { resolveNodeIdentity } from './resolve-identity.js';
 import { executeMutation } from '../../pipeline/execute.js';
@@ -199,7 +201,7 @@ function handleQueryMode(
   const batchId = nanoid();
 
   if (dryRun) {
-    return handleDryRun(db, matchedNodes, ops, batchId);
+    return handleDryRun(db, vaultPath, matchedNodes, ops, batchId);
   }
 
   return handleExecution(db, writeLock, vaultPath, matchedNodes, ops, batchId);
@@ -242,12 +244,39 @@ function computeNewFields(currentFields: Record<string, unknown>, ops: QueryMode
   return finalFields;
 }
 
+function computeNewPath(currentFilePath: string, title: string, ops: QueryModeOps): { newFilePath: string; newDir: string; moved: boolean } | null {
+  if (ops.set_path === undefined) return null;
+
+  const targetDir = ops.set_path === '.' ? '' : ops.set_path;
+  const newFilePath = targetDir === '' ? `${title}.md` : `${targetDir}/${title}.md`;
+
+  if (newFilePath === currentFilePath) return null; // already at target
+
+  return { newFilePath, newDir: targetDir, moved: true };
+}
+
+function checkMoveConflict(db: Database.Database, vaultPath: string, newFilePath: string, currentNodeId: string): string | null {
+  const dbConflict = db.prepare('SELECT id, title FROM nodes WHERE file_path = ?').get(newFilePath) as { id: string; title: string } | undefined;
+  if (dbConflict && dbConflict.id !== currentNodeId) {
+    return `File path "${newFilePath}" already exists (node: ${dbConflict.title})`;
+  }
+  if (existsSync(join(vaultPath, newFilePath))) {
+    const currentNode = db.prepare('SELECT file_path FROM nodes WHERE id = ?').get(currentNodeId) as { file_path: string } | undefined;
+    if (currentNode?.file_path !== newFilePath) {
+      return `File "${newFilePath}" already exists on disk`;
+    }
+  }
+  return null;
+}
+
 function hasChanges(
   currentTypes: string[],
   newTypes: string[],
   currentFields: Record<string, unknown>,
   newFields: Record<string, unknown>,
+  moved?: boolean,
 ): boolean {
+  if (moved) return true;
   // Check types changed
   if (currentTypes.length !== newTypes.length || !currentTypes.every(t => newTypes.includes(t))) {
     return true;
@@ -270,6 +299,7 @@ const PREVIEW_LIMIT = 20;
 
 function handleDryRun(
   db: Database.Database,
+  vaultPath: string,
   matchedNodes: Array<{ id: string; file_path: string; title: string; body: string }>,
   ops: QueryModeOps,
   batchId: string,
@@ -279,6 +309,7 @@ function handleDryRun(
     file_path: string;
     title: string;
     changes: {
+      path_changed?: { from: string; to: string };
       types_added: string[];
       types_removed: string[];
       fields_set: Record<string, { from: unknown; to: unknown }>;
@@ -295,7 +326,14 @@ function handleDryRun(
     const newTypes = computeNewTypes(currentTypes, ops);
     const newFields = computeNewFields(currentFields, ops);
 
-    if (!hasChanges(currentTypes, newTypes, currentFields, newFields)) {
+    const moveResult = computeNewPath(node.file_path, node.title, ops);
+    const moved = moveResult !== null;
+    let moveConflict: string | null = null;
+    if (moved) {
+      moveConflict = checkMoveConflict(db, vaultPath, moveResult!.newFilePath, node.id);
+    }
+
+    if (!hasChanges(currentTypes, newTypes, currentFields, newFields, moved)) {
       wouldSkip++;
       continue;
     }
@@ -303,7 +341,7 @@ function handleDryRun(
     // Validate proposed state
     const { claimsByType, globalFields } = loadSchemaContext(db, newTypes);
     const validation = validateProposedState(newFields, newTypes, claimsByType, globalFields);
-    const fails = hasBlockingErrors(validation.issues);
+    const fails = hasBlockingErrors(validation.issues) || moveConflict !== null;
 
     if (fails) {
       wouldFail++;
@@ -324,11 +362,16 @@ function handleDryRun(
         }
       }
 
+      const pathChanged = moved
+        ? { from: dirname(node.file_path) === '.' ? '' : dirname(node.file_path), to: moveResult!.newDir }
+        : undefined;
+
       preview.push({
         node_id: node.id,
         file_path: node.file_path,
         title: node.title,
         changes: {
+          ...(pathChanged && { path_changed: pathChanged }),
           types_added: typesAdded,
           types_removed: typesRemoved,
           fields_set: fieldsSet,

@@ -303,6 +303,53 @@ describe('update-node query mode — set_path', () => {
 
     expect(result.error).toContain('rename-node');
   });
+
+  it('dry-run preview shows path_changed for moved nodes', async () => {
+    createNode({ file_path: 'Alice.md', title: 'Alice', types: ['person'] });
+    createNode({ file_path: 'Bob.md', title: 'Bob', types: ['person'] });
+    createNode({ file_path: 'Persons/Charlie.md', title: 'Charlie', types: ['person'] });
+
+    const result = parseResult(await handler({
+      query: { types: ['person'] },
+      set_path: 'Persons',
+      dry_run: true,
+    }));
+
+    expect(result.dry_run).toBe(true);
+    expect(result.matched).toBe(3);
+    expect(result.would_update).toBe(2); // Alice, Bob move
+    expect(result.would_skip).toBe(1);   // Charlie already there
+
+    const preview = result.preview as Array<{
+      node_id: string; file_path: string; title: string;
+      changes: { path_changed?: { from: string; to: string }; types_added: string[]; types_removed: string[]; fields_set: Record<string, unknown>; would_fail: boolean };
+    }>;
+
+    const alice = preview.find(p => p.title === 'Alice')!;
+    expect(alice.changes.path_changed).toEqual({ from: '', to: 'Persons' });
+
+    const charlie = preview.find(p => p.title === 'Charlie');
+    expect(charlie).toBeUndefined(); // skipped, not in preview
+  });
+
+  it('dry-run marks move conflicts as would_fail', async () => {
+    createNode({ file_path: 'Alice.md', title: 'Alice', types: ['person'] });
+    createNode({ file_path: 'Persons/Alice.md', title: 'Alice Duplicate', types: ['person'] });
+
+    const result = parseResult(await handler({
+      query: { path_prefix: 'Alice.md' },
+      set_path: 'Persons',
+      dry_run: true,
+    }));
+
+    expect(result.matched).toBe(1);
+    expect(result.would_fail).toBe(1);
+
+    const preview = result.preview as Array<{
+      changes: { would_fail: boolean };
+    }>;
+    expect(preview[0].changes.would_fail).toBe(true);
+  });
 });
 
 describe('update-node query mode — edits_log', () => {

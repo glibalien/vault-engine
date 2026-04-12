@@ -288,3 +288,21 @@ describe('batch-mutate type enforcement', () => {
     expect(result.results).toHaveLength(2);
   });
 });
+
+// ── watcher path stays permissive ────────────────────────────────────
+
+describe('watcher path stays permissive', () => {
+  it('accepts unschematized types on watcher source', () => {
+    const result = executeMutation(db, writeLock, vaultPath, {
+      source: 'watcher',
+      node_id: null,
+      file_path: 'watcher-node.md',
+      title: 'Watcher Node',
+      types: ['nonexistent_type'],
+      fields: {},
+      body: '',
+    });
+    expect(result.node_id).toBeDefined();
+    expect(existsSync(join(vaultPath, 'watcher-node.md'))).toBe(true);
+  });
+});

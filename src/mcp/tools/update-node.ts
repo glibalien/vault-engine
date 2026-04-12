@@ -65,7 +65,7 @@ export function registerUpdateNode(
 ): void {
   server.tool(
     'update-node',
-    'Update an existing node (single or query-mode bulk). Patch semantics for fields (null removes a field). set_body and append_body are mutually exclusive. If set_types is provided, every type must have a defined schema. Use list-schemas to see available types. For query mode, provide query instead of node identity. Query mode supports set_path to move files to a target directory (title unchanged, no reference rewriting).',
+    'Update an existing node (single or query-mode bulk). Patch semantics for fields (null removes a field). set_body and append_body are mutually exclusive. Types can be changed with set_types (replace all), add_types (append), or remove_types (remove). All type changes require defined schemas — use list-schemas to see available types. For query mode, provide query instead of node identity. Query mode supports set_path to move files to a target directory (title unchanged, no reference rewriting).',
     paramsShape,
     async (params) => {
       const hasIdentity = params.node_id !== undefined || params.file_path !== undefined || params.title !== undefined;
@@ -128,10 +128,21 @@ export function registerUpdateNode(
       const currentBody = (db.prepare('SELECT body FROM nodes WHERE id = ?').get(node.node_id) as { body: string }).body;
 
       const finalTitle = set_title ?? node.title;
-      const finalTypes = set_types ?? currentTypes;
 
-      // Type-schema check (only when set_types is provided)
+      // Compute final types: set_types wins outright, otherwise apply add/remove
+      let finalTypes: string[];
+      const hasTypeOp = set_types !== undefined || params.add_types !== undefined || params.remove_types !== undefined;
       if (set_types !== undefined) {
+        finalTypes = set_types;
+      } else {
+        finalTypes = computeNewTypes(currentTypes, {
+          add_types: params.add_types,
+          remove_types: params.remove_types,
+        });
+      }
+
+      // Type-schema check (only when types are being changed)
+      if (hasTypeOp) {
         const typeCheck = checkTypesHaveSchemas(db, finalTypes);
         if (!typeCheck.valid) {
           return toolResult({

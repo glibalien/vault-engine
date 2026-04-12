@@ -208,6 +208,64 @@ describe('update-node type enforcement', () => {
     expect(fields).toBeUndefined(); // project field was not written
   });
 
+  it('applies add_types in single-node mode', async () => {
+    const seed = createSeedNode();
+    const handler = getToolHandler(registerUpdateNode);
+    const result = parseResult(await handler({
+      node_id: seed.node_id,
+      add_types: ['task'],
+    }) as any);
+    expect(result.error).toBeUndefined();
+    expect(result.types).toEqual(expect.arrayContaining(['note', 'task']));
+    // Verify DB was mutated
+    const types = (db.prepare('SELECT schema_type FROM node_types WHERE node_id = ?')
+      .all(seed.node_id) as Array<{ schema_type: string }>).map(t => t.schema_type);
+    expect(types).toEqual(expect.arrayContaining(['note', 'task']));
+  });
+
+  it('applies remove_types in single-node mode', async () => {
+    // Create a node with two types
+    const seed = executeMutation(db, writeLock, vaultPath, {
+      source: 'tool',
+      node_id: null,
+      file_path: 'multi.md',
+      title: 'Multi',
+      types: ['note', 'task'],
+      fields: {},
+      body: '',
+    });
+    const handler = getToolHandler(registerUpdateNode);
+    const result = parseResult(await handler({
+      node_id: seed.node_id,
+      remove_types: ['task'],
+    }) as any);
+    expect(result.error).toBeUndefined();
+    expect(result.types).toEqual(['note']);
+  });
+
+  it('applies add_types + remove_types together in single-node mode', async () => {
+    const seed = createSeedNode(); // has ['note']
+    const handler = getToolHandler(registerUpdateNode);
+    const result = parseResult(await handler({
+      node_id: seed.node_id,
+      add_types: ['task'],
+      remove_types: ['note'],
+    }) as any);
+    expect(result.error).toBeUndefined();
+    expect(result.types).toEqual(['task']);
+  });
+
+  it('rejects unknown type in single-node add_types', async () => {
+    const seed = createSeedNode();
+    const handler = getToolHandler(registerUpdateNode);
+    const result = parseResult(await handler({
+      node_id: seed.node_id,
+      add_types: ['reference'],
+    }) as any);
+    expect(result.error).toBe('UNKNOWN_TYPE');
+    expect(result.unknown_types).toEqual(['reference']);
+  });
+
   it('rejects unknown type in query mode add_types', async () => {
     createSeedNode();
     const handler = getToolHandler(registerUpdateNode);

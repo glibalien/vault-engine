@@ -7,6 +7,7 @@ import { deleteNodeByPath } from '../indexer/indexer.js';
 import { processFileChange } from './watcher.js';
 import type { IndexMutex } from './mutex.js';
 import type { WriteLockManager } from './write-lock.js';
+import type { WriteGate } from './write-gate.js';
 
 export interface ReconcilerOptions {
   initialDelayMs?: number;
@@ -18,6 +19,7 @@ export function startReconciler(
   db: Database.Database,
   mutex: IndexMutex,
   writeLock?: WriteLockManager,
+  writeGate?: WriteGate,
   options?: ReconcilerOptions,
 ): { stop: () => void } {
   const initialDelayMs = options?.initialDelayMs ?? 2 * 60 * 1000;
@@ -68,7 +70,7 @@ export function startReconciler(
 
           // Process through pipeline if writeLock available, else skip
           if (writeLock) {
-            processFileChange(absPath, relPath, db, writeLock, vaultPath);
+            processFileChange(absPath, relPath, db, writeLock, vaultPath, writeGate);
           }
           stats.indexed++;
         } catch {

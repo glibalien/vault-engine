@@ -33,7 +33,10 @@ export function registerCreateNode(
 
       // Derive file path
       let filePath: string;
-      if (dirPath) {
+      if (dirPath && dirPath.endsWith('.md')) {
+        // Treat as full file path, not a directory
+        filePath = dirPath;
+      } else if (dirPath) {
         filePath = `${dirPath}/${title}.md`;
       } else {
         // Check for filename template

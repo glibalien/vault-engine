@@ -127,6 +127,40 @@ describe('buildNodeQuery', () => {
     });
   });
 
+  describe('path_dir filter', () => {
+    it('matches root-level files with path_dir: ""', () => {
+      // Add a root-level node for this test
+      db.prepare(
+        'INSERT INTO nodes (id, file_path, title, body, content_hash, file_mtime, indexed_at) VALUES (?, ?, ?, ?, ?, ?, ?)'
+      ).run('n_root', 'root-note.md', 'Root Note', '', 'hr', 5000, 5000);
+
+      const { rows, total } = runQuery({ path_dir: '' });
+      expect(total).toBe(1);
+      expect(rows[0].id).toBe('n_root');
+
+      // Clean up
+      db.prepare('DELETE FROM nodes WHERE id = ?').run('n_root');
+    });
+
+    it('matches files in a specific directory (not subdirs)', () => {
+      // Add a nested node
+      db.prepare(
+        'INSERT INTO nodes (id, file_path, title, body, content_hash, file_mtime, indexed_at) VALUES (?, ?, ?, ?, ?, ?, ?)'
+      ).run('n_deep', 'meetings/sub/deep.md', 'Deep', '', 'hd', 5000, 5000);
+
+      const { rows, total } = runQuery({ path_dir: 'meetings' });
+      expect(total).toBe(1);
+      expect(rows[0].id).toBe('n1'); // meetings/meeting.md, not meetings/sub/deep.md
+
+      db.prepare('DELETE FROM nodes WHERE id = ?').run('n_deep');
+    });
+
+    it('returns empty when no files in specified dir', () => {
+      const { total } = runQuery({ path_dir: 'nonexistent' });
+      expect(total).toBe(0);
+    });
+  });
+
   describe('types filter', () => {
     it('returns nodes with the specified type', () => {
       const { rows, total } = runQuery({ types: ['task'] });

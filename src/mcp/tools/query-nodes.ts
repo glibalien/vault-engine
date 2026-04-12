@@ -18,6 +18,7 @@ const paramsShape = {
   }).optional(),
   path_prefix: z.string().optional(),
   without_path_prefix: z.string().optional(),
+  path_dir: z.string().optional(),
   modified_since: z.string().optional(),
   sort_by: z.enum(['title', 'file_mtime', 'indexed_at']).default('title'),
   sort_order: z.enum(['asc', 'desc']).default('asc'),
@@ -45,6 +46,7 @@ export function registerQueryNodes(server: McpServer, db: Database.Database): vo
         references: params.references,
         path_prefix: params.path_prefix,
         without_path_prefix: params.without_path_prefix,
+        path_dir: params.path_dir,
         modified_since: params.modified_since,
       };
 

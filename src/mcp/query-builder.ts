@@ -29,6 +29,7 @@ export interface NodeQueryFilter {
   references?: ReferenceFilter;
   path_prefix?: string;
   without_path_prefix?: string;
+  path_dir?: string;
   modified_since?: string;
 }
 
@@ -184,6 +185,19 @@ export function buildNodeQuery(filter: NodeQueryFilter, db?: Database.Database):
   if (filter.without_path_prefix) {
     whereClauses.push('n.file_path NOT LIKE ?');
     params.push(`${filter.without_path_prefix}%`);
+  }
+
+  // Exact directory filter (matches files whose immediate parent is the given dir)
+  if (filter.path_dir !== undefined) {
+    if (filter.path_dir === '' || filter.path_dir === '.') {
+      // Root: file_path has no directory separator
+      whereClauses.push("n.file_path NOT LIKE '%/%'");
+    } else {
+      // Specific dir: under dir/ but not under dir/sub/
+      whereClauses.push('n.file_path LIKE ? AND n.file_path NOT LIKE ?');
+      params.push(`${filter.path_dir}/%`);
+      params.push(`${filter.path_dir}/%/%`);
+    }
   }
 
   // Modified since filter

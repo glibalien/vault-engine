@@ -1,4 +1,6 @@
 export { WriteLockManager } from './write-lock.js';
+export { WriteGate } from './write-gate.js';
+export type { WriteGateOptions } from './write-gate.js';
 export { IndexMutex } from './mutex.js';
 export type { PendingEvent } from './mutex.js';
 export { startWatcher } from './watcher.js';

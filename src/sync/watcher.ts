@@ -13,6 +13,7 @@ import { populateDefaults } from '../pipeline/populate-defaults.js';
 import { reconstructValue } from '../pipeline/classify-value.js';
 import type { IndexMutex } from './mutex.js';
 import type { WriteLockManager } from './write-lock.js';
+import type { WriteGate } from './write-gate.js';
 
 const WIKILINK_RE = /\[\[([^\]|]+)(?:\|([^\]]+))?\]\]/;
 
@@ -31,9 +32,10 @@ export function startWatcher(
   db: Database.Database,
   mutex: IndexMutex,
   writeLock: WriteLockManager,
+  writeGate: WriteGate,
   options?: WatcherOptions,
 ): FSWatcher {
-  const debounceMs = options?.debounceMs ?? 500;
+  const debounceMs = options?.debounceMs ?? 2500;
   const maxWaitMs = options?.maxWaitMs ?? 5000;
   const pendingTimers = new Map<string, PendingTimer>();
   const retryCount = new Map<string, number>();
@@ -45,7 +47,7 @@ export function startWatcher(
       deleteNodeByPath(relPath, db);
     } else {
       const absPath = join(vaultPath, event.path);
-      processFileChange(absPath, relative(vaultPath, absPath), db, writeLock, vaultPath);
+      processFileChange(absPath, relative(vaultPath, absPath), db, writeLock, vaultPath, writeGate);
     }
   };
 
@@ -106,7 +108,7 @@ export function startWatcher(
 
       // Process through mutex via write pipeline
       mutex.run(async () => {
-        processFileChange(absPath, relPath, db, writeLock, vaultPath);
+        processFileChange(absPath, relPath, db, writeLock, vaultPath, writeGate);
       });
     };
 
@@ -124,6 +126,9 @@ export function startWatcher(
 
   function handleUnlink(absPath: string): void {
     const relPath = relative(vaultPath, absPath);
+
+    // Cancel any pending deferred write
+    writeGate.cancel(relPath);
 
     // Clear any pending timers for this file
     const timers = pendingTimers.get(absPath);
@@ -181,6 +186,7 @@ export function processFileChange(
   db: Database.Database,
   writeLock: WriteLockManager,
   vaultPath: string,
+  writeGate?: WriteGate,
 ): void {
   let content: string;
   try {
@@ -234,22 +240,6 @@ export function processFileChange(
     const currentTypes = (db.prepare('SELECT schema_type FROM node_types WHERE node_id = ?')
       .all(nodeId) as Array<{ schema_type: string }>).map(t => t.schema_type);
 
-    // Skip cosmetic-only writes: if the file has no title in frontmatter,
-    // no new types, no type removals, no fields, and no body change, the
-    // only thing the engine would do is add a filename-derived title and
-    // normalize YAML.  That write races with Obsidian's editing — the user
-    // may still be in the middle of adding a property value.  Skip now;
-    // the next watcher event (after the user finishes) will process the
-    // real change.
-    if (!parsed.titleFromFrontmatter) {
-      const dbBody = (db.prepare('SELECT body FROM nodes WHERE id = ?').get(nodeId) as { body: string } | undefined)?.body ?? '';
-      const typesUnchanged = parsed.types.length === currentTypes.length &&
-        parsed.types.every(t => currentTypes.includes(t));
-      if (typesUnchanged && parsed.fields.size === 0 && parsed.body === dbBody) {
-        return;
-      }
-    }
-
     const newTypes = parsed.types.filter(t => !currentTypes.includes(t));
     if (newTypes.length > 0) {
       // Load current fields from DB for default population
@@ -285,11 +275,11 @@ export function processFileChange(
     }
   }
 
-  // Hash the content at parse time for stale-file detection
   const sourceContentHash = sha256(content);
+  const useDbOnly = writeGate !== undefined;
 
   try {
-    executeMutation(db, writeLock, vaultPath, {
+    const result = executeMutation(db, writeLock, vaultPath, {
       source: 'watcher',
       node_id: nodeId,
       file_path: relPath,
@@ -301,11 +291,74 @@ export function processFileChange(
       source_content_hash: sourceContentHash,
       has_populated_defaults: hasPopulatedDefaults,
       title_from_frontmatter: parsed.titleFromFrontmatter,
+      db_only: useDbOnly,
     });
+
+    // If the pipeline produced a deferred write, hand it to the WriteGate.
+    // The callback re-renders from current DB state at write time (not the
+    // stale parse-time state), so multiple rapid edits coalesce into one write.
+    if (result.deferred_write && writeGate) {
+      writeGate.fileChanged(relPath, () => {
+        try {
+          const currentNode = db.prepare('SELECT id, title, body FROM nodes WHERE file_path = ?')
+            .get(relPath) as { id: string; title: string; body: string } | undefined;
+          if (!currentNode) return; // Node was deleted
+
+          const types = (db.prepare('SELECT schema_type FROM node_types WHERE node_id = ?')
+            .all(currentNode.id) as { schema_type: string }[]).map(r => r.schema_type);
+          const fields = rebuildFieldsFromDb(db, currentNode.id);
+          const rawTexts = rebuildRawTextsFromDb(db, currentNode.id);
+
+          executeMutation(db, writeLock, vaultPath, {
+            source: 'watcher',
+            node_id: currentNode.id,
+            file_path: relPath,
+            title: currentNode.title,
+            types,
+            fields,
+            body: currentNode.body,
+            raw_field_texts: rawTexts,
+            db_only: false,
+          });
+        } catch {
+          // Write failed — file may have been deleted, node removed, etc.
+          // Safe to ignore; reconciler will catch inconsistencies.
+        }
+      });
+    }
   } catch {
-    // Pipeline errors on watcher path are unexpected (watcher absorbs)
-    // but shouldn't crash the watcher
+    // Pipeline errors on watcher path are unexpected but shouldn't crash
   }
+}
+
+function rebuildFieldsFromDb(db: Database.Database, nodeId: string): Record<string, unknown> {
+  const rows = db.prepare(
+    'SELECT field_name, value_text, value_number, value_date, value_json FROM node_fields WHERE node_id = ?'
+  ).all(nodeId) as Array<{
+    field_name: string;
+    value_text: string | null;
+    value_number: number | null;
+    value_date: string | null;
+    value_json: string | null;
+  }>;
+
+  const fields: Record<string, unknown> = {};
+  for (const row of rows) {
+    fields[row.field_name] = reconstructValue(row);
+  }
+  return fields;
+}
+
+function rebuildRawTextsFromDb(db: Database.Database, nodeId: string): Record<string, string> {
+  const rows = db.prepare(
+    'SELECT field_name, value_raw_text FROM node_fields WHERE node_id = ? AND value_raw_text IS NOT NULL'
+  ).all(nodeId) as Array<{ field_name: string; value_raw_text: string }>;
+
+  const texts: Record<string, string> = {};
+  for (const row of rows) {
+    texts[row.field_name] = row.value_raw_text;
+  }
+  return texts;
 }
 
 /**

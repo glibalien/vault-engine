@@ -211,6 +211,22 @@ export function processFileChange(
     const currentTypes = (db.prepare('SELECT schema_type FROM node_types WHERE node_id = ?')
       .all(nodeId) as Array<{ schema_type: string }>).map(t => t.schema_type);
 
+    // Skip cosmetic-only writes: if the file has no title in frontmatter,
+    // no new types, no type removals, no fields, and no body change, the
+    // only thing the engine would do is add a filename-derived title and
+    // normalize YAML.  That write races with Obsidian's editing — the user
+    // may still be in the middle of adding a property value.  Skip now;
+    // the next watcher event (after the user finishes) will process the
+    // real change.
+    if (!parsed.titleFromFrontmatter) {
+      const dbBody = (db.prepare('SELECT body FROM nodes WHERE id = ?').get(nodeId) as { body: string } | undefined)?.body ?? '';
+      const typesUnchanged = parsed.types.length === currentTypes.length &&
+        parsed.types.every(t => currentTypes.includes(t));
+      if (typesUnchanged && parsed.fields.size === 0 && parsed.body === dbBody) {
+        return;
+      }
+    }
+
     const newTypes = parsed.types.filter(t => !currentTypes.includes(t));
     if (newTypes.length > 0) {
       // Load current fields from DB for default population
@@ -244,6 +260,9 @@ export function processFileChange(
     }
   }
 
+  // Hash the content at parse time for stale-file detection
+  const sourceContentHash = sha256(content);
+
   try {
     executeMutation(db, writeLock, vaultPath, {
       source: 'watcher',
@@ -254,6 +273,7 @@ export function processFileChange(
       fields: parsedFields,
       body: parsed.body,
       raw_field_texts: rawFieldTexts,
+      source_content_hash: sourceContentHash,
     });
   } catch {
     // Pipeline errors on watcher path are unexpected (watcher absorbs)

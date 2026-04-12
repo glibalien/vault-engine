@@ -22,6 +22,8 @@ export interface WikiLink {
 export interface ParsedNode {
   /** Resolved title: frontmatter title → first H1 → filename → null. */
   title: string | null;
+  /** True when the title came from a frontmatter `title` key (not H1 or filename). */
+  titleFromFrontmatter: boolean;
   /** Types extracted from frontmatter `types` field. */
   types: string[];
   /** All frontmatter KV pairs except title and types. */

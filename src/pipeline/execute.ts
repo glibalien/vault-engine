@@ -217,6 +217,34 @@ export function executeMutation(
       } as PipelineResult & { _noop: boolean };
     }
 
+    // Stale-file guard (watcher path): if the file changed on disk since we
+    // parsed it, someone else (e.g. Obsidian) kept editing.  Abort and let
+    // the next watcher event process the newer content instead of overwriting.
+    if (mutation.source_content_hash && existingContent !== null) {
+      const currentHash = sha256(existingContent);
+      if (currentHash !== mutation.source_content_hash) {
+        db.prepare('INSERT INTO edits_log (node_id, timestamp, event_type, details) VALUES (?, ?, ?, ?)').run(
+          mutation.node_id,
+          Date.now(),
+          'stale-file-skipped',
+          JSON.stringify({
+            file_path: mutation.file_path,
+            source_hash: mutation.source_content_hash,
+            current_hash: currentHash,
+          }),
+        );
+        return {
+          node_id: mutation.node_id ?? '',
+          file_path: mutation.file_path,
+          validation,
+          rendered_hash: renderedHash,
+          edits_logged: 0,
+          file_written: false,
+          _stale: true,
+        } as PipelineResult & { _stale: boolean };
+      }
+    }
+
     // ── Stage 6: Write (under write lock) ───────────────────────────
     return writeLock.withLockSync(absPath, () => {
       // Write file to disk
@@ -321,8 +349,9 @@ export function executeMutation(
   // Run the transaction
   const result = txn();
 
-  // Handle no-op case (transaction was committed with no changes)
-  if ((result as PipelineResult & { _noop?: boolean })._noop) {
+  // Handle no-op / stale cases (transaction committed with no file write or DB mutation)
+  if ((result as PipelineResult & { _noop?: boolean })._noop ||
+      (result as PipelineResult & { _stale?: boolean })._stale) {
     return {
       node_id: mutation.node_id ?? '',
       file_path: mutation.file_path,

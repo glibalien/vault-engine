@@ -295,6 +295,78 @@ describe('executeMutation — watcher path', () => {
   });
 });
 
+// ── Stale-file guard ─────────────────────────────────────────────────
+
+describe('executeMutation — stale-file guard', () => {
+  it('aborts write when file changed since parsing', () => {
+    // Create a node first
+    const created = executeMutation(db, writeLock, vaultPath, makeMutation({
+      body: 'Original body.',
+    }));
+    expect(created.file_written).toBe(true);
+
+    // Read the file hash as the watcher would at parse time
+    const filePath = join(vaultPath, 'test-node.md');
+    const originalContent = readFileSync(filePath, 'utf-8');
+    const originalHash = sha256(originalContent);
+
+    // Simulate the file being edited by Obsidian AFTER the watcher parsed it
+    writeFileSync(filePath, '---\ntitle: Test Node\ntypes:\n  - task\n---\nEdited by Obsidian.\n', 'utf-8');
+
+    // Watcher mutation with the OLD hash — file is now stale
+    const result = executeMutation(db, writeLock, vaultPath, makeMutation({
+      source: 'watcher',
+      node_id: created.node_id,
+      body: 'Original body.',
+      source_content_hash: originalHash,
+    }));
+
+    // Should NOT write — file changed since parsing
+    expect(result.file_written).toBe(false);
+
+    // File on disk should still be the Obsidian edit, NOT overwritten
+    const fileAfter = readFileSync(filePath, 'utf-8');
+    expect(fileAfter).toContain('Edited by Obsidian.');
+
+    // Should have a stale-file-skipped log entry
+    const logs = db.prepare(
+      "SELECT details FROM edits_log WHERE node_id = ? AND event_type = 'stale-file-skipped'"
+    ).all(created.node_id) as { details: string }[];
+    expect(logs.length).toBe(1);
+  });
+
+  it('writes normally when source_content_hash matches', () => {
+    // Create a node
+    const created = executeMutation(db, writeLock, vaultPath, makeMutation());
+    const filePath = join(vaultPath, 'test-node.md');
+    const currentContent = readFileSync(filePath, 'utf-8');
+    const currentHash = sha256(currentContent);
+
+    // Watcher mutation with matching hash — not stale
+    const result = executeMutation(db, writeLock, vaultPath, makeMutation({
+      source: 'watcher',
+      node_id: created.node_id,
+      body: 'Updated body.',
+      source_content_hash: currentHash,
+    }));
+
+    expect(result.file_written).toBe(true);
+  });
+
+  it('tool path ignores source_content_hash (not set)', () => {
+    const created = executeMutation(db, writeLock, vaultPath, makeMutation());
+
+    // Tool path never sets source_content_hash — should always write
+    const result = executeMutation(db, writeLock, vaultPath, makeMutation({
+      source: 'tool',
+      node_id: created.node_id,
+      body: 'Updated via tool.',
+    }));
+
+    expect(result.file_written).toBe(true);
+  });
+});
+
 // ── Relationships ─────────────────────────────────────────────────────
 
 describe('executeMutation — relationships', () => {

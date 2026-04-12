@@ -60,9 +60,13 @@ describe('renderNode', () => {
     expect(result).toContain('types:\n  - task');
   });
 
-  it('empty types rendered as empty array', () => {
+  it('empty types rendered as implicit null (bare key)', () => {
     const result = renderNode(makeInput({ types: [] }));
-    expect(result).toContain('types: []');
+    // Should have `types:` with nothing after it (implicit null, not `types: []`)
+    expect(result).toContain('types:');
+    expect(result).not.toContain('types: []');
+    expect(result).not.toContain('types: null');
+    // Obsidian can safely append `\n  - person` to this
   });
 
   // ── Field ordering ──────────────────────────────────────────────────

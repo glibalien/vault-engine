@@ -13,6 +13,7 @@ export interface ProposedMutation {
   fields: Record<string, unknown>;   // proposed field values
   body: string;
   raw_field_texts?: Record<string, string>;  // watcher path: pre-stripped text for wiki-link fields
+  source_content_hash?: string;              // watcher path: SHA256 of file at parse time — stale-file guard
 }
 
 export interface PipelineResult {

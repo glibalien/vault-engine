@@ -11,6 +11,7 @@ const YAML_OPTIONS = {
   lineWidth: 0,             // no line wrapping
   defaultKeyType: 'PLAIN' as const,
   defaultStringType: 'PLAIN' as const,
+  nullStr: '',               // null → implicit empty (bare `key:`) not `key: null`
 };
 
 /**
@@ -53,8 +54,11 @@ export function renderNode(input: RenderInput): string {
   // title always first
   fm.title = title;
 
-  // types always second, always block sequence
-  fm.types = types;
+  // types always second — non-empty as block sequence, empty as implicit null.
+  // Empty arrays serialize as flow-notation `types: []` which Obsidian
+  // can't edit: adding items produces `types: []\n  - x` (invalid YAML).
+  // Implicit null (`types:`) lets Obsidian append `\n  - person` cleanly.
+  fm.types = types.length > 0 ? types : null;
 
   // Fields in ordering
   for (const entry of fieldOrdering) {

@@ -65,6 +65,7 @@ export function parseMarkdown(raw: string, filePath: string): ParsedNode {
   if (fm.parseError !== null) {
     return {
       title: titleFromFilename(filePath),
+      titleFromFrontmatter: false,
       types: [],
       fields: new Map(),
       body: fm.body,
@@ -74,6 +75,7 @@ export function parseMarkdown(raw: string, filePath: string): ParsedNode {
   }
 
   // Resolve title: frontmatter → H1 → filename
+  const titleFromFm = fm.title !== null;
   let title = fm.title;
   if (title === null) {
     title = extractFirstH1(fm.body);
@@ -90,6 +92,7 @@ export function parseMarkdown(raw: string, filePath: string): ParsedNode {
 
   return {
     title,
+    titleFromFrontmatter: titleFromFm,
     types: fm.types,
     fields: fm.fields,
     body: fm.body,

@@ -36,6 +36,7 @@ export function startWatcher(
   const debounceMs = options?.debounceMs ?? 500;
   const maxWaitMs = options?.maxWaitMs ?? 5000;
   const pendingTimers = new Map<string, PendingTimer>();
+  const retryCount = new Map<string, number>();
 
   // Wire mutex.processEvent to handle queued events during indexing
   mutex.processEvent = async (event) => {
@@ -81,6 +82,27 @@ export function startWatcher(
         | { content_hash: string }
         | undefined;
       if (row && row.content_hash === hash) return;
+
+      // Parse check: if YAML is broken, this may be Obsidian's truncation
+      // window (documented bug where growing files are temporarily truncated
+      // on disk for 1-2s). Re-enqueue with a retry delay instead of
+      // processing garbage.
+      const parseCheck = parseMarkdown(content, relPath);
+      if (parseCheck.parseError !== null) {
+        const retryKey = absPath;
+        const retries = (retryCount.get(retryKey) ?? 0) + 1;
+        if (retries <= 3) {
+          retryCount.set(retryKey, retries);
+          const retryTimer = setTimeout(fire, 2000);
+          pendingTimers.set(absPath, { debounce: retryTimer, maxWait: retryTimer });
+          return;
+        }
+        // Max retries exceeded — fall through to processFileChange
+        // which will log the parse error and preserve DB state
+        retryCount.delete(retryKey);
+      } else {
+        retryCount.delete(absPath);
+      }
 
       // Process through mutex via write pipeline
       mutex.run(async () => {

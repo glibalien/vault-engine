@@ -52,6 +52,7 @@ npm run start:http   # node dist/index.js --transport http
 - **Parse retry**: if YAML parsing fails (e.g. Obsidian truncation bug where growing files are temporarily truncated on disk), the watcher retries up to 3 times with 2s delay before logging a parse error.
 - **Shared query builder**: `src/mcp/query-builder.ts` — single SQL builder used by both `query-nodes` and `update-node` query mode. Supports negation filters (`without_types`, `without_fields`).
 - **Bulk mutate**: `update-node` query mode supports `add_types`, `remove_types`, `set_fields` across filtered node sets. Best-effort execution (not transactional). Dry-run defaults to true in query mode.
+- **Type safety**: Tool-initiated writes reject types without schemas (`UNKNOWN_TYPE` error with `available_schemas`). Watcher path stays permissive. `create-node` and `update-node` single-node mode support `dry_run`. `update-node` single-node mode supports `add_types`/`remove_types` (not just `set_types`). See `src/pipeline/check-types.ts`.
 
 ## Phased delivery
 

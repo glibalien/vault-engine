@@ -217,52 +217,11 @@ export function executeMutation(
       } as PipelineResult & { _noop: boolean };
     }
 
-    // Stale-file guard (watcher path): if the file changed on disk since we
-    // parsed it, someone else (e.g. Obsidian) kept editing.  Abort and let
-    // the next watcher event process the newer content instead of overwriting.
-    if (mutation.source_content_hash && existingContent !== null) {
-      const currentHash = sha256(existingContent);
-      if (currentHash !== mutation.source_content_hash) {
-        db.prepare('INSERT INTO edits_log (node_id, timestamp, event_type, details) VALUES (?, ?, ?, ?)').run(
-          mutation.node_id,
-          Date.now(),
-          'stale-file-skipped',
-          JSON.stringify({
-            file_path: mutation.file_path,
-            source_hash: mutation.source_content_hash,
-            current_hash: currentHash,
-          }),
-        );
-        return {
-          node_id: mutation.node_id ?? '',
-          file_path: mutation.file_path,
-          validation,
-          rendered_hash: renderedHash,
-          edits_logged: 0,
-          file_written: false,
-          _stale: true,
-        } as PipelineResult & { _stale: boolean };
-      }
-    }
-
-    // ── Watcher-path write skip: if the pipeline didn't make substantive
-    // changes (no defaults added, no values coerced, no rejected values
-    // retained from DB), skip the file write and just update the DB.
-    // The file is already the source of truth on the watcher path —
-    // rewriting it for cosmetic reasons (field ordering, YAML formatting)
-    // races with Obsidian's editor and causes field-deletion flicker.
-    const needsFileWrite = mutation.source !== 'watcher' ||
-      mutation.node_id === null ||  // new node always needs a write (no file exists yet)
-      defaultedFields.length > 0 ||
-      mutation.has_populated_defaults === true ||
-      mutation.title_from_frontmatter === false ||
-      Object.keys(retainedValues).length > 0 ||
-      Object.values(validation.coerced_state).some(cv => cv.changed);
-
     // ── Stage 6: Write (under write lock) ───────────────────────────
     return writeLock.withLockSync(absPath, () => {
-      // Only write file if pipeline made substantive changes AND db_only is not set
-      const shouldWriteFile = needsFileWrite && !mutation.db_only;
+      // db_only: update DB only, return rendered content for deferred write.
+      // Otherwise: write the file immediately.
+      const shouldWriteFile = !mutation.db_only;
       if (shouldWriteFile) {
         atomicWriteFile(absPath, fileContent, tmpDir);
       }
@@ -358,7 +317,7 @@ export function executeMutation(
       );
       const editsLogged = writeEditsLogEntries(db, logEntries);
 
-      const deferredWrite = (mutation.db_only && needsFileWrite)
+      const deferredWrite = mutation.db_only
         ? { file_content: fileContent, rendered_hash: renderedHash }
         : undefined;
 
@@ -377,9 +336,8 @@ export function executeMutation(
   // Run the transaction
   const result = txn();
 
-  // Handle no-op / stale cases (transaction committed with no file write or DB mutation)
-  if ((result as PipelineResult & { _noop?: boolean })._noop ||
-      (result as PipelineResult & { _stale?: boolean })._stale) {
+  // Handle no-op case (transaction committed with no file write or DB mutation)
+  if ((result as PipelineResult & { _noop?: boolean })._noop) {
     return {
       node_id: mutation.node_id ?? '',
       file_path: mutation.file_path,

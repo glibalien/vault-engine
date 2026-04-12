@@ -5,7 +5,7 @@ import type Database from 'better-sqlite3';
 import { z } from 'zod';
 import { nanoid } from 'nanoid';
 import { dirname, join } from 'node:path';
-import { existsSync } from 'node:fs';
+import { existsSync, renameSync, mkdirSync } from 'node:fs';
 import { toolResult, toolErrorResult } from './errors.js';
 import { resolveNodeIdentity } from './resolve-identity.js';
 import { executeMutation } from '../../pipeline/execute.js';
@@ -409,7 +409,49 @@ function handleExecution(
     const newTypes = computeNewTypes(currentTypes, ops);
     const newFields = computeNewFields(currentFields, ops);
 
-    if (!hasChanges(currentTypes, newTypes, currentFields, newFields)) {
+    // ── Move (set_path) ──────────────────────────────────────────────
+    const moveResult = computeNewPath(node.file_path, node.title, ops);
+    const moved = moveResult !== null;
+    let effectiveFilePath = node.file_path;
+
+    if (moved) {
+      const conflict = checkMoveConflict(db, vaultPath, moveResult!.newFilePath, node.id);
+      if (conflict) {
+        errors.push({ node_id: node.id, file_path: node.file_path, error: conflict });
+        continue;
+      }
+
+      if (node.title.includes('/') || node.title.includes('\\')) {
+        errors.push({ node_id: node.id, file_path: node.file_path, error: 'Title contains path separators, cannot move' });
+        continue;
+      }
+
+      const oldAbs = join(vaultPath, node.file_path);
+      const newAbs = join(vaultPath, moveResult!.newFilePath);
+
+      if (!existsSync(oldAbs)) {
+        errors.push({ node_id: node.id, file_path: node.file_path, error: 'Source file missing from disk' });
+        continue;
+      }
+
+      const targetDir = dirname(newAbs);
+      if (!existsSync(targetDir)) {
+        mkdirSync(targetDir, { recursive: true });
+      }
+
+      // Move under write lock for both paths
+      writeLock.withLockSync(oldAbs, () => {
+        writeLock.withLockSync(newAbs, () => {
+          renameSync(oldAbs, newAbs);
+          // Clear content_hash so executeMutation's no-op check doesn't skip re-rendering at the new path
+          db.prepare('UPDATE nodes SET file_path = ?, content_hash = NULL WHERE id = ?').run(moveResult!.newFilePath, node.id);
+        });
+      });
+
+      effectiveFilePath = moveResult!.newFilePath;
+    }
+
+    if (!hasChanges(currentTypes, newTypes, currentFields, newFields, moved)) {
       skipped++;
       continue;
     }
@@ -418,7 +460,7 @@ function handleExecution(
       const result = executeMutation(db, writeLock, vaultPath, {
         source: 'tool',
         node_id: node.id,
-        file_path: node.file_path,
+        file_path: effectiveFilePath,
         title: node.title,
         types: newTypes,
         fields: newFields,

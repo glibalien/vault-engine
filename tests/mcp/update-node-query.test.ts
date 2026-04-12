@@ -1,4 +1,6 @@
 import { describe, it, expect, beforeEach, afterEach } from 'vitest';
+import { existsSync } from 'node:fs';
+import { join } from 'node:path';
 import type { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import Database from 'better-sqlite3';
 import { createSchema } from '../../src/db/schema.js';
@@ -349,6 +351,94 @@ describe('update-node query mode — set_path', () => {
       changes: { would_fail: boolean };
     }>;
     expect(preview[0].changes.would_fail).toBe(true);
+  });
+
+  it('moves files to target directory', async () => {
+    createNode({ file_path: 'Alice.md', title: 'Alice', types: ['person'] });
+    createNode({ file_path: 'Bob.md', title: 'Bob', types: ['person'] });
+
+    const result = parseResult(await handler({
+      query: { types: ['person'] },
+      set_path: 'Persons',
+      dry_run: false,
+    }));
+
+    expect(result.updated).toBe(2);
+    expect(result.errors).toEqual([]);
+
+    const alice = db.prepare("SELECT file_path FROM nodes WHERE title = 'Alice'").get() as { file_path: string };
+    expect(alice.file_path).toBe('Persons/Alice.md');
+
+    expect(existsSync(join(vaultPath, 'Persons/Alice.md'))).toBe(true);
+    expect(existsSync(join(vaultPath, 'Alice.md'))).toBe(false);
+  });
+
+  it('skips nodes already at target path', async () => {
+    createNode({ file_path: 'Persons/Alice.md', title: 'Alice', types: ['person'] });
+
+    const result = parseResult(await handler({
+      query: { types: ['person'] },
+      set_path: 'Persons',
+      dry_run: false,
+    }));
+
+    expect(result.matched).toBe(1);
+    expect(result.skipped).toBe(1);
+    expect(result.updated).toBe(0);
+  });
+
+  it('reports conflict errors and continues', async () => {
+    createNode({ file_path: 'Alice.md', title: 'Alice', types: ['person'] });
+    createNode({ file_path: 'Persons/Alice.md', title: 'Alice Dup', types: ['person'] });
+    createNode({ file_path: 'Bob.md', title: 'Bob', types: ['person'] });
+
+    const result = parseResult(await handler({
+      query: { path_prefix: '' },
+      set_path: 'Persons',
+      add_types: ['person'],
+      dry_run: false,
+    }));
+
+    const errors = result.errors as Array<{ node_id: string; file_path: string; error: string }>;
+    expect(errors.some(e => e.file_path === 'Alice.md')).toBe(true);
+
+    const bob = db.prepare("SELECT file_path FROM nodes WHERE title = 'Bob'").get() as { file_path: string };
+    expect(bob.file_path).toBe('Persons/Bob.md');
+  });
+
+  it('combines set_path with add_types', async () => {
+    createNode({ file_path: 'Alice.md', title: 'Alice', types: [] });
+
+    const result = parseResult(await handler({
+      query: { path_prefix: 'Alice.md' },
+      set_path: 'Persons',
+      add_types: ['person'],
+      dry_run: false,
+    }));
+
+    expect(result.updated).toBe(1);
+
+    const alice = db.prepare("SELECT file_path FROM nodes WHERE title = 'Alice'").get() as { file_path: string };
+    expect(alice.file_path).toBe('Persons/Alice.md');
+
+    const types = db.prepare("SELECT schema_type FROM node_types WHERE node_id = (SELECT id FROM nodes WHERE title = 'Alice')").all() as Array<{ schema_type: string }>;
+    expect(types.map(t => t.schema_type)).toContain('person');
+  });
+
+  it('moves to vault root with set_path empty string', async () => {
+    createNode({ file_path: 'Persons/Alice.md', title: 'Alice', types: ['person'] });
+
+    const result = parseResult(await handler({
+      query: { types: ['person'] },
+      set_path: '',
+      dry_run: false,
+    }));
+
+    expect(result.updated).toBe(1);
+
+    const alice = db.prepare("SELECT file_path FROM nodes WHERE title = 'Alice'").get() as { file_path: string };
+    expect(alice.file_path).toBe('Alice.md');
+    expect(existsSync(join(vaultPath, 'Alice.md'))).toBe(true);
   });
 });
 

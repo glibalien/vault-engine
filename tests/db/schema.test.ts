@@ -2,7 +2,7 @@ import { describe, it, expect } from 'vitest';
 import Database from 'better-sqlite3';
 import { createTestDb } from '../helpers/db.js';
 import { createSchema } from '../../src/db/schema.js';
-import { upgradeToPhase2, upgradeToPhase3 } from '../../src/db/migrate.js';
+import { upgradeToPhase2, upgradeToPhase3, upgradeToPhase6 } from '../../src/db/migrate.js';
 import { getNodeConformance } from '../../src/validation/conformance.js';
 
 describe('createSchema', () => {
@@ -354,5 +354,54 @@ describe('upgradeToPhase3', () => {
       "SELECT name FROM sqlite_master WHERE type='table' AND name='schema_file_hashes'"
     ).all();
     expect(tables).toHaveLength(1);
+  });
+});
+
+describe('upgradeToPhase6', () => {
+  it('runs without error on a fresh Phase 6 DB', () => {
+    const db = createTestDb();
+    expect(() => upgradeToPhase6(db)).not.toThrow();
+  });
+
+  it('is idempotent — running twice does not error', () => {
+    const db = createTestDb();
+    upgradeToPhase6(db);
+    expect(() => upgradeToPhase6(db)).not.toThrow();
+  });
+
+  it('creates extraction_cache table on a DB that does not have it', () => {
+    const db = new Database(':memory:');
+    db.pragma('journal_mode = WAL');
+    db.pragma('foreign_keys = ON');
+
+    upgradeToPhase6(db);
+
+    const tables = db.prepare(
+      "SELECT name FROM sqlite_master WHERE type='table' AND name='extraction_cache'"
+    ).all();
+    expect(tables).toHaveLength(1);
+  });
+});
+
+describe('createSchema — extraction_cache', () => {
+  it('creates extraction_cache table', () => {
+    const db = createTestDb();
+    const tables = db.prepare(
+      "SELECT name FROM sqlite_master WHERE type='table' AND name='extraction_cache'"
+    ).all();
+    expect(tables).toHaveLength(1);
+  });
+
+  it('extraction_cache has all expected columns', () => {
+    const db = createTestDb();
+    const columns = db.prepare('PRAGMA table_info(extraction_cache)').all() as { name: string }[];
+    const names = columns.map(c => c.name);
+    expect(names).toContain('content_hash');
+    expect(names).toContain('file_path');
+    expect(names).toContain('media_type');
+    expect(names).toContain('extractor_id');
+    expect(names).toContain('extracted_text');
+    expect(names).toContain('metadata_json');
+    expect(names).toContain('extracted_at');
   });
 });

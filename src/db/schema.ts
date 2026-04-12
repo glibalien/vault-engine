@@ -112,5 +112,15 @@ export function createSchema(db: Database.Database): void {
       content='',
       contentless_delete=1
     );
+
+    CREATE TABLE IF NOT EXISTS extraction_cache (
+      content_hash TEXT PRIMARY KEY,
+      file_path TEXT NOT NULL,
+      media_type TEXT NOT NULL,
+      extractor_id TEXT NOT NULL,
+      extracted_text TEXT NOT NULL,
+      metadata_json TEXT,
+      extracted_at TEXT NOT NULL
+    );
   `);
 }

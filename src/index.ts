@@ -2,7 +2,7 @@ import { resolve } from 'node:path';
 import { StdioServerTransport } from '@modelcontextprotocol/sdk/server/stdio.js';
 import { openDatabase } from './db/connection.js';
 import { createSchema } from './db/schema.js';
-import { upgradeToPhase2, upgradeToPhase3 } from './db/migrate.js';
+import { upgradeToPhase2, upgradeToPhase3, upgradeToPhase6 } from './db/migrate.js';
 import { createServer } from './mcp/server.js';
 import { parseArgs } from './transport/args.js';
 import { startHttpTransport } from './transport/http.js';
@@ -29,6 +29,7 @@ const db = openDatabase(dbPath);
 createSchema(db);
 upgradeToPhase2(db);
 upgradeToPhase3(db);
+upgradeToPhase6(db);
 
 console.log(`Indexing vault at ${vaultPath}...`);
 const indexStart = Date.now();

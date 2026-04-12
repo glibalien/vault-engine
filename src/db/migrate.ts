@@ -38,6 +38,31 @@ export function upgradeToPhase3(db: Database.Database): void {
   run();
 }
 
+export function upgradeToPhase6(db: Database.Database): void {
+  const run = db.transaction(() => {
+    const tables = (
+      db.prepare(
+        "SELECT name FROM sqlite_master WHERE type='table' AND name='extraction_cache'"
+      ).all() as { name: string }[]
+    ).map(t => t.name);
+
+    if (!tables.includes('extraction_cache')) {
+      db.prepare(`
+        CREATE TABLE extraction_cache (
+          content_hash TEXT PRIMARY KEY,
+          file_path TEXT NOT NULL,
+          media_type TEXT NOT NULL,
+          extractor_id TEXT NOT NULL,
+          extracted_text TEXT NOT NULL,
+          metadata_json TEXT,
+          extracted_at TEXT NOT NULL
+        )
+      `).run();
+    }
+  });
+  run();
+}
+
 export function upgradeToPhase2(db: Database.Database): void {
   const run = db.transaction(() => {
     // --- global_fields: add three new columns if missing ---

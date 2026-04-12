@@ -133,6 +133,38 @@ describe('watcher integration', () => {
 
     expect(nodeCount(db)).toBe(before);
   });
+
+  it('rapid edit after create: WriteGate does not clobber user edits', async () => {
+    // Regression: creating a file then quickly editing it caused the
+    // WriteGate to fire with stale DB state, overwriting the edit.
+    const filePath = join(vaultPath, 'Person.md');
+
+    // Step 1: create file (simulates Obsidian creating a new note)
+    writeFileSync(filePath, '---\ntitle: Person\ntypes:\n---\n', 'utf-8');
+
+    // Wait for watcher to process the create
+    await delay(DEBOUNCE_MS + 100);
+    await mutex.onIdle();
+
+    // Step 2: user edits file quickly (adds types: person)
+    writeFileSync(filePath, '---\ntitle: Person\ntypes:\n  - person\n---\n', 'utf-8');
+
+    // Wait for watcher to process the edit + WriteGate quiet period
+    await delay(DEBOUNCE_MS + 100);
+    await mutex.onIdle();
+    // WriteGate quiet period (50ms in test config) + buffer
+    await delay(200);
+
+    // DB should have the user's types
+    const types = db.prepare(
+      "SELECT schema_type FROM node_types WHERE node_id = (SELECT id FROM nodes WHERE file_path = 'Person.md')"
+    ).all() as { schema_type: string }[];
+    expect(types.map(t => t.schema_type)).toContain('person');
+
+    // File on disk should also have the type
+    const content = readFileSync(filePath, 'utf-8');
+    expect(content).toContain('person');
+  });
 });
 
 // ── WriteGate deferred-write tests (using processFileChange directly) ──

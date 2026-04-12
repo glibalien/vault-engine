@@ -54,6 +54,10 @@ export function startWatcher(
   function scheduleIndex(absPath: string): void {
     const relPath = relative(vaultPath, absPath);
 
+    // Cancel any pending deferred write — a new edit just arrived,
+    // so the WriteGate's DB snapshot is stale.
+    writeGate.cancel(relPath);
+
     // Clear existing debounce timer if any
     const existing = pendingTimers.get(absPath);
     if (existing) {
@@ -295,10 +299,67 @@ export function processFileChange(
     if (result.deferred_write && writeGate) {
       writeGate.fileChanged(relPath, () => {
         try {
-          const currentNode = db.prepare('SELECT id, title, body FROM nodes WHERE file_path = ?')
-            .get(relPath) as { id: string; title: string; body: string } | undefined;
+          const currentNode = db.prepare('SELECT id, title, body, content_hash FROM nodes WHERE file_path = ?')
+            .get(relPath) as { id: string; title: string; body: string; content_hash: string } | undefined;
           if (!currentNode) return; // Node was deleted
 
+          // Read and parse the file currently on disk.
+          let diskContent: string;
+          try {
+            diskContent = readFileSync(join(vaultPath, relPath), 'utf-8');
+          } catch {
+            return; // File gone
+          }
+
+          // Stale-file guard: if the file on disk has changed since we last
+          // indexed it, skip the write — the watcher will process the new
+          // content and schedule a fresh WriteGate.
+          if (sha256(diskContent) !== currentNode.content_hash) return;
+
+          // Semantic-diff guard: parse the file on disk and compare to DB
+          // state. If the data matches, the only difference is formatting
+          // (e.g. renderer adds title/types headers). Skip to avoid
+          // triggering Obsidian's external-change reload, which would
+          // drop the user's unsaved in-progress edits.
+          const diskParsed = parseMarkdown(diskContent, relPath);
+          if (diskParsed.parseError === null) {
+            const diskTitle = diskParsed.title ?? relPath.replace(/\.md$/, '');
+            const diskTypes = diskParsed.types.slice().sort();
+
+            const types = (db.prepare('SELECT schema_type FROM node_types WHERE node_id = ?')
+              .all(currentNode.id) as { schema_type: string }[]).map(r => r.schema_type);
+            const fields = rebuildFieldsFromDb(db, currentNode.id);
+
+            const dbTypes = types.slice().sort();
+
+            const diskFields: Record<string, unknown> = {};
+            for (const [k, v] of diskParsed.fields) diskFields[k] = v;
+
+            if (diskTitle === currentNode.title &&
+                diskParsed.body === currentNode.body &&
+                JSON.stringify(diskTypes) === JSON.stringify(dbTypes) &&
+                JSON.stringify(diskFields) === JSON.stringify(fields)) {
+              return; // Data matches — write would be cosmetic only
+            }
+
+            // Data differs — proceed with write (e.g. defaults populated, values coerced)
+            const rawTexts = rebuildRawTextsFromDb(db, currentNode.id);
+
+            executeMutation(db, writeLock, vaultPath, {
+              source: 'watcher',
+              node_id: currentNode.id,
+              file_path: relPath,
+              title: currentNode.title,
+              types,
+              fields,
+              body: currentNode.body,
+              raw_field_texts: rawTexts,
+              db_only: false,
+            });
+            return;
+          }
+
+          // Parse failed — fall through to write from DB state
           const types = (db.prepare('SELECT schema_type FROM node_types WHERE node_id = ?')
             .all(currentNode.id) as { schema_type: string }[]).map(r => r.schema_type);
           const fields = rebuildFieldsFromDb(db, currentNode.id);

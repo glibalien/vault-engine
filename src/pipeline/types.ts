@@ -14,9 +14,7 @@ export interface ProposedMutation {
   body: string;
   raw_field_texts?: Record<string, string>;  // watcher path: pre-stripped text for wiki-link fields
   source_content_hash?: string;              // watcher path: SHA256 of file at parse time — stored as DB content_hash when file write is skipped
-  has_populated_defaults?: boolean;           // watcher path: processFileChange added defaults for new types
-  title_from_frontmatter?: boolean;           // watcher path: true if title came from YAML, false if derived
-  db_only?: boolean;  // when true, skip file write, return deferred write info
+  db_only?: boolean;                         // when true, skip file write, return deferred write info
 }
 
 /** Returned when db_only is true and the pipeline would have written the file. */

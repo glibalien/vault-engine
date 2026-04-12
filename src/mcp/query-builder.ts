@@ -28,6 +28,7 @@ export interface NodeQueryFilter {
   full_text?: string;
   references?: ReferenceFilter;
   path_prefix?: string;
+  without_path_prefix?: string;
   modified_since?: string;
 }
 
@@ -177,6 +178,12 @@ export function buildNodeQuery(filter: NodeQueryFilter, db?: Database.Database):
   if (filter.path_prefix) {
     whereClauses.push('n.file_path LIKE ?');
     params.push(`${filter.path_prefix}%`);
+  }
+
+  // Negation path prefix filter
+  if (filter.without_path_prefix) {
+    whereClauses.push('n.file_path NOT LIKE ?');
+    params.push(`${filter.without_path_prefix}%`);
   }
 
   // Modified since filter

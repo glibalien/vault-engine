@@ -103,6 +103,30 @@ describe('buildNodeQuery', () => {
     });
   });
 
+  describe('without_path_prefix filter', () => {
+    it('excludes nodes under the prefix', () => {
+      // n1 is under meetings/, n2 under notes/, n3 under tasks/
+      const { rows, total } = runQuery({ without_path_prefix: 'meetings/' });
+      expect(total).toBe(2);
+      const ids = rows.map(r => r.id).sort();
+      expect(ids).toEqual(['n2', 'n3']);
+    });
+
+    it('combines with path_prefix', () => {
+      // All nodes are under some prefix; exclude tasks/
+      const { rows, total } = runQuery({ without_path_prefix: 'tasks/' });
+      expect(total).toBe(2);
+      const ids = rows.map(r => r.id).sort();
+      expect(ids).toEqual(['n1', 'n2']);
+    });
+
+    it('uses NOT LIKE in sql', () => {
+      const { sql, params } = buildNodeQuery({ without_path_prefix: 'notes/' });
+      expect(sql).toContain('n.file_path NOT LIKE ?');
+      expect(params).toContain('notes/%');
+    });
+  });
+
   describe('types filter', () => {
     it('returns nodes with the specified type', () => {
       const { rows, total } = runQuery({ types: ['task'] });

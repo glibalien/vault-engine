@@ -42,6 +42,7 @@ const paramsShape = {
       direction: z.enum(['outgoing', 'incoming', 'both']).default('outgoing'),
     }).optional(),
     path_prefix: z.string().optional(),
+    without_path_prefix: z.string().optional(),
     modified_since: z.string().optional(),
   }).optional(),
   // Type operations (query mode)

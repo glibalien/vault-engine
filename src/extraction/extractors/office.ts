@@ -27,8 +27,8 @@ export class OfficeExtractor implements Extractor {
 
   private async extractPptx(filePath: string): Promise<ExtractionResult> {
     const officeparser = await import('officeparser');
-    const text = await officeparser.parseOffice(filePath) as string;
-    return { text };
+    const ast = await officeparser.parseOffice(filePath);
+    return { text: ast.toText() };
   }
 
   private async extractXlsx(filePath: string): Promise<ExtractionResult> {

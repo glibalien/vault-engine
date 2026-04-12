@@ -45,28 +45,25 @@ export class DeepgramExtractor implements Extractor {
       throw new Error(`Unsupported audio format: ${ext}`);
     }
 
-    const { createClient } = await import('@deepgram/sdk');
-    const deepgram = createClient(this.apiKey);
+    const { DeepgramClient } = await import('@deepgram/sdk');
+    const deepgram = new DeepgramClient({ apiKey: this.apiKey });
 
     const buffer = await readFile(filePath);
-    const result = await deepgram.listen.prerecorded.transcribeFile(buffer, {
+    const uploadable = { data: buffer, contentType: mimetype };
+    const result = await deepgram.listen.v1.media.transcribeFile(uploadable, {
       model: 'nova-3',
       smart_format: true,
       diarize: true,
-      mimetype,
     });
 
-    const utterances = result.result?.results?.utterances ?? [];
-    const segments: DiarizedSegment[] = utterances.map((u: {
-      speaker: number;
-      start: number;
-      end: number;
-      transcript: string;
-    }) => ({
-      speaker: u.speaker,
-      start: u.start,
-      end: u.end,
-      text: u.transcript,
+    // result is ListenV1Response | ListenV1AcceptedResponse
+    const utterances =
+      ('results' in result ? result.results?.utterances : undefined) ?? [];
+    const segments: DiarizedSegment[] = utterances.map(u => ({
+      speaker: u.speaker ?? 0,
+      start: u.start ?? 0,
+      end: u.end ?? 0,
+      text: u.transcript ?? '',
     }));
 
     const text = formatDiarizedTranscript(segments);

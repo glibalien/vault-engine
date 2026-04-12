@@ -14,6 +14,8 @@ export interface ProposedMutation {
   body: string;
   raw_field_texts?: Record<string, string>;  // watcher path: pre-stripped text for wiki-link fields
   source_content_hash?: string;              // watcher path: SHA256 of file at parse time — stale-file guard
+  has_populated_defaults?: boolean;           // watcher path: processFileChange added defaults for new types
+  title_from_frontmatter?: boolean;           // watcher path: true if title came from YAML, false if derived
 }
 
 export interface PipelineResult {

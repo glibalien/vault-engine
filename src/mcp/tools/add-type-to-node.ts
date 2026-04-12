@@ -12,6 +12,7 @@ import { reconstructValue } from '../../pipeline/classify-value.js';
 import { writeEditsLogEntries } from '../../pipeline/edits-log.js';
 import type { EditsLogEntry } from '../../pipeline/edits-log.js';
 import type { WriteLockManager } from '../../sync/write-lock.js';
+import { checkTypesHaveSchemas } from '../../pipeline/check-types.js';
 
 const paramsShape = {
   node_id: z.string().optional(),
@@ -28,7 +29,7 @@ export function registerAddTypeToNode(
 ): void {
   server.tool(
     'add-type-to-node',
-    'Add a type to a node, automatically populating claimed fields with defaults.',
+    'Add a type to a node, automatically populating claimed fields with defaults. The type must have a defined schema. Use list-schemas to see available types.',
     paramsShape,
     async (params) => {
       const resolved = resolveNodeIdentity(db, {
@@ -40,6 +41,18 @@ export function registerAddTypeToNode(
         return toolErrorResult(resolved.code, resolved.message);
       }
       const { node } = resolved;
+
+      // Type-schema check
+      const typeCheck = checkTypesHaveSchemas(db, [params.type]);
+      if (!typeCheck.valid) {
+        return toolResult({
+          error: 'UNKNOWN_TYPE',
+          unknown_types: typeCheck.unknown,
+          message: `Cannot add type '${params.type}' — no schema exists. Use list-schemas to see available types, or use create-schema to define a new type first.`,
+          available_schemas: typeCheck.available,
+          suggestion: 'For general-purpose notes and reference material, use type \'note\'.',
+        });
+      }
 
       // Load current state
       const currentTypes = (db.prepare('SELECT schema_type FROM node_types WHERE node_id = ?')

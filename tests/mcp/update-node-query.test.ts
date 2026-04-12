@@ -58,6 +58,14 @@ beforeEach(() => {
   db.pragma('foreign_keys = ON');
   createSchema(db);
   writeLock = new WriteLockManager();
+
+  // Register schemas for all types used in tests
+  createSchemaDefinition(db, { name: 'note', field_claims: [] });
+  createSchemaDefinition(db, { name: 'task', field_claims: [] });
+  createSchemaDefinition(db, { name: 'clippings', field_claims: [] });
+  createSchemaDefinition(db, { name: 'person', field_claims: [] });
+  createSchemaDefinition(db, { name: 'tag', field_claims: [] });
+
   handler = captureHandler();
 });
 

@@ -17,6 +17,7 @@ import { validateProposedState } from '../../validation/validate.js';
 import { buildNodeQuery } from '../query-builder.js';
 import type { NodeQueryFilter } from '../query-builder.js';
 import type { WriteLockManager } from '../../sync/write-lock.js';
+import { checkTypesHaveSchemas } from '../../pipeline/check-types.js';
 
 const paramsShape = {
   // Single-node identity (exactly one required, mutually exclusive with query)
@@ -64,7 +65,7 @@ export function registerUpdateNode(
 ): void {
   server.tool(
     'update-node',
-    'Update an existing node (single or query-mode bulk). Patch semantics for fields (null removes a field). set_body and append_body are mutually exclusive. For query mode, provide query instead of node identity. Query mode supports set_path to move files to a target directory (title unchanged, no reference rewriting).',
+    'Update an existing node (single or query-mode bulk). Patch semantics for fields (null removes a field). set_body and append_body are mutually exclusive. If set_types is provided, every type must have a defined schema. Use list-schemas to see available types. For query mode, provide query instead of node identity. Query mode supports set_path to move files to a target directory (title unchanged, no reference rewriting).',
     paramsShape,
     async (params) => {
       const hasIdentity = params.node_id !== undefined || params.file_path !== undefined || params.title !== undefined;
@@ -129,6 +130,20 @@ export function registerUpdateNode(
       const finalTitle = set_title ?? node.title;
       const finalTypes = set_types ?? currentTypes;
 
+      // Type-schema check (only when set_types is provided)
+      if (set_types !== undefined) {
+        const typeCheck = checkTypesHaveSchemas(db, finalTypes);
+        if (!typeCheck.valid) {
+          return toolResult({
+            error: 'UNKNOWN_TYPE',
+            unknown_types: typeCheck.unknown,
+            message: `Cannot set types ${typeCheck.unknown.map(t => `'${t}'`).join(', ')} — no schema exists. Use list-schemas to see available types, or use create-schema to define a new type first.`,
+            available_schemas: typeCheck.available,
+            suggestion: 'For general-purpose notes and reference material, use type \'note\'.',
+          });
+        }
+      }
+
       const finalFields = { ...currentFields };
       if (set_fields) {
         for (const [key, value] of Object.entries(set_fields)) {
@@ -141,6 +156,24 @@ export function registerUpdateNode(
         finalBody = set_body;
       } else if (append_body !== undefined) {
         finalBody = currentBody ? `${currentBody}\n\n${append_body}` : append_body;
+      }
+
+      // ── Dry run: validate without writing ─────────────────────────
+      if (dryRun) {
+        const { claimsByType, globalFields } = loadSchemaContext(db, finalTypes);
+        const validation = validateProposedState(finalFields, finalTypes, claimsByType, globalFields);
+        return toolResult({
+          dry_run: true,
+          preview: {
+            node_id: node.node_id,
+            file_path: node.file_path,
+            title: finalTitle,
+            types: finalTypes,
+            coerced_state: validation.coerced_state,
+            issues: validation.issues,
+            orphan_fields: validation.orphan_fields,
+          },
+        });
       }
 
       try {
@@ -198,6 +231,20 @@ function handleQueryMode(
   // Batch size guard
   if (matchedNodes.length > 1000 && !confirmLargeBatch) {
     return toolErrorResult('INVALID_PARAMS', `Query matched ${matchedNodes.length} nodes (>1000). Set confirm_large_batch: true to proceed.`);
+  }
+
+  // Type-schema check on add_types
+  if (ops.add_types && ops.add_types.length > 0) {
+    const typeCheck = checkTypesHaveSchemas(db, ops.add_types);
+    if (!typeCheck.valid) {
+      return toolResult({
+        error: 'UNKNOWN_TYPE',
+        unknown_types: typeCheck.unknown,
+        message: `Cannot add types ${typeCheck.unknown.map(t => `'${t}'`).join(', ')} — no schema exists. Use list-schemas to see available types, or use create-schema to define a new type first.`,
+        available_schemas: typeCheck.available,
+        suggestion: 'For general-purpose notes and reference material, use type \'note\'.',
+      });
+    }
   }
 
   const batchId = nanoid();

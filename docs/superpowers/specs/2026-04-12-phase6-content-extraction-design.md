@@ -6,6 +6,16 @@ Phase 6 adds content extraction for embedded files in vault nodes. When an agent
 
 This phase does **not** include workflow tools (`create-meeting-notes`, `extract-tasks`). The agent composes those workflows itself using `get-node` (with embeds) plus existing mutation tools.
 
+## Deviations from Charter
+
+The charter's Phase 6 specification is brief. This design makes three deliberate changes:
+
+1. **Tool surface: no `summarize-node`, no workflow tools.** The charter lists `summarize-node`, `create-meeting-notes`, and `extract-tasks`. This design drops all three. `get-node` with `include_embeds: true` replaces `summarize-node` — there is no reason for a separate tool when the only difference is "also return embed content." The workflow tools (`create-meeting-notes`, `extract-tasks`) are agent-side composition over `get-node` + existing mutation tools; hard-coding them adds tool surface without adding capability.
+
+2. **Extractor backends: hosted APIs instead of all-local.** The charter names whisper.cpp and Tesseract. This design uses Deepgram Nova-3 (audio) and Claude vision (images, scanned PDFs) as defaults because diarization quality and OCR accuracy on real-world content (handwriting, photos, diagrams) are materially better from hosted services. The extractor interface is pluggable — local backends can be swapped in per-type without changing the architecture. See "Local-Only Configuration" below for details.
+
+3. **New `extraction_cache` table.** The charter doesn't mention caching. This design adds a content-hash-keyed cache table to avoid re-transcribing the same audio file every time its parent node is read. The cache also provides the seam for Phase 4 semantic search to index extracted content without re-extracting.
+
 ## Use Cases
 
 1. **Summarize a node**: Agent calls `get-node` with `include_embeds: true` (the default). Gets the node body, metadata, and all embedded content as extracted text. Agent summarizes using its own reasoning.
@@ -173,6 +183,7 @@ interface AssembledNode {
     reference: string;    // original ![[reference]]
     mediaType: string;
     text: string;
+    source?: string;      // parent embed that contained this (recursive only)
   }>;
   errors: Array<{
     reference: string;
@@ -180,6 +191,21 @@ interface AssembledNode {
   }>;
 }
 ```
+
+#### Recursive Markdown Embeds: Flat Output
+
+When a node embeds a markdown file which itself embeds other files, the assembler flattens all results into a single `embeds` array. No nesting.
+
+Example: Node A embeds `notes.md`, which embeds `recording.m4a`. The result is:
+
+```
+embeds: [
+  { reference: "notes.md", mediaType: "markdown", text: "..." },
+  { reference: "recording.m4a", mediaType: "audio", text: "...", source: "notes.md" }
+]
+```
+
+The `source` field (present only on embeds discovered through recursion) tells the agent where the embed was found. This is simpler for agent consumption than nested structures — the agent gets a flat list of all content regardless of nesting depth, and `source` provides provenance when needed.
 
 #### Cycle Detection and Depth Limit
 
@@ -207,6 +233,45 @@ First call with uncached embeds may be slow (API calls for extraction). Subseque
 - `filename` (string, optional) — filename to resolve (one required)
 
 **Returns:** Extracted text, media type, extractor used. For audio: full diarized transcript. For images: OCR/description output. Returns an error if the file extension has no registered extractor.
+
+#### Filename Resolution for `read-embedded`
+
+When called with `filename` (not a full path), the resolver searches the vault using the same rules as Obsidian's `![[embed]]` resolution:
+
+1. Exact basename match — if exactly one file in the vault has that filename, use it.
+2. If multiple files share the filename (e.g. `notes/photo.png` and `archive/photo.png`), return an `AMBIGUOUS_FILENAME` error listing the matching paths. The agent must re-call with `file_path` to disambiguate. No guessing.
+
+This matches the existing resolver behavior in `src/resolver/`. The tool does not attempt "closest to current node" heuristics because `read-embedded` has no node context.
+
+## Missing API Key Behavior
+
+Extractors that require API keys degrade gracefully at registration time, not at call time:
+
+- On engine startup, the registry checks whether each extractor's required environment variable is set.
+- If a key is missing, that extractor is **not registered**. Its file extensions have no extractor.
+- When the cache layer encounters a file extension with no registered extractor, it returns a structured error: `EXTRACTOR_UNAVAILABLE` with a message naming the missing key (e.g. `"Audio extraction requires DEEPGRAM_API_KEY"`).
+- The assembler includes this error in the `errors` array of the assembled result. Other embeds still extract normally.
+- `vault-stats` reports which extractors are active and which are unavailable due to missing keys, so the user can diagnose configuration issues.
+
+This means the engine always starts, even with zero API keys configured. You get local extractors (PDF text, office docs, markdown) unconditionally, and hosted extractors activate when their keys are present.
+
+## Embed Count and Size Guards
+
+`get-node` defaults to `include_embeds: true`, which means every `get-node` call walks embeds. Two guards prevent this from becoming expensive on nodes with many or large embeds:
+
+- **Embed count limit:** Default 20 embeds per `get-node` call. If a node has more than 20 `![[embed]]` references, the assembler extracts the first 20 and returns a `TRUNCATED` warning with the total count. The agent can re-call with a higher limit if needed. Exposed as `max_embeds` parameter on `get-node`.
+- **Single file size limit:** Files larger than 100 MB are skipped with a `FILE_TOO_LARGE` error in the result. This prevents accidentally sending a 2 GB video file to Deepgram.
+
+These are defaults, overridable per-call. The limits apply to extraction attempts, not cache hits — if a file is already cached, it's returned regardless of current size.
+
+## Local-Only Configuration
+
+Running without hosted API keys is a supported configuration, not a degraded mode. With no `DEEPGRAM_API_KEY` and no `ANTHROPIC_API_KEY`:
+
+- **Works:** PDF text extraction (unpdf), office docs (mammoth/officeparser/SheetJS), markdown reads
+- **Does not work:** Audio transcription, image OCR/description, scanned PDF extraction
+
+The engine starts, embeds that need hosted extraction return `EXTRACTOR_UNAVAILABLE` errors, and everything else functions normally. There is no fallback from hosted to local within a media type — if you want local audio transcription, you register a local audio extractor (e.g. a future `whisperx` extractor) in place of Deepgram. The pluggable interface supports this; this phase just doesn't ship a local audio or vision extractor.
 
 ## Dependencies
 

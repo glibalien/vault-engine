@@ -48,6 +48,8 @@ const paramsShape = {
   // Batch controls
   confirm_large_batch: z.boolean().optional(),
   dry_run: z.boolean().optional(),
+  // Path operation (query mode only)
+  set_path: z.string().optional(),
 };
 
 export function registerUpdateNode(
@@ -71,9 +73,13 @@ export function registerUpdateNode(
         return toolErrorResult('INVALID_PARAMS', 'Must provide either node identity (node_id/file_path/title) or query');
       }
 
+      if (hasIdentity && params.set_path !== undefined) {
+        return toolErrorResult('INVALID_PARAMS', 'set_path is not supported in single-node mode. Use rename-node to move individual files.');
+      }
+
       // ── Query mode ──────────────────────────────────────────────────
       if (hasQuery) {
-        const hasOp = params.set_fields !== undefined || params.add_types !== undefined || params.remove_types !== undefined;
+        const hasOp = params.set_fields !== undefined || params.add_types !== undefined || params.remove_types !== undefined || params.set_path !== undefined;
         if (!hasOp) {
           return toolErrorResult('INVALID_PARAMS', 'Query mode requires at least one operation: set_fields, add_types, or remove_types');
         }
@@ -82,6 +88,7 @@ export function registerUpdateNode(
           set_fields: params.set_fields,
           add_types: params.add_types,
           remove_types: params.remove_types,
+          set_path: params.set_path,
         }, dryRun, params.confirm_large_batch);
       }
 
@@ -166,6 +173,7 @@ interface QueryModeOps {
   set_fields?: Record<string, unknown>;
   add_types?: string[];
   remove_types?: string[];
+  set_path?: string;
 }
 
 function handleQueryMode(

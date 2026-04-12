@@ -292,6 +292,19 @@ describe('update-node query mode — requires operation', () => {
   });
 });
 
+describe('update-node query mode — set_path', () => {
+  it('rejects set_path in single-node mode', async () => {
+    createNode({ file_path: 'a.md', title: 'A', types: [] });
+
+    const result = parseResult(await handler({
+      title: 'A',
+      set_path: 'Persons',
+    }));
+
+    expect(result.error).toContain('rename-node');
+  });
+});
+
 describe('update-node query mode — edits_log', () => {
   it('writes bulk-mutate entries with batch_id', async () => {
     createNode({ file_path: 'a.md', title: 'A', types: ['note'] });

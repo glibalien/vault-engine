@@ -319,6 +319,22 @@ describe('query-nodes', () => {
     expect(node.types).toEqual(expect.arrayContaining(['meeting', 'note']));
     expect(node.field_count).toBe(1);
   });
+
+  it('filters by without_types (negation)', async () => {
+    const handler = getToolHandler(registerQueryNodes);
+    const result = parseResult(await handler({ without_types: ['meeting'] }) as any) as any;
+    // n1 is meeting+note, n2 is note, n3 is task
+    expect((result as any).nodes.every((n: any) => !n.types.includes('meeting'))).toBe(true);
+    expect((result as any).nodes.length).toBe(2);
+  });
+
+  it('filters by without_fields (negation)', async () => {
+    const handler = getToolHandler(registerQueryNodes);
+    const result = parseResult(await handler({ without_fields: ['project'] }) as any) as any;
+    // n1 has project, n2 and n3 don't
+    expect((result as any).nodes.length).toBe(2);
+    expect((result as any).nodes.every((n: any) => n.id !== 'n1')).toBe(true);
+  });
 });
 
 describe('get-node', () => {

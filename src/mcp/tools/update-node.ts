@@ -3,6 +3,7 @@
 import type { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import type Database from 'better-sqlite3';
 import { z } from 'zod';
+import { nanoid } from 'nanoid';
 import { toolResult, toolErrorResult } from './errors.js';
 import { resolveNodeIdentity } from './resolve-identity.js';
 import { executeMutation } from '../../pipeline/execute.js';
@@ -11,6 +12,8 @@ import { reconstructValue } from '../../pipeline/classify-value.js';
 import { hasBlockingErrors } from '../../pipeline/errors.js';
 import { loadSchemaContext } from '../../pipeline/schema-context.js';
 import { validateProposedState } from '../../validation/validate.js';
+import { buildNodeQuery } from '../query-builder.js';
+import type { NodeQueryFilter } from '../query-builder.js';
 import type { WriteLockManager } from '../../sync/write-lock.js';
 
 const paramsShape = {
@@ -27,9 +30,24 @@ const paramsShape = {
   // Query-mode bulk update (mutually exclusive with node identity)
   query: z.object({
     types: z.array(z.string()).optional(),
-    where: z.record(z.string(), z.unknown()).optional(),
+    without_types: z.array(z.string()).optional(),
+    fields: z.record(z.string(), z.record(z.string(), z.unknown())).optional(),
+    without_fields: z.array(z.string()).optional(),
+    full_text: z.string().optional(),
+    references: z.object({
+      target: z.string(),
+      rel_type: z.string().optional(),
+      direction: z.enum(['outgoing', 'incoming', 'both']).default('outgoing'),
+    }).optional(),
+    path_prefix: z.string().optional(),
+    modified_since: z.string().optional(),
   }).optional(),
-  dry_run: z.boolean().default(false),
+  // Type operations (query mode)
+  add_types: z.array(z.string()).optional(),
+  remove_types: z.array(z.string()).optional(),
+  // Batch controls
+  confirm_large_batch: z.boolean().optional(),
+  dry_run: z.boolean().optional(),
 };
 
 export function registerUpdateNode(
@@ -55,13 +73,20 @@ export function registerUpdateNode(
 
       // ── Query mode ──────────────────────────────────────────────────
       if (hasQuery) {
-        if (!params.set_fields) {
-          return toolErrorResult('INVALID_PARAMS', 'Query mode requires set_fields');
+        const hasOp = params.set_fields !== undefined || params.add_types !== undefined || params.remove_types !== undefined;
+        if (!hasOp) {
+          return toolErrorResult('INVALID_PARAMS', 'Query mode requires at least one operation: set_fields, add_types, or remove_types');
         }
-        return handleQueryMode(db, writeLock, vaultPath, params.query!, params.set_fields, params.dry_run);
+        const dryRun = params.dry_run ?? true; // default true in query mode
+        return handleQueryMode(db, writeLock, vaultPath, params.query!, {
+          set_fields: params.set_fields,
+          add_types: params.add_types,
+          remove_types: params.remove_types,
+        }, dryRun, params.confirm_large_batch);
       }
 
       // ── Single-node mode ────────────────────────────────────────────
+      const dryRun = params.dry_run ?? false; // default false in single-node mode
       const { set_title, set_types, set_fields, set_body, append_body } = params;
 
       if (set_body !== undefined && append_body !== undefined) {
@@ -137,160 +162,246 @@ export function registerUpdateNode(
   );
 }
 
+interface QueryModeOps {
+  set_fields?: Record<string, unknown>;
+  add_types?: string[];
+  remove_types?: string[];
+}
+
 function handleQueryMode(
   db: Database.Database,
   writeLock: WriteLockManager,
   vaultPath: string,
-  query: { types?: string[]; where?: Record<string, unknown> },
-  setFields: Record<string, unknown>,
+  query: NodeQueryFilter,
+  ops: QueryModeOps,
   dryRun: boolean,
+  confirmLargeBatch?: boolean,
 ) {
   // Build query to find matching nodes
-  const joins: string[] = [];
-  const whereClauses: string[] = [];
-  const sqlParams: unknown[] = [];
-  let joinIdx = 0;
-
-  if (query.types && query.types.length > 0) {
-    for (const t of query.types) {
-      const alias = `t${joinIdx++}`;
-      joins.push(`INNER JOIN node_types ${alias} ON ${alias}.node_id = n.id AND ${alias}.schema_type = ?`);
-      sqlParams.push(t);
-    }
-  }
-
-  if (query.where) {
-    for (const [fieldName, value] of Object.entries(query.where)) {
-      const alias = `f${joinIdx++}`;
-      joins.push(`INNER JOIN node_fields ${alias} ON ${alias}.node_id = n.id AND ${alias}.field_name = ?`);
-      sqlParams.push(fieldName);
-      if (typeof value === 'string') {
-        whereClauses.push(`${alias}.value_text = ?`);
-        sqlParams.push(value);
-      } else if (typeof value === 'number') {
-        whereClauses.push(`${alias}.value_number = ?`);
-        sqlParams.push(value);
-      }
-    }
-  }
-
-  const whereStr = whereClauses.length > 0 ? `WHERE ${whereClauses.join(' AND ')}` : '';
-  const sql = `SELECT DISTINCT n.id, n.file_path, n.title, n.body FROM nodes n ${joins.join(' ')} ${whereStr}`;
-  const matchedNodes = db.prepare(sql).all(...sqlParams) as Array<{
+  const { sql, params } = buildNodeQuery(query, db);
+  const matchedNodes = db.prepare(sql).all(...params) as Array<{
     id: string; file_path: string; title: string; body: string;
   }>;
 
-  if (dryRun) {
-    const details: Array<{ node_id: string; title: string; coerced_state: unknown; issues: unknown }> = [];
-    let wouldUpdate = 0;
-    let wouldSkip = 0;
-    let wouldFail = 0;
-
-    for (const node of matchedNodes.slice(0, 50)) {
-      const types = (db.prepare('SELECT schema_type FROM node_types WHERE node_id = ?')
-        .all(node.id) as Array<{ schema_type: string }>).map(t => t.schema_type);
-      const currentFields: Record<string, unknown> = {};
-      const fieldRows = db.prepare('SELECT field_name, value_text, value_number, value_date, value_json FROM node_fields WHERE node_id = ?')
-        .all(node.id) as Array<{ field_name: string; value_text: string | null; value_number: number | null; value_date: string | null; value_json: string | null }>;
-      for (const row of fieldRows) currentFields[row.field_name] = reconstructValue(row);
-
-      const finalFields = { ...currentFields };
-      for (const [key, value] of Object.entries(setFields)) {
-        finalFields[key] = value;
-      }
-
-      const { claimsByType, globalFields } = loadSchemaContext(db, types);
-      const validation = validateProposedState(finalFields, types, claimsByType, globalFields);
-
-      if (hasBlockingErrors(validation.issues)) {
-        wouldFail++;
-      } else {
-        wouldUpdate++;
-      }
-
-      details.push({
-        node_id: node.id,
-        title: node.title,
-        coerced_state: validation.coerced_state,
-        issues: validation.issues,
-      });
-    }
-
-    return toolResult({
-      dry_run: true,
-      matched: matchedNodes.length,
-      would_update: wouldUpdate,
-      would_skip: wouldSkip,
-      would_fail: wouldFail,
-      details,
-    });
+  // Batch size guard
+  if (matchedNodes.length > 1000 && !confirmLargeBatch) {
+    return toolErrorResult('INVALID_PARAMS', `Query matched ${matchedNodes.length} nodes (>1000). Set confirm_large_batch: true to proceed.`);
   }
 
-  // Non-dry-run: apply updates in a single transaction
-  const errors: Array<{ node_id: string; issues: unknown }> = [];
+  const batchId = nanoid();
+
+  if (dryRun) {
+    return handleDryRun(db, matchedNodes, ops, batchId);
+  }
+
+  return handleExecution(db, writeLock, vaultPath, matchedNodes, ops, batchId);
+}
+
+function loadNodeState(db: Database.Database, nodeId: string) {
+  const types = (db.prepare('SELECT schema_type FROM node_types WHERE node_id = ?')
+    .all(nodeId) as Array<{ schema_type: string }>).map(t => t.schema_type);
+
+  const currentFields: Record<string, unknown> = {};
+  const fieldRows = db.prepare('SELECT field_name, value_text, value_number, value_date, value_json FROM node_fields WHERE node_id = ?')
+    .all(nodeId) as Array<{ field_name: string; value_text: string | null; value_number: number | null; value_date: string | null; value_json: string | null }>;
+  for (const row of fieldRows) {
+    currentFields[row.field_name] = reconstructValue(row);
+  }
+
+  return { types, fields: currentFields };
+}
+
+function computeNewTypes(currentTypes: string[], ops: QueryModeOps): string[] {
+  let types = [...currentTypes];
+  if (ops.add_types) {
+    for (const t of ops.add_types) {
+      if (!types.includes(t)) types.push(t);
+    }
+  }
+  if (ops.remove_types) {
+    types = types.filter(t => !ops.remove_types!.includes(t));
+  }
+  return types;
+}
+
+function computeNewFields(currentFields: Record<string, unknown>, ops: QueryModeOps): Record<string, unknown> {
+  const finalFields = { ...currentFields };
+  if (ops.set_fields) {
+    for (const [key, value] of Object.entries(ops.set_fields)) {
+      finalFields[key] = value;
+    }
+  }
+  return finalFields;
+}
+
+function hasChanges(
+  currentTypes: string[],
+  newTypes: string[],
+  currentFields: Record<string, unknown>,
+  newFields: Record<string, unknown>,
+): boolean {
+  // Check types changed
+  if (currentTypes.length !== newTypes.length || !currentTypes.every(t => newTypes.includes(t))) {
+    return true;
+  }
+  // Check fields changed
+  const allKeys = new Set([...Object.keys(currentFields), ...Object.keys(newFields)]);
+  for (const key of allKeys) {
+    const oldVal = currentFields[key];
+    const newVal = newFields[key];
+    if (oldVal !== newVal) {
+      // Handle null removal: if new is null and old doesn't exist, no change
+      if (newVal === null && oldVal === undefined) continue;
+      return true;
+    }
+  }
+  return false;
+}
+
+const PREVIEW_LIMIT = 20;
+
+function handleDryRun(
+  db: Database.Database,
+  matchedNodes: Array<{ id: string; file_path: string; title: string; body: string }>,
+  ops: QueryModeOps,
+  batchId: string,
+) {
+  const preview: Array<{
+    node_id: string;
+    file_path: string;
+    title: string;
+    changes: {
+      types_added: string[];
+      types_removed: string[];
+      fields_set: Record<string, { from: unknown; to: unknown }>;
+      would_fail: boolean;
+    };
+  }> = [];
+  let wouldUpdate = 0;
+  let wouldSkip = 0;
+  let wouldFail = 0;
+
+  for (let i = 0; i < matchedNodes.length; i++) {
+    const node = matchedNodes[i];
+    const { types: currentTypes, fields: currentFields } = loadNodeState(db, node.id);
+    const newTypes = computeNewTypes(currentTypes, ops);
+    const newFields = computeNewFields(currentFields, ops);
+
+    if (!hasChanges(currentTypes, newTypes, currentFields, newFields)) {
+      wouldSkip++;
+      continue;
+    }
+
+    // Validate proposed state
+    const { claimsByType, globalFields } = loadSchemaContext(db, newTypes);
+    const validation = validateProposedState(newFields, newTypes, claimsByType, globalFields);
+    const fails = hasBlockingErrors(validation.issues);
+
+    if (fails) {
+      wouldFail++;
+    } else {
+      wouldUpdate++;
+    }
+
+    // Build preview for first N nodes that have changes
+    if (i < PREVIEW_LIMIT) {
+      const typesAdded = newTypes.filter(t => !currentTypes.includes(t));
+      const typesRemoved = currentTypes.filter(t => !newTypes.includes(t));
+      const fieldsSet: Record<string, { from: unknown; to: unknown }> = {};
+      if (ops.set_fields) {
+        for (const [key, value] of Object.entries(ops.set_fields)) {
+          if (currentFields[key] !== value) {
+            fieldsSet[key] = { from: currentFields[key] ?? null, to: value };
+          }
+        }
+      }
+
+      preview.push({
+        node_id: node.id,
+        file_path: node.file_path,
+        title: node.title,
+        changes: {
+          types_added: typesAdded,
+          types_removed: typesRemoved,
+          fields_set: fieldsSet,
+          would_fail: fails,
+        },
+      });
+    }
+  }
+
+  return toolResult({
+    dry_run: true,
+    batch_id: batchId,
+    matched: matchedNodes.length,
+    would_update: wouldUpdate,
+    would_skip: wouldSkip,
+    would_fail: wouldFail,
+    preview,
+  });
+}
+
+function handleExecution(
+  db: Database.Database,
+  writeLock: WriteLockManager,
+  vaultPath: string,
+  matchedNodes: Array<{ id: string; file_path: string; title: string; body: string }>,
+  ops: QueryModeOps,
+  batchId: string,
+) {
   let updated = 0;
   let skipped = 0;
+  const errors: Array<{ node_id: string; file_path: string; error: string }> = [];
 
-  const txn = db.transaction(() => {
-    for (const node of matchedNodes) {
-      const types = (db.prepare('SELECT schema_type FROM node_types WHERE node_id = ?')
-        .all(node.id) as Array<{ schema_type: string }>).map(t => t.schema_type);
-      const currentFields: Record<string, unknown> = {};
-      const fieldRows = db.prepare('SELECT field_name, value_text, value_number, value_date, value_json FROM node_fields WHERE node_id = ?')
-        .all(node.id) as Array<{ field_name: string; value_text: string | null; value_number: number | null; value_date: string | null; value_json: string | null }>;
-      for (const row of fieldRows) currentFields[row.field_name] = reconstructValue(row);
+  for (const node of matchedNodes) {
+    const { types: currentTypes, fields: currentFields } = loadNodeState(db, node.id);
+    const newTypes = computeNewTypes(currentTypes, ops);
+    const newFields = computeNewFields(currentFields, ops);
 
-      const finalFields = { ...currentFields };
-      for (const [key, value] of Object.entries(setFields)) {
-        finalFields[key] = value;
-      }
-
-      try {
-        const result = executeMutation(db, writeLock, vaultPath, {
-          source: 'tool',
-          node_id: node.id,
-          file_path: node.file_path,
-          title: node.title,
-          types,
-          fields: finalFields,
-          body: node.body,
-        });
-
-        if (result.file_written) {
-          updated++;
-        } else {
-          skipped++;
-        }
-      } catch (err) {
-        if (err instanceof PipelineError && err.validation) {
-          errors.push({ node_id: node.id, issues: err.validation.issues });
-          // Spec: if any node fails, entire batch rolls back
-          throw err;
-        }
-        throw err;
-      }
+    if (!hasChanges(currentTypes, newTypes, currentFields, newFields)) {
+      skipped++;
+      continue;
     }
-  });
 
-  try {
-    txn();
-    return toolResult({
-      dry_run: false,
-      matched: matchedNodes.length,
-      updated,
-      skipped,
-      errors,
-    });
-  } catch (err) {
-    if (err instanceof PipelineError) {
-      return toolResult({
-        dry_run: false,
-        matched: matchedNodes.length,
-        updated: 0,
-        skipped: 0,
-        errors,
+    try {
+      const result = executeMutation(db, writeLock, vaultPath, {
+        source: 'tool',
+        node_id: node.id,
+        file_path: node.file_path,
+        title: node.title,
+        types: newTypes,
+        fields: newFields,
+        body: node.body,
       });
+
+      if (result.file_written) {
+        updated++;
+      } else {
+        skipped++;
+      }
+
+      // Write bulk-mutate edits_log entry
+      db.prepare('INSERT INTO edits_log (node_id, timestamp, event_type, details) VALUES (?, ?, ?, ?)').run(
+        node.id,
+        Date.now(),
+        'bulk-mutate',
+        JSON.stringify({ batch_id: batchId, ops }),
+      );
+    } catch (err) {
+      if (err instanceof PipelineError) {
+        errors.push({ node_id: node.id, file_path: node.file_path, error: err.message });
+      } else {
+        errors.push({ node_id: node.id, file_path: node.file_path, error: err instanceof Error ? err.message : String(err) });
+      }
     }
-    return toolErrorResult('INTERNAL_ERROR', err instanceof Error ? err.message : String(err));
   }
+
+  return toolResult({
+    dry_run: false,
+    batch_id: batchId,
+    matched: matchedNodes.length,
+    updated,
+    skipped,
+    errors,
+  });
 }

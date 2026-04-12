@@ -11,6 +11,7 @@ import { executeMutation } from '../../pipeline/execute.js';
 import { PipelineError } from '../../pipeline/types.js';
 import { reconstructValue } from '../../pipeline/classify-value.js';
 import { backupFile, restoreFile, cleanupBackups } from '../../pipeline/file-writer.js';
+import { checkTypesHaveSchemas } from '../../pipeline/check-types.js';
 import type { WriteLockManager } from '../../sync/write-lock.js';
 
 const operationSchema = z.object({
@@ -54,6 +55,13 @@ export function registerBatchMutate(
               const fields = (opParams.fields as Record<string, unknown>) ?? {};
               const body = (opParams.body as string) ?? '';
               const path = opParams.path as string | undefined;
+
+              // Type-schema check
+              const typeCheck = checkTypesHaveSchemas(db, types);
+              if (!typeCheck.valid) {
+                throw new PipelineError('UNKNOWN_TYPE',
+                  `Cannot create node with type${typeCheck.unknown.length > 1 ? 's' : ''} ${typeCheck.unknown.map(t => `'${t}'`).join(', ')} — no schema exists. Available: ${typeCheck.available.join(', ')}`);
+              }
 
               const filePath = path ? `${path}/${title}.md` : `${title}.md`;
               const absPath = join(vaultPath, filePath);
@@ -106,12 +114,21 @@ export function registerBatchMutate(
                 }
               }
 
+              const setTypes = opParams.set_types as string[] | undefined;
+              if (setTypes) {
+                const typeCheck = checkTypesHaveSchemas(db, setTypes);
+                if (!typeCheck.valid) {
+                  throw new PipelineError('UNKNOWN_TYPE',
+                    `Cannot set types ${typeCheck.unknown.map(t => `'${t}'`).join(', ')} — no schema exists. Available: ${typeCheck.available.join(', ')}`);
+                }
+              }
+
               const result = executeMutation(db, writeLock, vaultPath, {
                 source: 'tool',
                 node_id: node.node_id,
                 file_path: node.file_path,
                 title: (opParams.set_title as string) ?? node.title,
-                types: (opParams.set_types as string[]) ?? currentTypes,
+                types: setTypes ?? currentTypes,
                 fields: finalFields,
                 body: (opParams.set_body as string) ?? currentBody,
               });

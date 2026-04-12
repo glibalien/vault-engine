@@ -12,6 +12,7 @@ import type { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import { registerCreateNode } from '../../src/mcp/tools/create-node.js';
 import { registerUpdateNode } from '../../src/mcp/tools/update-node.js';
 import { registerAddTypeToNode } from '../../src/mcp/tools/add-type-to-node.js';
+import { registerBatchMutate } from '../../src/mcp/tools/batch-mutate.js';
 import { executeMutation } from '../../src/pipeline/execute.js';
 
 let db: Database.Database;
@@ -253,5 +254,37 @@ describe('add-type-to-node type enforcement', () => {
     }) as any);
     expect(result.error).toBeUndefined();
     expect(result.types).toContain('task');
+  });
+});
+
+// ── batch-mutate type enforcement ────────────────────────────────────
+
+describe('batch-mutate type enforcement', () => {
+  it('rolls back entire batch when one op has unknown type', async () => {
+    const handler = getToolHandler(registerBatchMutate);
+    const result = parseResult(await handler({
+      operations: [
+        { op: 'create', params: { title: 'Good', types: ['note'], fields: {}, body: '' } },
+        { op: 'create', params: { title: 'Bad', types: ['reference'], fields: {}, body: '' } },
+      ],
+    }) as any);
+    expect(result.applied).toBe(false);
+    expect(result.error.message).toContain('reference');
+    // First op should have been rolled back
+    const node = db.prepare('SELECT id FROM nodes WHERE title = ?').get('Good');
+    expect(node).toBeUndefined();
+    expect(existsSync(join(vaultPath, 'Good.md'))).toBe(false);
+  });
+
+  it('succeeds when all ops have valid types', async () => {
+    const handler = getToolHandler(registerBatchMutate);
+    const result = parseResult(await handler({
+      operations: [
+        { op: 'create', params: { title: 'One', types: ['note'], fields: {}, body: '' } },
+        { op: 'create', params: { title: 'Two', types: ['task'], fields: {}, body: '' } },
+      ],
+    }) as any);
+    expect(result.applied).toBe(true);
+    expect(result.results).toHaveLength(2);
   });
 });

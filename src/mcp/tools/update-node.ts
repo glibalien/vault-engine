@@ -62,7 +62,7 @@ export function registerUpdateNode(
 ): void {
   server.tool(
     'update-node',
-    'Update an existing node (single or query-mode bulk). Patch semantics for fields (null removes a field). set_body and append_body are mutually exclusive. For query mode, provide query instead of node identity.',
+    'Update an existing node (single or query-mode bulk). Patch semantics for fields (null removes a field). set_body and append_body are mutually exclusive. For query mode, provide query instead of node identity. Query mode supports set_path to move files to a target directory (title unchanged, no reference rewriting).',
     paramsShape,
     async (params) => {
       const hasIdentity = params.node_id !== undefined || params.file_path !== undefined || params.title !== undefined;
@@ -83,7 +83,7 @@ export function registerUpdateNode(
       if (hasQuery) {
         const hasOp = params.set_fields !== undefined || params.add_types !== undefined || params.remove_types !== undefined || params.set_path !== undefined;
         if (!hasOp) {
-          return toolErrorResult('INVALID_PARAMS', 'Query mode requires at least one operation: set_fields, add_types, or remove_types');
+          return toolErrorResult('INVALID_PARAMS', 'Query mode requires at least one operation: set_fields, add_types, remove_types, or set_path');
         }
         const dryRun = params.dry_run ?? true; // default true in query mode
         return handleQueryMode(db, writeLock, vaultPath, params.query!, {

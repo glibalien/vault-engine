@@ -45,6 +45,8 @@ npm run start:http   # node dist/index.js --transport http
 - DB path default: `<vault>/.vault-engine/vault.db` (production uses `vault-new.db` during Phase 0)
 - `db/connection.ts` opens the DB with WAL mode and foreign keys enabled.
 - ESM throughout (`"type": "module"` in package.json, `.js` extensions in imports)
+- **YAML `nullStr: ''`** in render options — null values serialize as bare `key:` not `key: null`. This is critical for Obsidian compatibility: `types: []` (flow notation) mangles when Obsidian adds items; implicit null `types:` does not.
+- **Watcher cosmetic-skip**: the watcher does NOT rewrite a file if the only change would be adding a filename-derived title. This prevents clobbering Obsidian mid-edit. See `processFileChange` in `src/sync/watcher.ts`.
 
 ## Phased delivery
 

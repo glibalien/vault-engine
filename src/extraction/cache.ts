@@ -71,7 +71,7 @@ export class ExtractionCache {
       result.metadata !== null &&
       'avgCharsPerPage' in result.metadata &&
       typeof (result.metadata as Record<string, unknown>).avgCharsPerPage === 'number' &&
-      (result.metadata as Record<string, unknown>).avgCharsPerPage < 50
+      ((result.metadata as Record<string, unknown>).avgCharsPerPage as number) < 50
     ) {
       result = await this.pdfFallback.extract(filePath);
       usedExtractor = this.pdfFallback;

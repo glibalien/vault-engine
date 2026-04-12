@@ -24,6 +24,26 @@ describe('parseMarkdown', () => {
       const result = parseMarkdown(fixture('empty-frontmatter.md'), 'empty-frontmatter.md');
       expect(result.types).toEqual([]);
     });
+
+    it('handles duplicate types keys (Obsidian property editor creates these)', () => {
+      const raw = `---
+title: Test Node
+types:
+context:
+  - work
+status: open
+types:
+  - task
+---
+
+Body text.
+`;
+      const result = parseMarkdown(raw, 'test.md');
+      expect(result.parseError).toBeNull();
+      expect(result.types).toEqual(['task']);
+      expect(result.fields.get('context')).toEqual(['work']);
+      expect(result.fields.get('status')).toBe('open');
+    });
   });
 
   describe('title resolution', () => {

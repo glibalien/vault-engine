@@ -290,7 +290,7 @@ function extractRawFieldTexts(raw: string): Record<string, string> {
 
   let rawParsed: unknown;
   try {
-    rawParsed = parseYaml(yamlStr);
+    rawParsed = parseYaml(yamlStr, { uniqueKeys: false });
   } catch {
     return {};
   }

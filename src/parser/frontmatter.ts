@@ -112,7 +112,7 @@ export function parseFrontmatter(raw: string): FrontmatterResult {
 
   let parsed: unknown;
   try {
-    parsed = parseYaml(yamlStr);
+    parsed = parseYaml(yamlStr, { uniqueKeys: false });
   } catch (err) {
     return {
       title: null,

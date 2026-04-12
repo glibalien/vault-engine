@@ -40,11 +40,9 @@ export class ExtractorRegistry {
     missingKey: string,
   ): void {
     const entry: UnavailableEntry = { id, mediaType, extensions, missingKey };
-    // Only track unavailability for extensions not already covered by an active extractor
-    const coversNew = extensions.some(ext => !this.byExtension.has(ext));
-    if (!coversNew) return;
-
+    // Always track in the status list so callers can see all API-gated extractors
     this.unavailableEntries.push(entry);
+    // Only map extensions not already covered by an active extractor (for getUnavailableReason)
     for (const ext of extensions) {
       if (!this.byExtension.has(ext)) {
         this.unavailableByExtension.set(ext, entry);

@@ -383,6 +383,28 @@ describe('upgradeToPhase6', () => {
   });
 });
 
+describe('createSchema — sync_log', () => {
+  it('creates sync_log table with expected columns', () => {
+    const db = createTestDb();
+    const info = db.prepare("PRAGMA table_info('sync_log')").all() as Array<{ name: string }>;
+    const cols = info.map(c => c.name);
+    expect(cols).toContain('id');
+    expect(cols).toContain('timestamp');
+    expect(cols).toContain('file_path');
+    expect(cols).toContain('event');
+    expect(cols).toContain('source');
+    expect(cols).toContain('details');
+  });
+
+  it('has indexes on sync_log file_path and timestamp', () => {
+    const db = createTestDb();
+    const indexes = db.prepare("PRAGMA index_list('sync_log')").all() as Array<{ name: string }>;
+    const names = indexes.map(i => i.name);
+    expect(names).toContain('idx_sync_log_file_path');
+    expect(names).toContain('idx_sync_log_timestamp');
+  });
+});
+
 describe('createSchema — extraction_cache', () => {
   it('creates extraction_cache table', () => {
     const db = createTestDb();

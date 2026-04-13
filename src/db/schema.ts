@@ -94,6 +94,17 @@ export function createSchema(db: Database.Database): void {
       details TEXT
     );
 
+    CREATE TABLE IF NOT EXISTS sync_log (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      timestamp INTEGER NOT NULL,
+      file_path TEXT NOT NULL,
+      event TEXT NOT NULL,
+      source TEXT,
+      details TEXT
+    );
+    CREATE INDEX IF NOT EXISTS idx_sync_log_file_path ON sync_log(file_path);
+    CREATE INDEX IF NOT EXISTS idx_sync_log_timestamp ON sync_log(timestamp);
+
     CREATE TABLE IF NOT EXISTS embeddings (
       node_id TEXT PRIMARY KEY REFERENCES nodes(id) ON DELETE CASCADE,
       content_text TEXT,

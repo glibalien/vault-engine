@@ -13,7 +13,6 @@ import { populateDefaults } from '../pipeline/populate-defaults.js';
 import { reconstructValue } from '../pipeline/classify-value.js';
 import type { IndexMutex } from './mutex.js';
 import type { WriteLockManager } from './write-lock.js';
-import type { WriteGate } from './write-gate.js';
 import type { SyncLogger } from './sync-logger.js';
 import type { EmbeddingIndexer } from '../search/indexer.js';
 
@@ -34,7 +33,6 @@ export function startWatcher(
   db: Database.Database,
   mutex: IndexMutex,
   writeLock: WriteLockManager,
-  writeGate: WriteGate,
   syncLogger?: SyncLogger,
   embeddingIndexer?: EmbeddingIndexer,
   options?: WatcherOptions,
@@ -51,19 +49,12 @@ export function startWatcher(
       deleteNodeByPath(relPath, db);
     } else {
       const absPath = join(vaultPath, event.path);
-      processFileChange(absPath, relative(vaultPath, absPath), db, writeLock, vaultPath, writeGate, syncLogger, embeddingIndexer);
+      processFileChange(absPath, relative(vaultPath, absPath), db, writeLock, vaultPath, syncLogger, embeddingIndexer);
     }
   };
 
   function scheduleIndex(absPath: string): void {
     const relPath = relative(vaultPath, absPath);
-
-    // Cancel any pending deferred write — a new edit just arrived,
-    // so the WriteGate's DB snapshot is stale.
-    if (writeGate.isPending(relPath)) {
-      syncLogger?.deferredWriteCancelled(relPath, 'new-edit');
-    }
-    writeGate.cancel(relPath);
 
     // Clear existing debounce timer if any
     const existing = pendingTimers.get(absPath);
@@ -121,7 +112,7 @@ export function startWatcher(
 
       // Process through mutex via write pipeline
       mutex.run(async () => {
-        processFileChange(absPath, relPath, db, writeLock, vaultPath, writeGate, syncLogger, embeddingIndexer);
+        processFileChange(absPath, relPath, db, writeLock, vaultPath, syncLogger, embeddingIndexer);
       });
     };
 
@@ -139,12 +130,6 @@ export function startWatcher(
 
   function handleUnlink(absPath: string): void {
     const relPath = relative(vaultPath, absPath);
-
-    // Cancel any pending deferred write
-    if (writeGate.isPending(relPath)) {
-      syncLogger?.deferredWriteCancelled(relPath, 'unlink');
-    }
-    writeGate.cancel(relPath);
 
     // Clear any pending timers for this file
     const timers = pendingTimers.get(absPath);
@@ -202,7 +187,6 @@ export function processFileChange(
   db: Database.Database,
   writeLock: WriteLockManager,
   vaultPath: string,
-  writeGate?: WriteGate,
   syncLogger?: SyncLogger,
   embeddingIndexer?: EmbeddingIndexer,
 ): void {
@@ -293,7 +277,6 @@ export function processFileChange(
   }
 
   const sourceContentHash = sha256(content);
-  const useDbOnly = writeGate !== undefined;
 
   try {
     const result = executeMutation(db, writeLock, vaultPath, {
@@ -306,147 +289,14 @@ export function processFileChange(
       body: parsed.body,
       raw_field_texts: rawFieldTexts,
       source_content_hash: sourceContentHash,
-      db_only: useDbOnly,
+      db_only: true,
     });
 
     embeddingIndexer?.enqueue({ node_id: result.node_id, source_type: 'node' });
     embeddingIndexer?.processOne().catch(() => {});
-
-    // If the pipeline produced a deferred write, hand it to the WriteGate.
-    // The callback re-renders from current DB state at write time (not the
-    // stale parse-time state), so multiple rapid edits coalesce into one write.
-    if (result.deferred_write && writeGate) {
-      syncLogger?.deferredWriteScheduled(relPath);
-      writeGate.fileChanged(relPath, () => {
-        try {
-          const currentNode = db.prepare('SELECT id, title, body, content_hash FROM nodes WHERE file_path = ?')
-            .get(relPath) as { id: string; title: string; body: string; content_hash: string } | undefined;
-          if (!currentNode) {
-            syncLogger?.deferredWriteSkipped(relPath, 'node-deleted');
-            return;
-          }
-
-          // Read and parse the file currently on disk.
-          let diskContent: string;
-          try {
-            diskContent = readFileSync(join(vaultPath, relPath), 'utf-8');
-          } catch {
-            syncLogger?.deferredWriteSkipped(relPath, 'file-gone');
-            return; // File gone
-          }
-
-          // Stale-file guard: if the file on disk has changed since we last
-          // indexed it, skip the write — the watcher will process the new
-          // content and schedule a fresh WriteGate.
-          if (sha256(diskContent) !== currentNode.content_hash) {
-            syncLogger?.deferredWriteSkipped(relPath, 'stale-file');
-            return;
-          }
-
-          // Semantic-diff guard: parse the file on disk and compare to DB
-          // state. If the data matches, the only difference is formatting
-          // (e.g. renderer adds title/types headers). Skip to avoid
-          // triggering Obsidian's external-change reload, which would
-          // drop the user's unsaved in-progress edits.
-          const diskParsed = parseMarkdown(diskContent, relPath);
-          if (diskParsed.parseError === null) {
-            const diskTitle = diskParsed.title ?? relPath.replace(/\.md$/, '');
-            const diskTypes = diskParsed.types.slice().sort();
-
-            const types = (db.prepare('SELECT schema_type FROM node_types WHERE node_id = ?')
-              .all(currentNode.id) as { schema_type: string }[]).map(r => r.schema_type);
-            const fields = rebuildFieldsFromDb(db, currentNode.id);
-
-            const dbTypes = types.slice().sort();
-
-            const diskFields: Record<string, unknown> = {};
-            for (const [k, v] of diskParsed.fields) diskFields[k] = v;
-
-            if (diskTitle === currentNode.title &&
-                diskParsed.body === currentNode.body &&
-                JSON.stringify(diskTypes) === JSON.stringify(dbTypes) &&
-                JSON.stringify(diskFields) === JSON.stringify(fields)) {
-              syncLogger?.deferredWriteSkipped(relPath, 'semantic-match');
-              return; // Data matches — write would be cosmetic only
-            }
-
-            // Data differs — proceed with write (e.g. defaults populated, values coerced)
-            const rawTexts = rebuildRawTextsFromDb(db, currentNode.id);
-
-            syncLogger?.deferredWriteFired(relPath, currentNode.content_hash);
-
-            executeMutation(db, writeLock, vaultPath, {
-              source: 'watcher',
-              node_id: currentNode.id,
-              file_path: relPath,
-              title: currentNode.title,
-              types,
-              fields,
-              body: currentNode.body,
-              raw_field_texts: rawTexts,
-              db_only: false,
-            });
-            return;
-          }
-
-          // Parse failed — fall through to write from DB state
-          const types = (db.prepare('SELECT schema_type FROM node_types WHERE node_id = ?')
-            .all(currentNode.id) as { schema_type: string }[]).map(r => r.schema_type);
-          const fields = rebuildFieldsFromDb(db, currentNode.id);
-          const rawTexts = rebuildRawTextsFromDb(db, currentNode.id);
-
-          syncLogger?.deferredWriteFired(relPath, currentNode.content_hash);
-
-          executeMutation(db, writeLock, vaultPath, {
-            source: 'watcher',
-            node_id: currentNode.id,
-            file_path: relPath,
-            title: currentNode.title,
-            types,
-            fields,
-            body: currentNode.body,
-            raw_field_texts: rawTexts,
-            db_only: false,
-          });
-        } catch {
-          // Write failed — file may have been deleted, node removed, etc.
-          // Safe to ignore; reconciler will catch inconsistencies.
-        }
-      });
-    }
   } catch {
     // Pipeline errors on watcher path are unexpected but shouldn't crash
   }
-}
-
-function rebuildFieldsFromDb(db: Database.Database, nodeId: string): Record<string, unknown> {
-  const rows = db.prepare(
-    'SELECT field_name, value_text, value_number, value_date, value_json FROM node_fields WHERE node_id = ?'
-  ).all(nodeId) as Array<{
-    field_name: string;
-    value_text: string | null;
-    value_number: number | null;
-    value_date: string | null;
-    value_json: string | null;
-  }>;
-
-  const fields: Record<string, unknown> = {};
-  for (const row of rows) {
-    fields[row.field_name] = reconstructValue(row);
-  }
-  return fields;
-}
-
-function rebuildRawTextsFromDb(db: Database.Database, nodeId: string): Record<string, string> {
-  const rows = db.prepare(
-    'SELECT field_name, value_raw_text FROM node_fields WHERE node_id = ? AND value_raw_text IS NOT NULL'
-  ).all(nodeId) as Array<{ field_name: string; value_raw_text: string }>;
-
-  const texts: Record<string, string> = {};
-  for (const row of rows) {
-    texts[row.field_name] = row.value_raw_text;
-  }
-  return texts;
 }
 
 /**

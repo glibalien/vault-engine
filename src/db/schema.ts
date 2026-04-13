@@ -1,6 +1,9 @@
 import type Database from 'better-sqlite3';
+import * as sqliteVec from 'sqlite-vec';
 
 export function createSchema(db: Database.Database): void {
+  // Load sqlite-vec extension so the embedding_vec virtual table can be created.
+  sqliteVec.load(db);
   // db.exec is the better-sqlite3 method for running multi-statement SQL,
   // not child_process.exec — this is safe, no shell involved.
   const runSql = db.exec.bind(db);
@@ -105,10 +108,21 @@ export function createSchema(db: Database.Database): void {
     CREATE INDEX IF NOT EXISTS idx_sync_log_file_path ON sync_log(file_path);
     CREATE INDEX IF NOT EXISTS idx_sync_log_timestamp ON sync_log(timestamp);
 
-    CREATE TABLE IF NOT EXISTS embeddings (
-      node_id TEXT PRIMARY KEY REFERENCES nodes(id) ON DELETE CASCADE,
-      content_text TEXT,
-      embedded_at INTEGER
+    CREATE TABLE IF NOT EXISTS embedding_meta (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      node_id TEXT NOT NULL REFERENCES nodes(id) ON DELETE CASCADE,
+      source_type TEXT NOT NULL,
+      source_hash TEXT NOT NULL,
+      chunk_index INTEGER NOT NULL DEFAULT 0,
+      extraction_ref TEXT,
+      embedded_at TEXT NOT NULL,
+      UNIQUE(node_id, source_type, extraction_ref, chunk_index)
+    );
+    CREATE INDEX IF NOT EXISTS idx_embedding_meta_node_id ON embedding_meta(node_id);
+
+    CREATE VIRTUAL TABLE IF NOT EXISTS embedding_vec USING vec0(
+      id INTEGER PRIMARY KEY,
+      vector float[256]
     );
 
     CREATE TABLE IF NOT EXISTS schema_file_hashes (

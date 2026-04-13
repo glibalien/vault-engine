@@ -20,7 +20,7 @@ describe('createSchema', () => {
     expect(names).toContain('node_fields');
     expect(names).toContain('relationships');
     expect(names).toContain('edits_log');
-    expect(names).toContain('embeddings');
+    expect(names).toContain('embedding_meta');
   });
 
   it('creates nodes_fts virtual table', () => {

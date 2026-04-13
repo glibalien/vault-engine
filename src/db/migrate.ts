@@ -63,6 +63,55 @@ export function upgradeToPhase6(db: Database.Database): void {
   run();
 }
 
+/**
+ * Upgrade an existing database to Phase 4.
+ *
+ * Drops the old `embeddings` placeholder table, creates `embedding_meta` and
+ * the `embedding_vec` virtual table. Idempotent — safe to run multiple times.
+ *
+ * NOTE: sqlite-vec must be loaded on `db` before calling this function.
+ */
+export function upgradeToPhase4(db: Database.Database): void {
+  const run = db.transaction(() => {
+    // Drop old placeholder table if it exists
+    db.prepare('DROP TABLE IF EXISTS embeddings').run();
+
+    // Create embedding_meta
+    db.prepare(`
+      CREATE TABLE IF NOT EXISTS embedding_meta (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        node_id TEXT NOT NULL REFERENCES nodes(id) ON DELETE CASCADE,
+        source_type TEXT NOT NULL,
+        source_hash TEXT NOT NULL,
+        chunk_index INTEGER NOT NULL DEFAULT 0,
+        extraction_ref TEXT,
+        embedded_at TEXT NOT NULL,
+        UNIQUE(node_id, source_type, extraction_ref, chunk_index)
+      )
+    `).run();
+
+    // Create index for embedding_meta
+    db.prepare(
+      'CREATE INDEX IF NOT EXISTS idx_embedding_meta_node_id ON embedding_meta(node_id)'
+    ).run();
+
+    // Create embedding_vec virtual table (requires sqlite-vec loaded)
+    const vecExists = db
+      .prepare("SELECT name FROM sqlite_master WHERE type='table' AND name='embedding_vec'")
+      .get();
+    if (!vecExists) {
+      db.prepare(`
+        CREATE VIRTUAL TABLE embedding_vec USING vec0(
+          id INTEGER PRIMARY KEY,
+          vector float[256]
+        )
+      `).run();
+    }
+  });
+
+  run();
+}
+
 export function upgradeToPhase2(db: Database.Database): void {
   const run = db.transaction(() => {
     // --- global_fields: add three new columns if missing ---

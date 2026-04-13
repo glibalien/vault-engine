@@ -24,7 +24,7 @@ function parseRelativeTime(since: string): number | null {
 export function registerQuerySyncLog(server: McpServer, db: Database.Database): void {
   server.tool(
     'query-sync-log',
-    'Query the sync event timeline for debugging file synchronization issues. Returns per-file events showing watcher triggers, deferred writes, cancellations, and file writes.',
+    'Query the sync event timeline for debugging file synchronization issues. Returns per-file events showing watcher triggers, file writes, and parse retries.',
     paramsShape,
     async (params) => {
       const conditions: string[] = [];

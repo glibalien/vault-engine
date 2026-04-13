@@ -222,7 +222,7 @@ export function executeMutation(
 
     // ── Stage 6: Write (under write lock) ───────────────────────────
     return writeLock.withLockSync(absPath, () => {
-      // db_only: update DB only, return rendered content for deferred write.
+      // db_only: update DB only, skip file write (watcher path).
       // Otherwise: write the file immediately.
       const shouldWriteFile = !mutation.db_only;
       if (shouldWriteFile) {

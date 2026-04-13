@@ -42,7 +42,7 @@ export class ClaudeVisionImageExtractor implements Extractor {
     const data = buffer.toString('base64');
 
     const response = await this.client.messages.create({
-      model: 'claude-sonnet-4-6-20250514',
+      model: 'claude-sonnet-4-6',
       max_tokens: 4096,
       messages: [
         {
@@ -87,7 +87,7 @@ export class ClaudeVisionPdfExtractor implements Extractor {
     const data = buffer.toString('base64');
 
     const response = await this.client.messages.create({
-      model: 'claude-sonnet-4-6-20250514',
+      model: 'claude-sonnet-4-6',
       max_tokens: 8192,
       messages: [
         {

@@ -26,6 +26,7 @@ import { registerRemoveTypeFromNode } from './remove-type-from-node.js';
 import { registerRenameNode } from './rename-node.js';
 import { registerBatchMutate } from './batch-mutate.js';
 import { registerReadEmbedded } from './read-embedded.js';
+import { registerQuerySyncLog } from './query-sync-log.js';
 
 export function registerAllTools(server: McpServer, db: Database.Database, ctx?: { writeLock?: import('../../sync/write-lock.js').WriteLockManager; writeGate?: import('../../sync/write-gate.js').WriteGate; syncLogger?: import('../../sync/sync-logger.js').SyncLogger; vaultPath?: string; extractionCache?: import('../../extraction/cache.js').ExtractionCache; extractorRegistry?: import('../../extraction/registry.js').ExtractorRegistry }): void {
   registerVaultStats(server, db, ctx?.extractorRegistry);
@@ -35,6 +36,7 @@ export function registerAllTools(server: McpServer, db: Database.Database, ctx?:
   registerListGlobalFields(server, db);
   registerDescribeGlobalField(server, db);
   registerQueryNodes(server, db);
+  registerQuerySyncLog(server, db);
   registerGetNode(server, db, ctx?.extractionCache, ctx?.vaultPath);
   registerCreateGlobalField(server, db, ctx);
   registerUpdateGlobalField(server, db, ctx);

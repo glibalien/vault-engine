@@ -8,7 +8,6 @@ import { unlinkSync } from 'node:fs';
 import { toolResult, toolErrorResult } from './errors.js';
 import { resolveNodeIdentity } from './resolve-identity.js';
 import type { WriteLockManager } from '../../sync/write-lock.js';
-import type { WriteGate } from '../../sync/write-gate.js';
 import type { SyncLogger } from '../../sync/sync-logger.js';
 
 const paramsShape = {
@@ -24,7 +23,6 @@ export function registerDeleteNode(
   db: Database.Database,
   writeLock: WriteLockManager,
   vaultPath: string,
-  writeGate?: WriteGate,
   syncLogger?: SyncLogger,
 ): void {
   server.tool(
@@ -86,11 +84,6 @@ export function registerDeleteNode(
 
       // Confirmed deletion
       const absPath = join(vaultPath, node.file_path);
-
-      if (writeGate) {
-        writeGate.cancel(node.file_path);
-        syncLogger?.deferredWriteCancelled(node.file_path, 'tool-write');
-      }
 
       writeLock.withLockSync(absPath, () => {
         const txn = db.transaction(() => {

@@ -17,7 +17,6 @@ import { validateProposedState } from '../../validation/validate.js';
 import { buildNodeQuery } from '../query-builder.js';
 import type { NodeQueryFilter } from '../query-builder.js';
 import type { WriteLockManager } from '../../sync/write-lock.js';
-import type { WriteGate } from '../../sync/write-gate.js';
 import type { SyncLogger } from '../../sync/sync-logger.js';
 import { checkTypesHaveSchemas } from '../../pipeline/check-types.js';
 
@@ -64,7 +63,6 @@ export function registerUpdateNode(
   db: Database.Database,
   writeLock: WriteLockManager,
   vaultPath: string,
-  writeGate?: WriteGate,
   syncLogger?: SyncLogger,
 ): void {
   server.tool(
@@ -98,7 +96,7 @@ export function registerUpdateNode(
           add_types: params.add_types,
           remove_types: params.remove_types,
           set_path: params.set_path,
-        }, dryRun, params.confirm_large_batch, writeGate, syncLogger);
+        }, dryRun, params.confirm_large_batch, syncLogger);
       }
 
       // ── Single-node mode ────────────────────────────────────────────
@@ -200,7 +198,7 @@ export function registerUpdateNode(
           types: finalTypes,
           fields: finalFields,
           body: finalBody,
-        }, writeGate, syncLogger);
+        }, syncLogger);
 
         return toolResult({
           node_id: result.node_id,
@@ -236,7 +234,6 @@ function handleQueryMode(
   ops: QueryModeOps,
   dryRun: boolean,
   confirmLargeBatch?: boolean,
-  writeGate?: WriteGate,
   syncLogger?: SyncLogger,
 ) {
   // Build query to find matching nodes
@@ -270,7 +267,7 @@ function handleQueryMode(
     return handleDryRun(db, vaultPath, matchedNodes, ops, batchId);
   }
 
-  return handleExecution(db, writeLock, vaultPath, matchedNodes, ops, batchId, writeGate, syncLogger);
+  return handleExecution(db, writeLock, vaultPath, matchedNodes, ops, batchId, syncLogger);
 }
 
 function loadNodeState(db: Database.Database, nodeId: string) {
@@ -465,7 +462,6 @@ function handleExecution(
   matchedNodes: Array<{ id: string; file_path: string; title: string; body: string }>,
   ops: QueryModeOps,
   batchId: string,
-  writeGate?: WriteGate,
   syncLogger?: SyncLogger,
 ) {
   let updated = 0;
@@ -533,7 +529,7 @@ function handleExecution(
         types: newTypes,
         fields: newFields,
         body: node.body,
-      }, writeGate, syncLogger);
+      }, syncLogger);
 
       if (result.file_written) {
         updated++;

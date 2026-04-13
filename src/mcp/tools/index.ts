@@ -28,7 +28,7 @@ import { registerBatchMutate } from './batch-mutate.js';
 import { registerReadEmbedded } from './read-embedded.js';
 import { registerQuerySyncLog } from './query-sync-log.js';
 
-export function registerAllTools(server: McpServer, db: Database.Database, ctx?: { writeLock?: import('../../sync/write-lock.js').WriteLockManager; writeGate?: import('../../sync/write-gate.js').WriteGate; syncLogger?: import('../../sync/sync-logger.js').SyncLogger; vaultPath?: string; extractionCache?: import('../../extraction/cache.js').ExtractionCache; extractorRegistry?: import('../../extraction/registry.js').ExtractorRegistry; embeddingIndexer?: import('../../search/indexer.js').EmbeddingIndexer; embedder?: import('../../search/embedder.js').Embedder }): void {
+export function registerAllTools(server: McpServer, db: Database.Database, ctx?: { writeLock?: import('../../sync/write-lock.js').WriteLockManager; syncLogger?: import('../../sync/sync-logger.js').SyncLogger; vaultPath?: string; extractionCache?: import('../../extraction/cache.js').ExtractionCache; extractorRegistry?: import('../../extraction/registry.js').ExtractorRegistry; embeddingIndexer?: import('../../search/indexer.js').EmbeddingIndexer; embedder?: import('../../search/embedder.js').Embedder }): void {
   registerVaultStats(server, db, ctx?.extractorRegistry, ctx?.embeddingIndexer);
   registerListTypes(server, db);
   registerListSchemas(server, db);
@@ -56,12 +56,12 @@ export function registerAllTools(server: McpServer, db: Database.Database, ctx?:
 
   // Phase 3 mutation tools (require writeLock and vaultPath)
   if (ctx?.writeLock && ctx?.vaultPath) {
-    registerCreateNode(server, db, ctx.writeLock, ctx.vaultPath, ctx.writeGate, ctx.syncLogger);
-    registerUpdateNode(server, db, ctx.writeLock, ctx.vaultPath, ctx.writeGate, ctx.syncLogger);
-    registerDeleteNode(server, db, ctx.writeLock, ctx.vaultPath, ctx.writeGate, ctx.syncLogger);
-    registerAddTypeToNode(server, db, ctx.writeLock, ctx.vaultPath, ctx.writeGate, ctx.syncLogger);
-    registerRemoveTypeFromNode(server, db, ctx.writeLock, ctx.vaultPath, ctx.writeGate, ctx.syncLogger);
-    registerRenameNode(server, db, ctx.writeLock, ctx.vaultPath, ctx.writeGate, ctx.syncLogger);
-    registerBatchMutate(server, db, ctx.writeLock, ctx.vaultPath, ctx.writeGate, ctx.syncLogger);
+    registerCreateNode(server, db, ctx.writeLock, ctx.vaultPath, ctx.syncLogger);
+    registerUpdateNode(server, db, ctx.writeLock, ctx.vaultPath, ctx.syncLogger);
+    registerDeleteNode(server, db, ctx.writeLock, ctx.vaultPath, ctx.syncLogger);
+    registerAddTypeToNode(server, db, ctx.writeLock, ctx.vaultPath, ctx.syncLogger);
+    registerRemoveTypeFromNode(server, db, ctx.writeLock, ctx.vaultPath, ctx.syncLogger);
+    registerRenameNode(server, db, ctx.writeLock, ctx.vaultPath, ctx.syncLogger);
+    registerBatchMutate(server, db, ctx.writeLock, ctx.vaultPath, ctx.syncLogger);
   }
 }

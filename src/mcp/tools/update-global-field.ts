@@ -6,12 +6,11 @@ import { updateGlobalField } from '../../global-fields/crud.js';
 import { renderFieldsFile, renderSchemaFile } from '../../schema/render.js';
 import { rerenderNodesWithField } from '../../schema/propagate.js';
 import type { WriteLockManager } from '../../sync/write-lock.js';
-import type { WriteGate } from '../../sync/write-gate.js';
 import type { SyncLogger } from '../../sync/sync-logger.js';
 
 const fieldTypeEnum = z.enum(['string', 'number', 'date', 'boolean', 'reference', 'enum', 'list']);
 
-export function registerUpdateGlobalField(server: McpServer, db: Database.Database, ctx?: { writeLock?: WriteLockManager; vaultPath?: string; writeGate?: WriteGate; syncLogger?: SyncLogger }): void {
+export function registerUpdateGlobalField(server: McpServer, db: Database.Database, ctx?: { writeLock?: WriteLockManager; vaultPath?: string; syncLogger?: SyncLogger }): void {
   server.tool(
     'update-global-field',
     'Updates an existing global field definition. For type changes, omit confirm to preview impact; set confirm=true to apply.',
@@ -44,7 +43,7 @@ export function registerUpdateGlobalField(server: McpServer, db: Database.Databa
             // Pass uncoercible node IDs so they get re-rendered even though
             // their node_fields rows for this field were deleted
             const uncoercibleIds = result.uncoercible?.map(u => u.node_id);
-            const nodes_rerendered = rerenderNodesWithField(db, ctx.writeLock, ctx.vaultPath, name, uncoercibleIds, ctx.writeGate, ctx.syncLogger);
+            const nodes_rerendered = rerenderNodesWithField(db, ctx.writeLock, ctx.vaultPath, name, uncoercibleIds, ctx.syncLogger);
             return toolResult({ ...result, nodes_rerendered });
           }
         }

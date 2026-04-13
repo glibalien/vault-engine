@@ -6,10 +6,9 @@ import { toolResult, toolErrorResult } from './errors.js';
 import { renameGlobalField } from '../../global-fields/crud.js';
 import { rerenderNodesWithField } from '../../schema/propagate.js';
 import type { WriteLockManager } from '../../sync/write-lock.js';
-import type { WriteGate } from '../../sync/write-gate.js';
 import type { SyncLogger } from '../../sync/sync-logger.js';
 
-export function registerRenameGlobalField(server: McpServer, db: Database.Database, ctx?: { writeLock?: WriteLockManager; vaultPath?: string; writeGate?: WriteGate; syncLogger?: SyncLogger }): void {
+export function registerRenameGlobalField(server: McpServer, db: Database.Database, ctx?: { writeLock?: WriteLockManager; vaultPath?: string; syncLogger?: SyncLogger }): void {
   server.tool(
     'rename-global-field',
     'Renames a global field, updating all schema claims and node field values.',
@@ -24,7 +23,7 @@ export function registerRenameGlobalField(server: McpServer, db: Database.Databa
         // Re-render affected nodes
         let nodes_rerendered = 0;
         if (ctx?.writeLock && ctx?.vaultPath) {
-          nodes_rerendered = rerenderNodesWithField(db, ctx.writeLock, ctx.vaultPath, new_name, undefined, ctx.writeGate, ctx.syncLogger);
+          nodes_rerendered = rerenderNodesWithField(db, ctx.writeLock, ctx.vaultPath, new_name, undefined, ctx.syncLogger);
         }
 
         return toolResult({ ...result, nodes_rerendered });

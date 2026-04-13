@@ -9,7 +9,6 @@ import { toolResult, toolErrorResult } from './errors.js';
 import { executeMutation } from '../../pipeline/execute.js';
 import { PipelineError } from '../../pipeline/types.js';
 import type { WriteLockManager } from '../../sync/write-lock.js';
-import type { WriteGate } from '../../sync/write-gate.js';
 import type { SyncLogger } from '../../sync/sync-logger.js';
 import { checkTypesHaveSchemas } from '../../pipeline/check-types.js';
 import { loadSchemaContext } from '../../pipeline/schema-context.js';
@@ -29,7 +28,6 @@ export function registerCreateNode(
   db: Database.Database,
   writeLock: WriteLockManager,
   vaultPath: string,
-  writeGate?: WriteGate,
   syncLogger?: SyncLogger,
 ): void {
   server.tool(
@@ -122,7 +120,7 @@ export function registerCreateNode(
           types,
           fields,
           body,
-        }, writeGate, syncLogger);
+        }, syncLogger);
 
         return toolResult({
           node_id: result.node_id,

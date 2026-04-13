@@ -17,7 +17,6 @@ import { executeMutation } from '../../pipeline/execute.js';
 import { reconstructValue } from '../../pipeline/classify-value.js';
 import { resolveTarget } from '../../resolver/resolve.js';
 import type { WriteLockManager } from '../../sync/write-lock.js';
-import type { WriteGate } from '../../sync/write-gate.js';
 import type { SyncLogger } from '../../sync/sync-logger.js';
 
 const SKIP_TYPES = new Set(['code', 'inlineCode', 'yaml']);
@@ -35,7 +34,6 @@ export function registerRenameNode(
   db: Database.Database,
   writeLock: WriteLockManager,
   vaultPath: string,
-  writeGate?: WriteGate,
   syncLogger?: SyncLogger,
 ): void {
   server.tool(
@@ -95,10 +93,6 @@ export function registerRenameNode(
       const txn = db.transaction(() => {
         // 1. Rename file on disk
         if (newFilePath !== oldFilePath) {
-          if (writeGate) {
-            writeGate.cancel(oldFilePath);
-            syncLogger?.deferredWriteCancelled(oldFilePath, 'unlink');
-          }
           const oldAbs = join(vaultPath, oldFilePath);
           const newAbs = join(vaultPath, newFilePath);
           if (existsSync(oldAbs)) {
@@ -132,7 +126,7 @@ export function registerRenameNode(
           types,
           fields,
           body,
-        }, writeGate, syncLogger);
+        }, syncLogger);
 
         // 4. Update references in referencing nodes
         let refsUpdated = 0;
@@ -176,7 +170,7 @@ export function registerRenameNode(
               types: refTypes,
               fields: refFields,
               body: newBody,
-            }, writeGate, syncLogger);
+            }, syncLogger);
             refsUpdated++;
           }
         }

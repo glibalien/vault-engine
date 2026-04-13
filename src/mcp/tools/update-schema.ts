@@ -6,7 +6,6 @@ import { updateSchemaDefinition } from '../../schema/crud.js';
 import { diffClaims, propagateSchemaChange } from '../../schema/propagate.js';
 import { renderSchemaFile } from '../../schema/render.js';
 import type { WriteLockManager } from '../../sync/write-lock.js';
-import type { WriteGate } from '../../sync/write-gate.js';
 import type { SyncLogger } from '../../sync/sync-logger.js';
 
 const fieldClaimSchema = z.object({
@@ -18,7 +17,7 @@ const fieldClaimSchema = z.object({
   default_value: z.unknown().optional(),
 });
 
-export function registerUpdateSchema(server: McpServer, db: Database.Database, ctx?: { writeLock?: WriteLockManager; vaultPath?: string; writeGate?: WriteGate; syncLogger?: SyncLogger }): void {
+export function registerUpdateSchema(server: McpServer, db: Database.Database, ctx?: { writeLock?: WriteLockManager; vaultPath?: string; syncLogger?: SyncLogger }): void {
   server.tool(
     'update-schema',
     'Updates an existing schema definition. If field_claims is provided, it replaces all existing claims.',
@@ -62,7 +61,7 @@ export function registerUpdateSchema(server: McpServer, db: Database.Database, c
             default_value: c.default_value ?? null,
           }));
           const diff = diffClaims(oldClaims, newClaims);
-          propagation = propagateSchemaChange(db, ctx.writeLock, ctx.vaultPath, name, diff, ctx.writeGate, ctx.syncLogger);
+          propagation = propagateSchemaChange(db, ctx.writeLock, ctx.vaultPath, name, diff, ctx.syncLogger);
         }
 
         // Re-render schema YAML file

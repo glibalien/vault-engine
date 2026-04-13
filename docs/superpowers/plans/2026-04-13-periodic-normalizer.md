@@ -4,7 +4,7 @@
 
 **Goal:** Add a cron-scheduled normalizer that re-renders stale vault markdown from DB state, closing the drift gap left by the watcher's DB-only policy.
 
-**Architecture:** A new `src/sync/normalizer.ts` module, peer to `reconciler.ts` and `watcher.ts`. Uses `croner` for cron parsing and `setTimeout` to the next fire time. Each run walks all nodes, skips quiescent and already-canonical files, and writes stale files through `executeMutation` with a new `'normalizer'` source. Watcher suppression is automatic — `writeLock.isLocked()` already filters self-writes.
+**Architecture:** A new `src/sync/normalizer.ts` module, peer to `reconciler.ts` and `watcher.ts`. Uses `croner` for cron parsing and `setTimeout` to the next fire time. Each run walks all nodes (deterministic `ORDER BY file_path`), skips quiescent and already-canonical files, and writes stale files through `executeMutation` with a new `'normalizer'` source. Watcher suppression via a TTL-based recent-writes set on `WriteLockManager` — after each normalizer write, the path is marked for 5s so the watcher's `isLocked()` check returns true when the debounced event fires, avoiding spurious watcher cycles on large sweeps.
 
 **Tech Stack:** croner (cron parsing), existing pipeline (`executeMutation`), existing renderer (`renderNode`)
 
@@ -14,6 +14,8 @@
 
 | Action | File | Responsibility |
 |--------|------|---------------|
+| Modify | `src/sync/write-lock.ts` | Add TTL-based `recentWrites` set and `markRecentWrite()` method |
+| Modify | `tests/sync/write-lock.test.ts` | Test `markRecentWrite` + TTL expiry |
 | Create | `src/sync/normalizer.ts` | Cron-scheduled sweep: detect stale nodes, re-render via pipeline |
 | Create | `tests/sync/normalizer.test.ts` | Unit tests for normalizer logic |
 | Modify | `src/pipeline/types.ts` | Add `'normalizer'` to `ProposedMutation.source` union |
@@ -52,7 +54,150 @@ git commit -m "chore: add croner dependency for normalizer scheduling"
 
 ---
 
-### Task 2: Add 'normalizer' as a pipeline source
+### Task 2: Add TTL-based recent-writes to WriteLockManager
+
+**Files:**
+- Modify: `src/sync/write-lock.ts`
+- Test: `tests/sync/write-lock.test.ts`
+
+When the normalizer writes a file and releases the write lock, chokidar fires an fs event. The watcher's debounce (2.5s) fires after the lock is released, so `isLocked()` returns false and the watcher processes the event — reading the file, computing SHA256, querying the DB, and skipping (hash matches). On a 7000-node sweep, that's 7000 spurious watcher cycles.
+
+Fix: add a `recentWrites` Map with TTL to `WriteLockManager`. After a write, callers call `markRecentWrite(path)` to suppress watcher processing for that path for a configurable duration (default 5s, comfortably past the 2.5s debounce). `isLocked()` checks both the active lock set and the recent-writes map.
+
+- [ ] **Step 1: Write failing tests for markRecentWrite**
+
+Add to `tests/sync/write-lock.test.ts`:
+
+```typescript
+describe('markRecentWrite', () => {
+  it('isLocked returns true for recently-written paths', () => {
+    const wl = new WriteLockManager();
+    wl.markRecentWrite('/tmp/test.md');
+    expect(wl.isLocked('/tmp/test.md')).toBe(true);
+  });
+
+  it('isLocked returns false after TTL expires', async () => {
+    const wl = new WriteLockManager({ recentWriteTtlMs: 50 });
+    wl.markRecentWrite('/tmp/test.md');
+    expect(wl.isLocked('/tmp/test.md')).toBe(true);
+    await new Promise(r => setTimeout(r, 80));
+    expect(wl.isLocked('/tmp/test.md')).toBe(false);
+  });
+
+  it('does not interfere with active locks', () => {
+    const wl = new WriteLockManager();
+    wl.withLockSync('/tmp/test.md', () => {
+      expect(wl.isLocked('/tmp/test.md')).toBe(true);
+    });
+    // After withLockSync, active lock is released, no recentWrite
+    expect(wl.isLocked('/tmp/test.md')).toBe(false);
+  });
+
+  it('clearRecentWrites clears all entries', () => {
+    const wl = new WriteLockManager();
+    wl.markRecentWrite('/tmp/a.md');
+    wl.markRecentWrite('/tmp/b.md');
+    wl.clearRecentWrites();
+    expect(wl.isLocked('/tmp/a.md')).toBe(false);
+    expect(wl.isLocked('/tmp/b.md')).toBe(false);
+  });
+});
+```
+
+- [ ] **Step 2: Run tests to verify they fail**
+
+```bash
+npm test -- tests/sync/write-lock.test.ts
+```
+
+Expected: FAIL — `markRecentWrite` does not exist.
+
+- [ ] **Step 3: Implement markRecentWrite in WriteLockManager**
+
+Replace `src/sync/write-lock.ts` with:
+
+```typescript
+export interface WriteLockOptions {
+  recentWriteTtlMs?: number;
+}
+
+export class WriteLockManager {
+  private locks = new Set<string>();
+  private recentWrites = new Map<string, ReturnType<typeof setTimeout>>();
+  private readonly ttlMs: number;
+
+  constructor(options?: WriteLockOptions) {
+    this.ttlMs = options?.recentWriteTtlMs ?? 5000;
+  }
+
+  isLocked(filePath: string): boolean {
+    return this.locks.has(filePath) || this.recentWrites.has(filePath);
+  }
+
+  async withLock<T>(filePath: string, fn: () => Promise<T>): Promise<T> {
+    this.locks.add(filePath);
+    try {
+      return await fn();
+    } finally {
+      this.locks.delete(filePath);
+    }
+  }
+
+  withLockSync<T>(filePath: string, fn: () => T): T {
+    this.locks.add(filePath);
+    try {
+      return fn();
+    } finally {
+      this.locks.delete(filePath);
+    }
+  }
+
+  markRecentWrite(filePath: string): void {
+    const existing = this.recentWrites.get(filePath);
+    if (existing) clearTimeout(existing);
+    const timer = setTimeout(() => {
+      this.recentWrites.delete(filePath);
+    }, this.ttlMs);
+    // Unref so the timer doesn't prevent Node from exiting
+    if (typeof timer === 'object' && 'unref' in timer) timer.unref();
+    this.recentWrites.set(filePath, timer);
+  }
+
+  clearRecentWrites(): void {
+    for (const timer of this.recentWrites.values()) {
+      clearTimeout(timer);
+    }
+    this.recentWrites.clear();
+  }
+}
+```
+
+- [ ] **Step 4: Run tests to verify they pass**
+
+```bash
+npm test -- tests/sync/write-lock.test.ts
+```
+
+Expected: All tests pass.
+
+- [ ] **Step 5: Run full test suite — check nothing broke**
+
+```bash
+npm test
+```
+
+Expected: All tests pass. The `WriteLockManager` constructor now accepts optional `options`, but the no-arg call still works (all existing call sites pass no args).
+
+- [ ] **Step 6: Commit**
+
+```bash
+git add src/sync/write-lock.ts tests/sync/write-lock.test.ts
+git commit -m "feat(sync): add TTL-based recentWrites to WriteLockManager"
+```
+
+---
+
+### Task 3: Add 'normalizer' as a pipeline source
 
 **Files:**
 - Modify: `src/pipeline/types.ts:8`
@@ -151,7 +296,7 @@ git commit -m "feat(pipeline): add 'normalizer' as first-class write source"
 
 ---
 
-### Task 3: Implement the normalizer module
+### Task 4: Implement the normalizer module
 
 **Files:**
 - Create: `src/sync/normalizer.ts`
@@ -238,7 +383,7 @@ export function startNormalizer(
       errored: 0,
     };
 
-    const nodes = db.prepare('SELECT id, file_path, content_hash FROM nodes').all() as Array<{
+    const nodes = db.prepare('SELECT id, file_path, content_hash FROM nodes ORDER BY file_path').all() as Array<{
       id: string;
       file_path: string;
       content_hash: string;
@@ -317,6 +462,9 @@ export function startNormalizer(
           body: nodeRow.body,
           raw_field_texts: rawFieldTexts,
         }, syncLogger);
+
+        // Suppress the watcher's debounced fs event for this file
+        writeLock.markRecentWrite(absPath);
 
         console.log(`[normalizer] Normalized: ${node.file_path}`);
         stats.rewritten++;
@@ -454,7 +602,7 @@ git commit -m "feat(sync): add periodic field normalizer module"
 
 ---
 
-### Task 4: Write normalizer tests
+### Task 5: Write normalizer tests
 
 **Files:**
 - Create: `tests/sync/normalizer.test.ts`
@@ -719,7 +867,7 @@ git commit -m "test(sync): add normalizer unit tests"
 
 ---
 
-### Task 5: Wire normalizer into startup/shutdown
+### Task 6: Wire normalizer into startup/shutdown
 
 **Files:**
 - Modify: `src/index.ts`
@@ -784,7 +932,7 @@ git commit -m "feat: wire normalizer into startup/shutdown, add env config"
 
 ---
 
-### Task 6: Update query-sync-log source description
+### Task 7: Update query-sync-log source description
 
 **Files:**
 - Modify: `src/mcp/tools/query-sync-log.ts:10`
@@ -820,7 +968,7 @@ git commit -m "docs: add normalizer to query-sync-log source description"
 
 ---
 
-### Task 7: End-to-end verification
+### Task 8: End-to-end verification
 
 - [ ] **Step 1: Run full test suite**
 

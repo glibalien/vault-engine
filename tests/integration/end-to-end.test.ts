@@ -50,7 +50,7 @@ The vault engine project.
   fullIndex(vaultPath, db);
 
   mutex = new IndexMutex();
-  watcher = startWatcher(vaultPath, db, mutex, new WriteLockManager(), new WriteGate({ quietPeriodMs: 50 }), undefined, {
+  watcher = startWatcher(vaultPath, db, mutex, new WriteLockManager(), new WriteGate({ quietPeriodMs: 50 }), undefined, undefined, {
     debounceMs: 50, maxWaitMs: 200,
   });
   await new Promise(r => setTimeout(r, 100));

@@ -15,6 +15,7 @@ import type { IndexMutex } from './mutex.js';
 import type { WriteLockManager } from './write-lock.js';
 import type { WriteGate } from './write-gate.js';
 import type { SyncLogger } from './sync-logger.js';
+import type { EmbeddingIndexer } from '../search/indexer.js';
 
 const WIKILINK_RE = /\[\[([^\]|]+)(?:\|([^\]]+))?\]\]/;
 
@@ -35,6 +36,7 @@ export function startWatcher(
   writeLock: WriteLockManager,
   writeGate: WriteGate,
   syncLogger?: SyncLogger,
+  embeddingIndexer?: EmbeddingIndexer,
   options?: WatcherOptions,
 ): FSWatcher {
   const debounceMs = options?.debounceMs ?? 2500;
@@ -49,7 +51,7 @@ export function startWatcher(
       deleteNodeByPath(relPath, db);
     } else {
       const absPath = join(vaultPath, event.path);
-      processFileChange(absPath, relative(vaultPath, absPath), db, writeLock, vaultPath, writeGate, syncLogger);
+      processFileChange(absPath, relative(vaultPath, absPath), db, writeLock, vaultPath, writeGate, syncLogger, embeddingIndexer);
     }
   };
 
@@ -119,7 +121,7 @@ export function startWatcher(
 
       // Process through mutex via write pipeline
       mutex.run(async () => {
-        processFileChange(absPath, relPath, db, writeLock, vaultPath, writeGate, syncLogger);
+        processFileChange(absPath, relPath, db, writeLock, vaultPath, writeGate, syncLogger, embeddingIndexer);
       });
     };
 
@@ -202,6 +204,7 @@ export function processFileChange(
   vaultPath: string,
   writeGate?: WriteGate,
   syncLogger?: SyncLogger,
+  embeddingIndexer?: EmbeddingIndexer,
 ): void {
   let content: string;
   try {
@@ -231,7 +234,9 @@ export function processFileChange(
     } else {
       // New file with parse error: create minimal node with body-only
       // (Phase 1 fallback behavior)
-      indexFile(absPath, vaultPath, db);
+      const fallbackNodeId = indexFile(absPath, vaultPath, db);
+      embeddingIndexer?.enqueue({ node_id: fallbackNodeId, source_type: 'node' });
+      embeddingIndexer?.processOne().catch(() => {});
     }
     return;
   }
@@ -303,6 +308,9 @@ export function processFileChange(
       source_content_hash: sourceContentHash,
       db_only: useDbOnly,
     });
+
+    embeddingIndexer?.enqueue({ node_id: result.node_id, source_type: 'node' });
+    embeddingIndexer?.processOne().catch(() => {});
 
     // If the pipeline produced a deferred write, hand it to the WriteGate.
     // The callback re-renders from current DB state at write time (not the

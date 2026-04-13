@@ -63,7 +63,7 @@ export function createEmbeddingIndexer(
     `UPDATE embedding_meta SET source_hash = ?, embedded_at = ? WHERE id = ?`
   );
 
-  const stmtInsertVec = db.prepare<[number, Uint8Array], void>(
+  const stmtInsertVec = db.prepare<[bigint, Uint8Array], void>(
     'INSERT INTO embedding_vec (id, vector) VALUES (?, ?)'
   );
 

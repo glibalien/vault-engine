@@ -3,6 +3,7 @@ export interface ParsedArgs {
   vaultPath: string | undefined;
   transport: 'stdio' | 'http' | 'both';
   port: number;
+  reindexSearch: boolean;
 }
 
 const VALID_TRANSPORTS = new Set(['stdio', 'http', 'both']);
@@ -13,6 +14,7 @@ export function parseArgs(argv: string[]): ParsedArgs {
     vaultPath: undefined,
     transport: 'stdio',
     port: 3333,
+    reindexSearch: false,
   };
 
   const positional: string[] = [];
@@ -38,6 +40,8 @@ export function parseArgs(argv: string[]): ParsedArgs {
         throw new Error(`Invalid --port value: "${value}". Must be an integer between 1 and 65535.`);
       }
       result.port = num;
+    } else if (arg === '--reindex-search') {
+      result.reindexSearch = true;
     } else if (!arg.startsWith('--')) {
       positional.push(arg);
     }

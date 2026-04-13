@@ -243,10 +243,14 @@ export interface IndexStats {
   errors: number;
 }
 
+export interface IndexerOptions {
+  onNodeIndexed?: (nodeId: string) => void;
+}
+
 /**
  * Full vault index: walk all files, detect deletions, batch-index changes.
  */
-export function fullIndex(vaultPath: string, db: Database.Database): IndexStats {
+export function fullIndex(vaultPath: string, db: Database.Database, options?: IndexerOptions): IndexStats {
   const stmts = prepareStatements(db);
   const stats: IndexStats = { indexed: 0, skipped: 0, deleted: 0, errors: 0 };
 
@@ -309,7 +313,8 @@ export function fullIndex(vaultPath: string, db: Database.Database): IndexStats 
           }
 
           // Full re-index
-          doIndex(stmts, raw, relPath, absPath, mtime, hash, existing?.id ?? null);
+          const nodeId = doIndex(stmts, raw, relPath, absPath, mtime, hash, existing?.id ?? null);
+          options?.onNodeIndexed?.(nodeId);
           stats.indexed++;
         } catch (err) {
           // Log error but don't block batch
@@ -329,7 +334,7 @@ export function fullIndex(vaultPath: string, db: Database.Database): IndexStats 
  * Index a single file (for watcher-driven updates).
  * Always re-reads, hashes, and re-indexes — no mtime check.
  */
-export function indexFile(absolutePath: string, vaultPath: string, db: Database.Database): string {
+export function indexFile(absolutePath: string, vaultPath: string, db: Database.Database, options?: IndexerOptions): string {
   const stmts = prepareStatements(db);
   const relPath = relative(vaultPath, absolutePath);
   const raw = readFileSync(absolutePath, 'utf-8');
@@ -343,7 +348,9 @@ export function indexFile(absolutePath: string, vaultPath: string, db: Database.
     return doIndex(stmts, raw, relPath, absolutePath, mtime, hash, existing?.id ?? null);
   });
 
-  return txn();
+  const nodeId = txn();
+  options?.onNodeIndexed?.(nodeId);
+  return nodeId;
 }
 
 /**

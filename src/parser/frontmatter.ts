@@ -164,9 +164,11 @@ export function parseFrontmatter(raw: string): FrontmatterResult {
   if ('types' in data) {
     const rawTypes = data.types;
     if (Array.isArray(rawTypes)) {
-      types = rawTypes.map(String);
+      types = rawTypes
+        .filter((t): t is string => typeof t === 'string')
+        .map(t => t.replace(/^\[\[(.+)\]\]$/, '$1'));
     } else if (typeof rawTypes === 'string') {
-      types = [rawTypes];
+      types = [rawTypes.replace(/^\[\[(.+)\]\]$/, '$1')];
     }
   }
 

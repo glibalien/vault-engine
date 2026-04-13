@@ -42,46 +42,6 @@ describe('SyncLogger', () => {
     expect(JSON.parse(rows[0].details)).toEqual({ attempt: 2, error: 'bad YAML' });
   });
 
-  it('deferredWriteScheduled logs event', () => {
-    logger.deferredWriteScheduled('note.md');
-    const rows = getRows();
-    expect(rows[0].event).toBe('deferred-write-scheduled');
-    expect(rows[0].source).toBe('watcher');
-  });
-
-  it('deferredWriteCancelled derives source from reason', () => {
-    logger.deferredWriteCancelled('a.md', 'tool-write');
-    logger.deferredWriteCancelled('b.md', 'propagation');
-    logger.deferredWriteCancelled('c.md', 'new-edit');
-    logger.deferredWriteCancelled('d.md', 'unlink');
-    const rows = getRows();
-    expect(rows[0].source).toBe('tool');
-    expect(rows[1].source).toBe('propagation');
-    expect(rows[2].source).toBe('watcher');
-    expect(rows[3].source).toBe('watcher');
-    expect(JSON.parse(rows[0].details)).toEqual({ reason: 'tool-write' });
-  });
-
-  it('deferredWriteFired logs intended hash', () => {
-    logger.deferredWriteFired('note.md', 'hash123');
-    const rows = getRows();
-    expect(rows[0].event).toBe('deferred-write-fired');
-    expect(JSON.parse(rows[0].details)).toEqual({ intended_hash: 'hash123' });
-  });
-
-  it('deferredWriteSkipped logs reason with optional hashes', () => {
-    logger.deferredWriteSkipped('note.md', 'stale-file', 'aaa', 'bbb');
-    const rows = getRows();
-    expect(rows[0].event).toBe('deferred-write-skipped');
-    expect(JSON.parse(rows[0].details)).toEqual({ reason: 'stale-file', intended_hash: 'aaa', disk_hash: 'bbb' });
-  });
-
-  it('deferredWriteSkipped omits hashes when not provided', () => {
-    logger.deferredWriteSkipped('note.md', 'node-deleted');
-    const rows = getRows();
-    expect(JSON.parse(rows[0].details)).toEqual({ reason: 'node-deleted' });
-  });
-
   it('fileWritten logs source and hash', () => {
     logger.fileWritten('note.md', 'tool', 'xyz789');
     const rows = getRows();

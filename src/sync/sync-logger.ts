@@ -23,29 +23,6 @@ export class SyncLogger {
     this.log(filePath, 'parse-retry', 'watcher', { attempt, error });
   }
 
-  deferredWriteScheduled(filePath: string): void {
-    this.log(filePath, 'deferred-write-scheduled', 'watcher', {});
-  }
-
-  deferredWriteCancelled(filePath: string, reason: string): void {
-    // Derive source from reason: tool-write → tool, propagation → propagation, else watcher
-    const source = reason === 'tool-write' ? 'tool'
-      : reason === 'propagation' ? 'propagation'
-      : 'watcher';
-    this.log(filePath, 'deferred-write-cancelled', source, { reason });
-  }
-
-  deferredWriteFired(filePath: string, intendedHash: string): void {
-    this.log(filePath, 'deferred-write-fired', 'watcher', { intended_hash: intendedHash });
-  }
-
-  deferredWriteSkipped(filePath: string, reason: string, intendedHash?: string, diskHash?: string): void {
-    const details: Record<string, string> = { reason };
-    if (intendedHash !== undefined) details.intended_hash = intendedHash;
-    if (diskHash !== undefined) details.disk_hash = diskHash;
-    this.log(filePath, 'deferred-write-skipped', 'watcher', details);
-  }
-
   fileWritten(filePath: string, source: string, hash: string): void {
     this.log(filePath, 'file-written', source, { hash });
   }

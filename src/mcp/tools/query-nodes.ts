@@ -68,22 +68,16 @@ export function registerQueryNodes(server: McpServer, db: Database.Database): vo
       const getFieldCount = db.prepare('SELECT COUNT(*) as count FROM node_fields WHERE node_id = ?');
 
       const includeFields = params.include_fields;
+      const wantFields = includeFields && includeFields.length > 0;
       const isWildcard = includeFields?.length === 1 && includeFields[0] === '*';
 
       // Prepare field query if needed
-      let getFields: ReturnType<typeof db.prepare> | undefined;
-      if (includeFields && includeFields.length > 0) {
-        if (isWildcard) {
-          getFields = db.prepare(
-            'SELECT field_name, value_text, value_number, value_date, value_json, source FROM node_fields WHERE node_id = ?'
-          );
-        } else {
-          const placeholders = includeFields.map(() => '?').join(', ');
-          getFields = db.prepare(
-            `SELECT field_name, value_text, value_number, value_date, value_json, source FROM node_fields WHERE node_id = ? AND field_name IN (${placeholders})`
-          );
-        }
-      }
+      const getFieldsAll = wantFields && isWildcard
+        ? db.prepare('SELECT field_name, value_text, value_number, value_date, value_json, source FROM node_fields WHERE node_id = ?')
+        : undefined;
+      const getFieldsSome = wantFields && !isWildcard
+        ? db.prepare(`SELECT field_name, value_text, value_number, value_date, value_json, source FROM node_fields WHERE node_id = ? AND field_name IN (${includeFields!.map(() => '?').join(', ')})`)
+        : undefined;
 
       const nodes = rows.map(row => {
         const node: Record<string, unknown> = {
@@ -94,9 +88,15 @@ export function registerQueryNodes(server: McpServer, db: Database.Database): vo
           field_count: (getFieldCount.get(row.id) as { count: number }).count,
         };
 
-        if (getFields) {
-          const fieldArgs = isWildcard ? [row.id] : [row.id, ...includeFields!];
-          const fieldRows = getFields.all(...fieldArgs) as FieldRow[];
+        if (getFieldsAll) {
+          const fieldRows = getFieldsAll.all(row.id) as FieldRow[];
+          const fields: Record<string, unknown> = {};
+          for (const f of fieldRows) {
+            fields[f.field_name] = resolveFieldValue(f);
+          }
+          node.fields = fields;
+        } else if (getFieldsSome) {
+          const fieldRows = getFieldsSome.all(row.id, ...includeFields!) as FieldRow[];
           const fields: Record<string, unknown> = {};
           for (const f of fieldRows) {
             fields[f.field_name] = resolveFieldValue(f);

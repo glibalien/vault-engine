@@ -9,13 +9,17 @@ export class OfficeExtractor implements Extractor {
 
   async extract(filePath: string): Promise<ExtractionResult> {
     const ext = extname(filePath).toLowerCase();
+    console.log(`[extraction:office] extracting ${ext} document`);
+    let result: ExtractionResult;
     switch (ext) {
-      case '.docx': return this.extractDocx(filePath);
-      case '.pptx': return this.extractPptx(filePath);
-      case '.xlsx': return this.extractXlsx(filePath);
-      case '.csv': return this.extractCsv(filePath);
+      case '.docx': result = await this.extractDocx(filePath); break;
+      case '.pptx': result = await this.extractPptx(filePath); break;
+      case '.xlsx': result = await this.extractXlsx(filePath); break;
+      case '.csv': result = await this.extractCsv(filePath); break;
       default: throw new Error(`Unsupported office format: ${ext}`);
     }
+    console.log(`[extraction:office] ${ext} extraction complete: ${result.text.length} chars`);
+    return result;
   }
 
   private async extractDocx(filePath: string): Promise<ExtractionResult> {

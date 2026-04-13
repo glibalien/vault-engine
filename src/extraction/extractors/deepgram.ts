@@ -49,6 +49,9 @@ export class DeepgramExtractor implements Extractor {
     const deepgram = new DeepgramClient({ apiKey: this.apiKey });
 
     const buffer = await readFile(filePath);
+    const sizeMB = (buffer.length / (1024 * 1024)).toFixed(1);
+    console.log(`[extraction:deepgram] sending ${sizeMB}MB ${ext} to Deepgram Nova-3 (diarize+utterances)`);
+
     const uploadable = { data: buffer, contentType: mimetype };
     const result = await deepgram.listen.v1.media.transcribeFile(uploadable, {
       model: 'nova-3',
@@ -66,7 +69,10 @@ export class DeepgramExtractor implements Extractor {
       text: u.transcript ?? '',
     }));
 
+    const speakers = new Set(segments.map(s => s.speaker)).size;
     const text = formatDiarizedTranscript(segments);
+    console.log(`[extraction:deepgram] transcription complete: ${segments.length} utterances, ${speakers} speakers, ${text.length} chars`);
+
     return {
       text,
       metadata: { segments },

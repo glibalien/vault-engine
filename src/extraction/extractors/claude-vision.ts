@@ -37,6 +37,8 @@ export class ClaudeVisionImageExtractor implements Extractor {
     }
 
     const buffer = await readFile(filePath);
+    const sizeMB = (buffer.length / (1024 * 1024)).toFixed(1);
+    console.log(`[extraction:claude-vision] sending ${sizeMB}MB ${ext} image to Claude vision`);
     const data = buffer.toString('base64');
 
     const response = await this.client.messages.create({
@@ -62,6 +64,7 @@ export class ClaudeVisionImageExtractor implements Extractor {
         .map(block => (block as { type: 'text'; text: string }).text)
         .join('') ?? '';
 
+    console.log(`[extraction:claude-vision] image extraction complete: ${text.length} chars`);
     return { text };
   }
 }
@@ -79,6 +82,8 @@ export class ClaudeVisionPdfExtractor implements Extractor {
 
   async extract(filePath: string): Promise<ExtractionResult> {
     const buffer = await readFile(filePath);
+    const sizeMB = (buffer.length / (1024 * 1024)).toFixed(1);
+    console.log(`[extraction:claude-vision] sending ${sizeMB}MB scanned PDF to Claude vision`);
     const data = buffer.toString('base64');
 
     const response = await this.client.messages.create({
@@ -104,6 +109,7 @@ export class ClaudeVisionPdfExtractor implements Extractor {
         .map(block => (block as { type: 'text'; text: string }).text)
         .join('') ?? '';
 
+    console.log(`[extraction:claude-vision] scanned PDF extraction complete: ${text.length} chars`);
     return { text };
   }
 }

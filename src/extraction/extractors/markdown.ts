@@ -8,6 +8,7 @@ export class MarkdownExtractor implements Extractor {
 
   async extract(filePath: string): Promise<ExtractionResult> {
     const text = await readFile(filePath, 'utf-8');
+    console.log(`[extraction:markdown] read ${text.length} chars`);
     return { text };
   }
 }

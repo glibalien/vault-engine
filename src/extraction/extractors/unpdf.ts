@@ -11,9 +11,11 @@ export class UnpdfExtractor implements Extractor {
     const buffer = await readFile(filePath);
     const pdf = await getDocumentProxy(new Uint8Array(buffer));
     const { text, totalPages } = await extractText(pdf, { mergePages: true });
+    const avgCharsPerPage = Math.round(text.length / Math.max(totalPages, 1));
+    console.log(`[extraction:unpdf] ${totalPages} pages, ${avgCharsPerPage} avg chars/page, ${text.length} chars total`);
     return {
       text,
-      metadata: { totalPages, avgCharsPerPage: Math.round(text.length / Math.max(totalPages, 1)) },
+      metadata: { totalPages, avgCharsPerPage },
     };
   }
 }

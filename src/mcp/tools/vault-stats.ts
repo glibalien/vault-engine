@@ -2,11 +2,12 @@ import type { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import type Database from 'better-sqlite3';
 import { toolResult } from './errors.js';
 import type { ExtractorRegistry } from '../../extraction/registry.js';
+import type { EmbeddingIndexer } from '../../search/indexer.js';
 
-export function registerVaultStats(server: McpServer, db: Database.Database, extractorRegistry?: ExtractorRegistry): void {
+export function registerVaultStats(server: McpServer, db: Database.Database, extractorRegistry?: ExtractorRegistry, embeddingIndexer?: EmbeddingIndexer): void {
   server.tool(
     'vault-stats',
-    'Returns vault statistics: node counts, type counts, field count, relationship count, orphan count, schema count.',
+    'Returns vault statistics: node counts, type counts, field count, relationship count, orphan count, schema count, and search index status.',
     {},
     async () => {
       const nodeCount = (db.prepare('SELECT COUNT(*) as count FROM nodes').get() as { count: number }).count;
@@ -47,6 +48,10 @@ export function registerVaultStats(server: McpServer, db: Database.Database, ext
 
       if (extractorRegistry) {
         resultObj.extractors = extractorRegistry.getStatus();
+      }
+
+      if (embeddingIndexer) {
+        resultObj.search_index = embeddingIndexer.getStatus();
       }
 
       return toolResult(resultObj);

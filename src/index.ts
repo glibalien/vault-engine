@@ -2,7 +2,7 @@ import { resolve } from 'node:path';
 import { StdioServerTransport } from '@modelcontextprotocol/sdk/server/stdio.js';
 import { openDatabase } from './db/connection.js';
 import { createSchema } from './db/schema.js';
-import { upgradeToPhase2, upgradeToPhase3 } from './db/migrate.js';
+import { upgradeToPhase2, upgradeToPhase3, upgradeToPhase6 } from './db/migrate.js';
 import { createServer } from './mcp/server.js';
 import { parseArgs } from './transport/args.js';
 import { startHttpTransport } from './transport/http.js';
@@ -15,6 +15,9 @@ import { IndexMutex } from './sync/mutex.js';
 import { WriteLockManager } from './sync/write-lock.js';
 import { WriteGate } from './sync/write-gate.js';
 import { startupSchemaRender } from './schema/render.js';
+import { buildExtractorRegistry } from './extraction/setup.js';
+import { ExtractionCache } from './extraction/cache.js';
+import { ClaudeVisionPdfExtractor } from './extraction/extractors/claude-vision.js';
 
 const args = parseArgs(process.argv.slice(2));
 
@@ -29,6 +32,7 @@ const db = openDatabase(dbPath);
 createSchema(db);
 upgradeToPhase2(db);
 upgradeToPhase3(db);
+upgradeToPhase6(db);
 
 console.log(`Indexing vault at ${vaultPath}...`);
 const indexStart = Date.now();
@@ -43,7 +47,13 @@ const writeGate = new WriteGate({ quietPeriodMs: 3000 });
 const watcher = startWatcher(vaultPath, db, mutex, writeLock, writeGate);
 const reconciler = startReconciler(vaultPath, db, mutex, writeLock, writeGate);
 
-const serverFactory = () => createServer(db, { writeLock, writeGate, vaultPath });
+const extractorRegistry = buildExtractorRegistry(process.env as Record<string, string | undefined>);
+const extractionCache = new ExtractionCache(db, extractorRegistry);
+if (process.env.ANTHROPIC_API_KEY) {
+  extractionCache.setPdfFallback(new ClaudeVisionPdfExtractor(process.env.ANTHROPIC_API_KEY));
+}
+
+const serverFactory = () => createServer(db, { writeLock, writeGate, vaultPath, extractorRegistry, extractionCache });
 
 if (args.transport === 'stdio' || args.transport === 'both') {
   const server = serverFactory();

@@ -25,16 +25,17 @@ import { registerAddTypeToNode } from './add-type-to-node.js';
 import { registerRemoveTypeFromNode } from './remove-type-from-node.js';
 import { registerRenameNode } from './rename-node.js';
 import { registerBatchMutate } from './batch-mutate.js';
+import { registerReadEmbedded } from './read-embedded.js';
 
-export function registerAllTools(server: McpServer, db: Database.Database, ctx?: { writeLock?: import('../../sync/write-lock.js').WriteLockManager; writeGate?: import('../../sync/write-gate.js').WriteGate; vaultPath?: string }): void {
-  registerVaultStats(server, db);
+export function registerAllTools(server: McpServer, db: Database.Database, ctx?: { writeLock?: import('../../sync/write-lock.js').WriteLockManager; writeGate?: import('../../sync/write-gate.js').WriteGate; vaultPath?: string; extractionCache?: import('../../extraction/cache.js').ExtractionCache; extractorRegistry?: import('../../extraction/registry.js').ExtractorRegistry }): void {
+  registerVaultStats(server, db, ctx?.extractorRegistry);
   registerListTypes(server, db);
   registerListSchemas(server, db);
   registerDescribeSchema(server, db);
   registerListGlobalFields(server, db);
   registerDescribeGlobalField(server, db);
   registerQueryNodes(server, db);
-  registerGetNode(server, db);
+  registerGetNode(server, db, ctx?.extractionCache, ctx?.vaultPath);
   registerCreateGlobalField(server, db, ctx);
   registerUpdateGlobalField(server, db, ctx);
   registerRenameGlobalField(server, db, ctx);
@@ -45,6 +46,11 @@ export function registerAllTools(server: McpServer, db: Database.Database, ctx?:
   registerValidateNode(server, db);
   registerInferFieldType(server, db);
   registerListFieldValues(server, db);
+
+  // Phase 6 extraction tools (require extractionCache and vaultPath)
+  if (ctx?.extractionCache && ctx?.vaultPath) {
+    registerReadEmbedded(server, db, ctx.extractionCache, ctx.vaultPath);
+  }
 
   // Phase 3 mutation tools (require writeLock and vaultPath)
   if (ctx?.writeLock && ctx?.vaultPath) {

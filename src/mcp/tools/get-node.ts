@@ -5,11 +5,15 @@ import { basename } from 'node:path';
 import { toolResult, toolErrorResult } from './errors.js';
 import { resolveTarget } from '../../resolver/resolve.js';
 import { getNodeConformance } from '../../validation/conformance.js';
+import type { ExtractionCache } from '../../extraction/cache.js';
+import { assemble } from '../../extraction/assembler.js';
 
 const paramsShape = {
   node_id: z.string().optional(),
   file_path: z.string().optional(),
   title: z.string().optional(),
+  include_embeds: z.boolean().optional().default(true),
+  max_embeds: z.number().optional().default(20),
 };
 
 interface NodeRow {
@@ -39,7 +43,12 @@ interface RelRow {
   context: string | null;
 }
 
-export function registerGetNode(server: McpServer, db: Database.Database): void {
+export function registerGetNode(
+  server: McpServer,
+  db: Database.Database,
+  extractionCache?: ExtractionCache,
+  vaultPath?: string,
+): void {
   server.tool(
     'get-node',
     'Returns full details for a single node. Specify exactly one of: node_id, file_path, or title.',
@@ -158,16 +167,13 @@ export function registerGetNode(server: McpServer, db: Database.Database): void 
         incomingGrouped[r.rel_type].push(entry);
       }
 
-      return toolResult({
+      const resultObj: Record<string, unknown> = {
         id: node.id,
         file_path: node.file_path,
         title: node.title,
         types,
         fields,
-        relationships: {
-          outgoing: outgoingGrouped,
-          incoming: incomingGrouped,
-        },
+        relationships: { outgoing: outgoingGrouped, incoming: incomingGrouped },
         body: node.body,
         metadata: {
           content_hash: node.content_hash,
@@ -175,7 +181,24 @@ export function registerGetNode(server: McpServer, db: Database.Database): void 
           indexed_at: node.indexed_at,
         },
         conformance: getNodeConformance(db, node.id, types),
-      });
+      };
+
+      const includeEmbeds = params.include_embeds ?? true;
+      const maxEmbeds = params.max_embeds ?? 20;
+
+      if (includeEmbeds && extractionCache && vaultPath) {
+        const assembled = await assemble(db, node.id, extractionCache, vaultPath, {
+          maxEmbeds,
+        });
+        resultObj.embeds = assembled.embeds;
+        resultObj.embed_errors = assembled.errors;
+      } else if (includeEmbeds) {
+        // No cache configured — return empty embeds
+        resultObj.embeds = [];
+        resultObj.embed_errors = [];
+      }
+
+      return toolResult(resultObj);
     },
   );
 }

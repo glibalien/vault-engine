@@ -1,9 +1,40 @@
-import { stat } from 'node:fs/promises';
-import { join, extname } from 'node:path';
+import { stat, readdir } from 'node:fs/promises';
+import { join, extname, basename } from 'node:path';
 import type Database from 'better-sqlite3';
 import type { ExtractionCache } from './cache.js';
 import type { AssembledNode, EmbedEntry, EmbedError } from './types.js';
 import { resolveTarget } from '../resolver/resolve.js';
+
+/**
+ * Search the vault recursively for a file by basename.
+ * Obsidian resolves ![[filename]] by searching the entire vault, not just
+ * the vault root. Binary files (audio, images, etc.) aren't in the nodes
+ * table, so we need a filesystem search.
+ */
+async function findFileInVault(vaultPath: string, filename: string): Promise<string | null> {
+  const target = basename(filename);
+  async function search(dir: string): Promise<string | null> {
+    let entries;
+    try {
+      entries = await readdir(dir, { withFileTypes: true });
+    } catch {
+      return null;
+    }
+    for (const entry of entries) {
+      if (entry.name.startsWith('.')) continue; // skip hidden dirs like .vault-engine
+      const fullPath = join(dir, entry.name);
+      if (entry.isFile() && entry.name === target) {
+        return fullPath;
+      }
+      if (entry.isDirectory()) {
+        const found = await search(fullPath);
+        if (found) return found;
+      }
+    }
+    return null;
+  }
+  return search(vaultPath);
+}
 
 export interface AssembleOptions {
   maxEmbeds?: number;
@@ -140,8 +171,21 @@ async function processEmbeds(
     let resolvedNodeId: string | null = null;
 
     if (ext !== '' && ext !== '.md') {
-      // Non-markdown with extension: resolve relative to vault root
-      filePath = join(vaultPath, ref);
+      // Non-markdown with extension: try relative path first, then search vault
+      const directPath = join(vaultPath, ref);
+      try {
+        await stat(directPath);
+        filePath = directPath;
+      } catch {
+        // File not at vault root — search vault by basename (Obsidian behavior)
+        const found = await findFileInVault(vaultPath, ref);
+        if (found) {
+          filePath = found;
+        } else {
+          errors.push({ reference: ref, error: `File not found in vault: ${ref}` });
+          continue;
+        }
+      }
     } else {
       // Markdown or no extension: use resolver
       const resolved = resolveTarget(db, ref);

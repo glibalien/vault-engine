@@ -236,6 +236,26 @@ describe('assemble', () => {
     expect(truncatedError).toBeDefined();
   });
 
+  it('finds non-markdown files in subdirectories by basename', async () => {
+    // Simulate Obsidian's Attachments folder — file is not at vault root
+    mkdirSync(join(tmpDir, 'Attachments'), { recursive: true });
+    writeFileSync(join(tmpDir, 'Attachments', 'recording.m4a'), 'audio bytes');
+
+    seedNode('n1', 'notes/meeting.md', 'Meeting', '![[recording.m4a]]');
+
+    registry.register(
+      makeExtractor('test-audio', 'audio', ['.m4a'], async () => ({
+        text: 'Transcribed audio',
+      })),
+    );
+
+    const result = await assemble(db, 'n1', cache, tmpDir);
+    expect(result.embeds).toHaveLength(1);
+    expect(result.embeds[0].reference).toBe('recording.m4a');
+    expect(result.embeds[0].text).toBe('Transcribed audio');
+    expect(result.errors).toEqual([]);
+  });
+
   it('enforces file size limit', async () => {
     seedNode('node-big', 'big.md', 'Big File', '![[huge.bin]]');
 

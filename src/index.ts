@@ -11,6 +11,7 @@ import { validateAuthEnv } from './auth/env.js';
 import { fullIndex } from './indexer/indexer.js';
 import { startWatcher } from './sync/watcher.js';
 import { startReconciler } from './sync/reconciler.js';
+import { startNormalizer } from './sync/normalizer.js';
 import { IndexMutex } from './sync/mutex.js';
 import { WriteLockManager } from './sync/write-lock.js';
 import { SyncLogger } from './sync/sync-logger.js';
@@ -83,6 +84,10 @@ const writeLock = new WriteLockManager();
 const syncLogger = new SyncLogger(db);
 const watcher = startWatcher(vaultPath, db, mutex, writeLock, syncLogger, embeddingIndexer);
 const reconciler = startReconciler(vaultPath, db, mutex, writeLock, syncLogger);
+const normalizer = startNormalizer(vaultPath, db, writeLock, syncLogger, {
+  cronExpression: process.env.NORMALIZE_CRON ?? '',
+  quiescenceMinutes: parseInt(process.env.NORMALIZE_QUIESCENCE_MINUTES ?? '60', 10) || 60,
+});
 
 const extractorRegistry = buildExtractorRegistry(process.env as Record<string, string | undefined>);
 const extractionCache = new ExtractionCache(db, extractorRegistry);
@@ -111,6 +116,7 @@ if (args.transport === 'http' || args.transport === 'both') {
 process.on('SIGTERM', async () => {
   console.log('Shutting down...');
   reconciler.stop();
+  normalizer.stop();
   await watcher.close();
   db.close();
   process.exit(0);
@@ -119,6 +125,7 @@ process.on('SIGTERM', async () => {
 process.on('SIGINT', async () => {
   console.log('Shutting down...');
   reconciler.stop();
+  normalizer.stop();
   await watcher.close();
   db.close();
   process.exit(0);

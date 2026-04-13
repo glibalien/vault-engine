@@ -272,7 +272,7 @@ describe('executeMutation — watcher path', () => {
     expect(result.file_written).toBe(true);
   });
 
-  it('watcher db_only returns deferred_write for new nodes', () => {
+  it('watcher db_only updates DB without writing file', () => {
     createGlobalField(db, { name: 'priority', field_type: 'string', default_value: 'normal' });
     createSchemaDefinition(db, { name: 'task', field_claims: [{ field: 'priority' }] });
 
@@ -283,10 +283,7 @@ describe('executeMutation — watcher path', () => {
       fields: { priority: 'normal' },
     }));
 
-    // File NOT written, but deferred_write has the content
     expect(result.file_written).toBe(false);
-    expect(result.deferred_write).toBeDefined();
-    expect(result.deferred_write!.file_content).toContain('priority: normal');
 
     // DB IS populated
     const field = db.prepare('SELECT value_text FROM node_fields WHERE node_id = ? AND field_name = ?')
@@ -294,7 +291,7 @@ describe('executeMutation — watcher path', () => {
     expect(field.value_text).toBe('normal');
   });
 
-  it('watcher db_only coerces values and returns deferred_write', () => {
+  it('watcher db_only coerces values', () => {
     createGlobalField(db, { name: 'count', field_type: 'number' });
     createSchemaDefinition(db, { name: 'task', field_claims: [{ field: 'count', sort_order: 100 }] });
 
@@ -315,7 +312,6 @@ describe('executeMutation — watcher path', () => {
     }));
 
     expect(result.file_written).toBe(false);
-    expect(result.deferred_write).toBeDefined();
     expect(result.validation.coerced_state.count.changed).toBe(true);
     expect(result.validation.coerced_state.count.value).toBe(10);
   });
@@ -386,8 +382,6 @@ describe('executeMutation — db_only mode', () => {
     }));
 
     expect(result.file_written).toBe(false);
-    expect(result.deferred_write).toBeDefined();
-    expect(result.deferred_write!.file_content).toContain('Some content.');
 
     // DB IS populated
     const node = db.prepare('SELECT title, body FROM nodes WHERE id = ?')
@@ -399,11 +393,9 @@ describe('executeMutation — db_only mode', () => {
     expect(existsSync(join(vaultPath, 'test-node.md'))).toBe(false);
   });
 
-  it('returns no deferred_write when rendered matches DB hash (no-op)', () => {
-    // Create node via tool first
+  it('db_only no-op when rendered matches DB hash', () => {
     const created = executeMutation(db, writeLock, vaultPath, makeMutation());
 
-    // Same data via watcher db_only — should be no-op
     const result = executeMutation(db, writeLock, vaultPath, makeMutation({
       source: 'watcher',
       node_id: created.node_id,
@@ -411,7 +403,6 @@ describe('executeMutation — db_only mode', () => {
     }));
 
     expect(result.file_written).toBe(false);
-    expect(result.deferred_write).toBeUndefined();
   });
 });
 

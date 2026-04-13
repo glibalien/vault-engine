@@ -42,13 +42,13 @@ async function callTool(params: Record<string, unknown>): Promise<any> {
 describe('query-sync-log tool', () => {
   it('returns all events for a file', async () => {
     insertRow('note.md', 'watcher-event', 'watcher', { hash: 'abc', size: 100 });
-    insertRow('note.md', 'deferred-write-scheduled', 'watcher', {});
+    insertRow('note.md', 'watcher-event', 'watcher', {});
     insertRow('other.md', 'watcher-event', 'watcher', { hash: 'xyz', size: 200 });
 
     const data = await callTool({ file_path: 'note.md' });
     expect(data.rows).toHaveLength(2);
     expect(data.rows[0].event).toBe('watcher-event');
-    expect(data.rows[1].event).toBe('deferred-write-scheduled');
+    expect(data.rows[1].event).toBe('watcher-event');
   });
 
   it('filters by event type', async () => {

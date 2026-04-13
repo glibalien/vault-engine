@@ -14,6 +14,7 @@ import { reconstructValue } from '../pipeline/classify-value.js';
 import type { IndexMutex } from './mutex.js';
 import type { WriteLockManager } from './write-lock.js';
 import type { WriteGate } from './write-gate.js';
+import type { SyncLogger } from './sync-logger.js';
 
 const WIKILINK_RE = /\[\[([^\]|]+)(?:\|([^\]]+))?\]\]/;
 
@@ -33,6 +34,7 @@ export function startWatcher(
   mutex: IndexMutex,
   writeLock: WriteLockManager,
   writeGate: WriteGate,
+  syncLogger?: SyncLogger,
   options?: WatcherOptions,
 ): FSWatcher {
   const debounceMs = options?.debounceMs ?? 2500;
@@ -47,7 +49,7 @@ export function startWatcher(
       deleteNodeByPath(relPath, db);
     } else {
       const absPath = join(vaultPath, event.path);
-      processFileChange(absPath, relative(vaultPath, absPath), db, writeLock, vaultPath, writeGate);
+      processFileChange(absPath, relative(vaultPath, absPath), db, writeLock, vaultPath, writeGate, syncLogger);
     }
   };
 
@@ -56,6 +58,9 @@ export function startWatcher(
 
     // Cancel any pending deferred write — a new edit just arrived,
     // so the WriteGate's DB snapshot is stale.
+    if (writeGate.isPending(relPath)) {
+      syncLogger?.deferredWriteCancelled(relPath, 'new-edit');
+    }
     writeGate.cancel(relPath);
 
     // Clear existing debounce timer if any
@@ -84,6 +89,7 @@ export function startWatcher(
         return;
       }
       const hash = sha256(content);
+      syncLogger?.watcherEvent(relPath, hash, content.length);
       const row = db.prepare('SELECT content_hash FROM nodes WHERE file_path = ?').get(relPath) as
         | { content_hash: string }
         | undefined;
@@ -99,6 +105,7 @@ export function startWatcher(
         const retries = (retryCount.get(retryKey) ?? 0) + 1;
         if (retries <= 3) {
           retryCount.set(retryKey, retries);
+          syncLogger?.parseRetry(relPath, retries, parseCheck.parseError ?? 'unknown');
           const retryTimer = setTimeout(fire, 2000);
           pendingTimers.set(absPath, { debounce: retryTimer, maxWait: retryTimer });
           return;
@@ -112,7 +119,7 @@ export function startWatcher(
 
       // Process through mutex via write pipeline
       mutex.run(async () => {
-        processFileChange(absPath, relPath, db, writeLock, vaultPath, writeGate);
+        processFileChange(absPath, relPath, db, writeLock, vaultPath, writeGate, syncLogger);
       });
     };
 
@@ -132,6 +139,9 @@ export function startWatcher(
     const relPath = relative(vaultPath, absPath);
 
     // Cancel any pending deferred write
+    if (writeGate.isPending(relPath)) {
+      syncLogger?.deferredWriteCancelled(relPath, 'unlink');
+    }
     writeGate.cancel(relPath);
 
     // Clear any pending timers for this file
@@ -191,6 +201,7 @@ export function processFileChange(
   writeLock: WriteLockManager,
   vaultPath: string,
   writeGate?: WriteGate,
+  syncLogger?: SyncLogger,
 ): void {
   let content: string;
   try {
@@ -297,24 +308,32 @@ export function processFileChange(
     // The callback re-renders from current DB state at write time (not the
     // stale parse-time state), so multiple rapid edits coalesce into one write.
     if (result.deferred_write && writeGate) {
+      syncLogger?.deferredWriteScheduled(relPath);
       writeGate.fileChanged(relPath, () => {
         try {
           const currentNode = db.prepare('SELECT id, title, body, content_hash FROM nodes WHERE file_path = ?')
             .get(relPath) as { id: string; title: string; body: string; content_hash: string } | undefined;
-          if (!currentNode) return; // Node was deleted
+          if (!currentNode) {
+            syncLogger?.deferredWriteSkipped(relPath, 'node-deleted');
+            return;
+          }
 
           // Read and parse the file currently on disk.
           let diskContent: string;
           try {
             diskContent = readFileSync(join(vaultPath, relPath), 'utf-8');
           } catch {
+            syncLogger?.deferredWriteSkipped(relPath, 'file-gone');
             return; // File gone
           }
 
           // Stale-file guard: if the file on disk has changed since we last
           // indexed it, skip the write — the watcher will process the new
           // content and schedule a fresh WriteGate.
-          if (sha256(diskContent) !== currentNode.content_hash) return;
+          if (sha256(diskContent) !== currentNode.content_hash) {
+            syncLogger?.deferredWriteSkipped(relPath, 'stale-file');
+            return;
+          }
 
           // Semantic-diff guard: parse the file on disk and compare to DB
           // state. If the data matches, the only difference is formatting
@@ -339,11 +358,14 @@ export function processFileChange(
                 diskParsed.body === currentNode.body &&
                 JSON.stringify(diskTypes) === JSON.stringify(dbTypes) &&
                 JSON.stringify(diskFields) === JSON.stringify(fields)) {
+              syncLogger?.deferredWriteSkipped(relPath, 'semantic-match');
               return; // Data matches — write would be cosmetic only
             }
 
             // Data differs — proceed with write (e.g. defaults populated, values coerced)
             const rawTexts = rebuildRawTextsFromDb(db, currentNode.id);
+
+            syncLogger?.deferredWriteFired(relPath, currentNode.content_hash);
 
             executeMutation(db, writeLock, vaultPath, {
               source: 'watcher',
@@ -364,6 +386,8 @@ export function processFileChange(
             .all(currentNode.id) as { schema_type: string }[]).map(r => r.schema_type);
           const fields = rebuildFieldsFromDb(db, currentNode.id);
           const rawTexts = rebuildRawTextsFromDb(db, currentNode.id);
+
+          syncLogger?.deferredWriteFired(relPath, currentNode.content_hash);
 
           executeMutation(db, writeLock, vaultPath, {
             source: 'watcher',

@@ -57,7 +57,7 @@ describe('watcher integration', () => {
     writeLock = new WriteLockManager();
     writeGate = new WriteGate({ quietPeriodMs: 50 }); // fast for tests
 
-    watcher = startWatcher(vaultPath, db, mutex, writeLock, writeGate, {
+    watcher = startWatcher(vaultPath, db, mutex, writeLock, writeGate, undefined, {
       debounceMs: DEBOUNCE_MS,
       maxWaitMs: MAX_WAIT_MS,
     });

@@ -47,7 +47,7 @@ npm run start:http   # node dist/index.js --transport http
 - ESM throughout (`"type": "module"` in package.json, `.js` extensions in imports)
 - **YAML `nullStr: ''`** in render options — null values serialize as bare `key:` not `key: null`. This is critical for Obsidian compatibility: `types: []` (flow notation) mangles when Obsidian adds items; implicit null `types:` does not.
 - **YAML `uniqueKeys: false`** in parse options — Obsidian's property editor can create duplicate YAML keys (e.g. two `types:` entries). The parser tolerates this (last value wins) instead of throwing.
-- **WriteGate quiet period**: the watcher does NOT write files immediately. It updates the DB on every change, then defers file writes until the file has been stable for 3 seconds (quiet period). This prevents clobbering Obsidian mid-edit and handles the Obsidian Sync truncation window. Tool writes are immediate and bypass the WriteGate. See `src/sync/write-gate.ts`.
+- **Watcher is DB-only**: the watcher never writes files to disk. It updates the DB and stops. Files catch up via tool writes and schema propagation. This prevents Obsidian merge collisions that corrupted frontmatter.
 - **Watcher debounce**: 2.5 seconds (matches Obsidian's 2s save cycle). Max-wait 5 seconds.
 - **Parse retry**: if YAML parsing fails (e.g. Obsidian truncation bug where growing files are temporarily truncated on disk), the watcher retries up to 3 times with 2s delay before logging a parse error.
 - **Shared query builder**: `src/mcp/query-builder.ts` — single SQL builder used by both `query-nodes` and `update-node` query mode. Supports negation filters (`without_types`, `without_fields`).

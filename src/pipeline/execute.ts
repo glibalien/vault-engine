@@ -12,6 +12,8 @@ import { renderNode } from '../renderer/render.js';
 import type { RenderInput, FieldOrderEntry } from '../renderer/types.js';
 import { sha256 } from '../indexer/hash.js';
 import type { WriteLockManager } from '../sync/write-lock.js';
+import type { WriteGate } from '../sync/write-gate.js';
+import type { SyncLogger } from '../sync/sync-logger.js';
 import { loadSchemaContext } from './schema-context.js';
 import { hasBlockingErrors } from './errors.js';
 import { classifyValue, reconstructValue } from './classify-value.js';
@@ -36,6 +38,8 @@ export function executeMutation(
   writeLock: WriteLockManager,
   vaultPath: string,
   mutation: ProposedMutation,
+  writeGate?: WriteGate,
+  syncLogger?: SyncLogger,
 ): PipelineResult {
   const absPath = join(vaultPath, mutation.file_path);
   const tmpDir = join(vaultPath, '.vault-engine', 'tmp');
@@ -205,6 +209,13 @@ export function executeMutation(
       ? (db.prepare('SELECT content_hash FROM nodes WHERE id = ?').get(mutation.node_id) as { content_hash: string } | undefined)?.content_hash
       : undefined;
     if (mutation.node_id !== null && existingContent !== null && sha256(existingContent) === renderedHash && dbHash === renderedHash) {
+      // Tool no-ops cancel pending deferred writes — the tool confirmed
+      // DB state is correct, superseding any pending watcher write.
+      if (mutation.source === 'tool' && writeGate) {
+        writeGate.cancel(mutation.file_path);
+        syncLogger?.deferredWriteCancelled(mutation.file_path, 'tool-write');
+      }
+      syncLogger?.noop(mutation.file_path, mutation.source);
       // Complete no-op: no file write, no DB changes, no edits log
       return {
         node_id: mutation.node_id ?? '',
@@ -222,8 +233,13 @@ export function executeMutation(
       // db_only: update DB only, return rendered content for deferred write.
       // Otherwise: write the file immediately.
       const shouldWriteFile = !mutation.db_only;
+      if (shouldWriteFile && mutation.source === 'tool' && writeGate) {
+        writeGate.cancel(mutation.file_path);
+        syncLogger?.deferredWriteCancelled(mutation.file_path, 'tool-write');
+      }
       if (shouldWriteFile) {
         atomicWriteFile(absPath, fileContent, tmpDir);
+        syncLogger?.fileWritten(mutation.file_path, mutation.source, renderedHash);
       }
 
       // Generate node_id for new nodes

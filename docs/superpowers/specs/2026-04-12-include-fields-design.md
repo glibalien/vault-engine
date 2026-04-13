@@ -92,7 +92,7 @@ A dedicated `aggregate-nodes` tool (GROUP BY with counts) was considered and def
 
 ## Example usage
 
-"Open tasks by project" becomes two calls:
+"Open tasks by project" becomes one call:
 
 ```
 query-nodes({

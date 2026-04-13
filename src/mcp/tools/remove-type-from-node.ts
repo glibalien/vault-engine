@@ -9,6 +9,8 @@ import { executeMutation } from '../../pipeline/execute.js';
 import { PipelineError } from '../../pipeline/types.js';
 import { reconstructValue } from '../../pipeline/classify-value.js';
 import type { WriteLockManager } from '../../sync/write-lock.js';
+import type { WriteGate } from '../../sync/write-gate.js';
+import type { SyncLogger } from '../../sync/sync-logger.js';
 
 const paramsShape = {
   node_id: z.string().optional(),
@@ -23,6 +25,8 @@ export function registerRemoveTypeFromNode(
   db: Database.Database,
   writeLock: WriteLockManager,
   vaultPath: string,
+  writeGate?: WriteGate,
+  syncLogger?: SyncLogger,
 ): void {
   server.tool(
     'remove-type-from-node',
@@ -97,7 +101,7 @@ export function registerRemoveTypeFromNode(
           types: resultingTypes,
           fields: currentFields,
           body: currentBody,
-        });
+        }, writeGate, syncLogger);
 
         // Write fields-orphaned log entry if any fields became orphans
         if (wouldOrphanFields.length > 0) {

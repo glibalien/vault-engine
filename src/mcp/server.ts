@@ -2,6 +2,7 @@ import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import type Database from 'better-sqlite3';
 import type { WriteLockManager } from '../sync/write-lock.js';
 import type { WriteGate } from '../sync/write-gate.js';
+import type { SyncLogger } from '../sync/sync-logger.js';
 import type { ExtractorRegistry } from '../extraction/registry.js';
 import type { ExtractionCache } from '../extraction/cache.js';
 import { registerAllTools } from './tools/index.js';
@@ -10,6 +11,7 @@ export interface ServerContext {
   db: Database.Database;
   writeLock?: WriteLockManager;
   writeGate?: WriteGate;
+  syncLogger?: SyncLogger;
   vaultPath?: string;
   extractorRegistry?: ExtractorRegistry;
   extractionCache?: ExtractionCache;
@@ -18,6 +20,7 @@ export interface ServerContext {
 export function createServer(db: Database.Database, ctx?: {
   writeLock?: WriteLockManager;
   writeGate?: WriteGate;
+  syncLogger?: SyncLogger;
   vaultPath?: string;
   extractorRegistry?: ExtractorRegistry;
   extractionCache?: ExtractionCache;

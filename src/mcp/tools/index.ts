@@ -27,7 +27,7 @@ import { registerRenameNode } from './rename-node.js';
 import { registerBatchMutate } from './batch-mutate.js';
 import { registerReadEmbedded } from './read-embedded.js';
 
-export function registerAllTools(server: McpServer, db: Database.Database, ctx?: { writeLock?: import('../../sync/write-lock.js').WriteLockManager; writeGate?: import('../../sync/write-gate.js').WriteGate; vaultPath?: string; extractionCache?: import('../../extraction/cache.js').ExtractionCache; extractorRegistry?: import('../../extraction/registry.js').ExtractorRegistry }): void {
+export function registerAllTools(server: McpServer, db: Database.Database, ctx?: { writeLock?: import('../../sync/write-lock.js').WriteLockManager; writeGate?: import('../../sync/write-gate.js').WriteGate; syncLogger?: import('../../sync/sync-logger.js').SyncLogger; vaultPath?: string; extractionCache?: import('../../extraction/cache.js').ExtractionCache; extractorRegistry?: import('../../extraction/registry.js').ExtractorRegistry }): void {
   registerVaultStats(server, db, ctx?.extractorRegistry);
   registerListTypes(server, db);
   registerListSchemas(server, db);
@@ -54,12 +54,12 @@ export function registerAllTools(server: McpServer, db: Database.Database, ctx?:
 
   // Phase 3 mutation tools (require writeLock and vaultPath)
   if (ctx?.writeLock && ctx?.vaultPath) {
-    registerCreateNode(server, db, ctx.writeLock, ctx.vaultPath);
-    registerUpdateNode(server, db, ctx.writeLock, ctx.vaultPath);
-    registerDeleteNode(server, db, ctx.writeLock, ctx.vaultPath);
-    registerAddTypeToNode(server, db, ctx.writeLock, ctx.vaultPath);
-    registerRemoveTypeFromNode(server, db, ctx.writeLock, ctx.vaultPath);
-    registerRenameNode(server, db, ctx.writeLock, ctx.vaultPath);
-    registerBatchMutate(server, db, ctx.writeLock, ctx.vaultPath);
+    registerCreateNode(server, db, ctx.writeLock, ctx.vaultPath, ctx.writeGate, ctx.syncLogger);
+    registerUpdateNode(server, db, ctx.writeLock, ctx.vaultPath, ctx.writeGate, ctx.syncLogger);
+    registerDeleteNode(server, db, ctx.writeLock, ctx.vaultPath, ctx.writeGate, ctx.syncLogger);
+    registerAddTypeToNode(server, db, ctx.writeLock, ctx.vaultPath, ctx.writeGate, ctx.syncLogger);
+    registerRemoveTypeFromNode(server, db, ctx.writeLock, ctx.vaultPath, ctx.writeGate, ctx.syncLogger);
+    registerRenameNode(server, db, ctx.writeLock, ctx.vaultPath, ctx.writeGate, ctx.syncLogger);
+    registerBatchMutate(server, db, ctx.writeLock, ctx.vaultPath, ctx.writeGate, ctx.syncLogger);
   }
 }

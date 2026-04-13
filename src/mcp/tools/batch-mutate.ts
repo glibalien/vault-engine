@@ -13,6 +13,8 @@ import { reconstructValue } from '../../pipeline/classify-value.js';
 import { backupFile, restoreFile, cleanupBackups } from '../../pipeline/file-writer.js';
 import { checkTypesHaveSchemas } from '../../pipeline/check-types.js';
 import type { WriteLockManager } from '../../sync/write-lock.js';
+import type { WriteGate } from '../../sync/write-gate.js';
+import type { SyncLogger } from '../../sync/sync-logger.js';
 
 const operationSchema = z.object({
   op: z.enum(['create', 'update', 'delete']),
@@ -28,6 +30,8 @@ export function registerBatchMutate(
   db: Database.Database,
   writeLock: WriteLockManager,
   vaultPath: string,
+  writeGate?: WriteGate,
+  syncLogger?: SyncLogger,
 ): void {
   server.tool(
     'batch-mutate',
@@ -79,7 +83,7 @@ export function registerBatchMutate(
                 types,
                 fields,
                 body,
-              });
+              }, writeGate, syncLogger);
               if (result.file_written) createdFiles.push(absPath);
               results.push({ op: 'create', node_id: result.node_id, file_path: result.file_path });
 
@@ -131,7 +135,7 @@ export function registerBatchMutate(
                 types: setTypes ?? currentTypes,
                 fields: finalFields,
                 body: (opParams.set_body as string) ?? currentBody,
-              });
+              }, writeGate, syncLogger);
               results.push({ op: 'update', node_id: result.node_id, file_path: result.file_path });
 
             } else if (op === 'delete') {

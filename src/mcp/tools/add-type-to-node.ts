@@ -12,6 +12,8 @@ import { reconstructValue } from '../../pipeline/classify-value.js';
 import { writeEditsLogEntries } from '../../pipeline/edits-log.js';
 import type { EditsLogEntry } from '../../pipeline/edits-log.js';
 import type { WriteLockManager } from '../../sync/write-lock.js';
+import type { WriteGate } from '../../sync/write-gate.js';
+import type { SyncLogger } from '../../sync/sync-logger.js';
 import { checkTypesHaveSchemas } from '../../pipeline/check-types.js';
 
 const paramsShape = {
@@ -26,6 +28,8 @@ export function registerAddTypeToNode(
   db: Database.Database,
   writeLock: WriteLockManager,
   vaultPath: string,
+  writeGate?: WriteGate,
+  syncLogger?: SyncLogger,
 ): void {
   server.tool(
     'add-type-to-node',
@@ -106,7 +110,7 @@ export function registerAddTypeToNode(
           types: newTypes,
           fields: mergedFields,
           body: currentBody,
-        });
+        }, writeGate, syncLogger);
 
         // Log field-defaulted entries for defaults populated by add-type-to-node.
         // The pipeline sees these as 'provided' since they're pre-merged, so we

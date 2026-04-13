@@ -12,7 +12,6 @@ import type { RenderInput, FieldOrderEntry } from '../renderer/types.js';
 import { sha256 } from '../indexer/hash.js';
 import { atomicWriteFile, backupFile, restoreFile, cleanupBackups, readFileOrNull } from '../pipeline/file-writer.js';
 import type { WriteLockManager } from '../sync/write-lock.js';
-import type { WriteGate } from '../sync/write-gate.js';
 import type { SyncLogger } from '../sync/sync-logger.js';
 import { join } from 'node:path';
 import type { EffectiveFieldSet, GlobalFieldDefinition } from '../validation/types.js';
@@ -78,7 +77,6 @@ export function propagateSchemaChange(
   vaultPath: string,
   schemaName: string,
   diff: ClaimDiff,
-  writeGate?: WriteGate,
   syncLogger?: SyncLogger,
 ): PropagationResult {
   const result: PropagationResult = {
@@ -219,11 +217,6 @@ export function propagateSchemaChange(
       const backup = backupFile(absPath, tmpDir);
       if (backup) backups.push({ filePath: absPath, backupPath: backup });
 
-      if (writeGate) {
-        writeGate.cancel(nodeRow.file_path);
-        syncLogger?.deferredWriteCancelled(nodeRow.file_path, 'propagation');
-      }
-
       writeLock.withLockSync(absPath, () => {
         atomicWriteFile(absPath, fileContent, tmpDir);
         syncLogger?.fileWritten(nodeRow.file_path, 'propagation', renderedHash);
@@ -304,7 +297,6 @@ export function rerenderNodesWithField(
   vaultPath: string,
   fieldName: string,
   additionalNodeIds?: string[],
-  writeGate?: WriteGate,
   syncLogger?: SyncLogger,
 ): number {
   const fromField = (db.prepare('SELECT DISTINCT node_id FROM node_fields WHERE field_name = ?')
@@ -380,11 +372,6 @@ export function rerenderNodesWithField(
 
     const existingContent = readFileOrNull(absPath);
     if (existingContent !== null && sha256(existingContent) === renderedHash) continue;
-
-    if (writeGate) {
-      writeGate.cancel(nodeRow.file_path);
-      syncLogger?.deferredWriteCancelled(nodeRow.file_path, 'propagation');
-    }
 
     writeLock.withLockSync(absPath, () => {
       atomicWriteFile(absPath, fileContent, tmpDir);

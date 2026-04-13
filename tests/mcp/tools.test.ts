@@ -336,6 +336,70 @@ describe('query-nodes', () => {
     expect((result as any).nodes.length).toBe(2);
     expect((result as any).nodes.every((n: any) => n.id !== 'n1')).toBe(true);
   });
+
+  it('returns field values when include_fields is specified', async () => {
+    const handler = getToolHandler(registerQueryNodes);
+    const result = parseResult(await handler({ types: ['meeting'], include_fields: ['project'] }) as any) as any;
+    expect(result.total).toBe(1);
+    expect(result.nodes[0].fields).toEqual({ project: 'Vault Engine' });
+  });
+
+  it('omits fields key when include_fields is not specified', async () => {
+    const handler = getToolHandler(registerQueryNodes);
+    const result = parseResult(await handler({ types: ['meeting'] }) as any) as any;
+    expect(result.nodes[0].fields).toBeUndefined();
+  });
+
+  it('returns empty fields object when requested field does not exist on node', async () => {
+    const handler = getToolHandler(registerQueryNodes);
+    const result = parseResult(await handler({ types: ['task'], include_fields: ['project'] }) as any) as any;
+    // n3 (task) has no project field
+    expect(result.nodes[0].fields).toEqual({});
+  });
+
+  it('wildcard include_fields returns all fields', async () => {
+    const handler = getToolHandler(registerQueryNodes);
+    const result = parseResult(await handler({ types: ['task'], include_fields: ['*'] }) as any) as any;
+    // n3 has only 'priority' field with value 1
+    expect(result.nodes[0].fields).toEqual({ priority: 1 });
+  });
+
+  it('include_fields resolves JSON values correctly', async () => {
+    // Add a node with a JSON field for this test
+    db.prepare(
+      'INSERT INTO nodes (id, file_path, title, body, content_hash, file_mtime, indexed_at) VALUES (?, ?, ?, ?, ?, ?, ?)'
+    ).run('n_json', 'notes/json-test.md', 'JSON Test', '', 'hj', 5000, 5000);
+    db.prepare('INSERT INTO node_types (node_id, schema_type) VALUES (?, ?)').run('n_json', 'note');
+    db.prepare(
+      'INSERT INTO node_fields (node_id, field_name, value_text, value_number, value_date, value_json, source) VALUES (?, ?, ?, ?, ?, ?, ?)'
+    ).run('n_json', 'tags', null, null, null, '["design","spec"]', 'frontmatter');
+    // Populate FTS index for full_text search
+    const row = db.prepare('SELECT rowid, title, body FROM nodes WHERE id = ?').get('n_json') as { rowid: number; title: string; body: string };
+    db.prepare('INSERT INTO nodes_fts (rowid, title, body) VALUES (?, ?, ?)').run(row.rowid, row.title, row.body);
+
+    const handler = getToolHandler(registerQueryNodes);
+    const result = parseResult(await handler({ full_text: 'JSON Test', include_fields: ['tags'] }) as any) as any;
+    expect(result.nodes[0].fields).toEqual({ tags: ['design', 'spec'] });
+  });
+
+  it('include_fields with multiple specific fields', async () => {
+    // Add a second field to n1
+    db.prepare(
+      'INSERT INTO node_fields (node_id, field_name, value_text, value_number, value_date, value_json, source) VALUES (?, ?, ?, ?, ?, ?, ?)'
+    ).run('n1', 'status', 'active', null, null, null, 'frontmatter');
+
+    const handler = getToolHandler(registerQueryNodes);
+    const result = parseResult(await handler({ types: ['meeting'], include_fields: ['project', 'status'] }) as any) as any;
+    expect(result.nodes[0].fields).toEqual({ project: 'Vault Engine', status: 'active' });
+  });
+
+  it('field_count is unaffected by include_fields', async () => {
+    const handler = getToolHandler(registerQueryNodes);
+    const result = parseResult(await handler({ types: ['meeting'], include_fields: ['project'] }) as any) as any;
+    // n1 has 1 field (project). field_count should still be 1.
+    expect(result.nodes[0].field_count).toBe(1);
+    expect(result.nodes[0].fields).toEqual({ project: 'Vault Engine' });
+  });
 });
 
 describe('get-node', () => {

@@ -4,6 +4,7 @@ import { z } from 'zod';
 import { toolResult } from './errors.js';
 import { buildNodeQuery } from '../query-builder.js';
 import type { NodeQueryFilter } from '../query-builder.js';
+import { resolveFieldValue, type FieldRow } from '../field-value.js';
 
 const paramsShape = {
   types: z.array(z.string()).optional(),
@@ -24,12 +25,13 @@ const paramsShape = {
   sort_order: z.enum(['asc', 'desc']).default('asc'),
   limit: z.number().int().min(1).max(200).default(50),
   offset: z.number().int().min(0).default(0),
+  include_fields: z.array(z.string()).optional(),
 };
 
 export function registerQueryNodes(server: McpServer, db: Database.Database): void {
   server.tool(
     'query-nodes',
-    'Query nodes with filtering by type, fields, full-text search, references, path, and date. Returns paginated results.',
+    'Query nodes with filtering by type, fields, full-text search, references, path, and date. Returns paginated results. Use include_fields to return field values inline (e.g. ["project","status"] or ["*"] for all).',
     paramsShape,
     async (params) => {
       const sortBy = params.sort_by ?? 'title';
@@ -65,13 +67,45 @@ export function registerQueryNodes(server: McpServer, db: Database.Database): vo
       const getTypes = db.prepare('SELECT schema_type FROM node_types WHERE node_id = ?');
       const getFieldCount = db.prepare('SELECT COUNT(*) as count FROM node_fields WHERE node_id = ?');
 
-      const nodes = rows.map(row => ({
-        id: row.id,
-        file_path: row.file_path,
-        title: row.title,
-        types: (getTypes.all(row.id) as Array<{ schema_type: string }>).map(t => t.schema_type),
-        field_count: (getFieldCount.get(row.id) as { count: number }).count,
-      }));
+      const includeFields = params.include_fields;
+      const isWildcard = includeFields?.length === 1 && includeFields[0] === '*';
+
+      // Prepare field query if needed
+      let getFields: ReturnType<typeof db.prepare> | undefined;
+      if (includeFields && includeFields.length > 0) {
+        if (isWildcard) {
+          getFields = db.prepare(
+            'SELECT field_name, value_text, value_number, value_date, value_json, source FROM node_fields WHERE node_id = ?'
+          );
+        } else {
+          const placeholders = includeFields.map(() => '?').join(', ');
+          getFields = db.prepare(
+            `SELECT field_name, value_text, value_number, value_date, value_json, source FROM node_fields WHERE node_id = ? AND field_name IN (${placeholders})`
+          );
+        }
+      }
+
+      const nodes = rows.map(row => {
+        const node: Record<string, unknown> = {
+          id: row.id,
+          file_path: row.file_path,
+          title: row.title,
+          types: (getTypes.all(row.id) as Array<{ schema_type: string }>).map(t => t.schema_type),
+          field_count: (getFieldCount.get(row.id) as { count: number }).count,
+        };
+
+        if (getFields) {
+          const fieldArgs = isWildcard ? [row.id] : [row.id, ...includeFields!];
+          const fieldRows = getFields.all(...fieldArgs) as FieldRow[];
+          const fields: Record<string, unknown> = {};
+          for (const f of fieldRows) {
+            fields[f.field_name] = resolveFieldValue(f);
+          }
+          node.fields = fields;
+        }
+
+        return node;
+      });
 
       return toolResult({ nodes, total });
     },

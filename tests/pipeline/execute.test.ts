@@ -440,3 +440,39 @@ describe('executeMutation — relationships', () => {
     expect(rels.some(r => r.target === 'Other Note' && r.rel_type === 'wiki-link')).toBe(true);
   });
 });
+
+// ── Normalizer path ──────────────────────────────────────────────────
+
+describe('executeMutation — normalizer path', () => {
+  it('normalizer source writes file like tool path', () => {
+    const result = executeMutation(db, writeLock, vaultPath, makeMutation({
+      source: 'normalizer',
+    }));
+
+    expect(result.file_written).toBe(true);
+    expect(result.node_id).toBeTruthy();
+
+    const filePath = join(vaultPath, 'test-node.md');
+    expect(existsSync(filePath)).toBe(true);
+
+    const node = db.prepare('SELECT * FROM nodes WHERE id = ?').get(result.node_id) as { content_hash: string };
+    expect(node.content_hash).toBe(result.rendered_hash);
+  });
+
+  it('normalizer source coerces values like tool path', () => {
+    createGlobalField(db, { name: 'count', field_type: 'number' });
+    createSchemaDefinition(db, { name: 'task', field_claims: [{ field: 'count', sort_order: 100 }] });
+
+    const result = executeMutation(db, writeLock, vaultPath, makeMutation({
+      source: 'normalizer',
+      types: ['task'],
+      fields: { count: '42' },
+    }));
+
+    expect(result.file_written).toBe(true);
+    // Value should be coerced to number
+    const field = db.prepare('SELECT value_number FROM node_fields WHERE node_id = ? AND field_name = ?')
+      .get(result.node_id, 'count') as { value_number: number };
+    expect(field.value_number).toBe(42);
+  });
+});

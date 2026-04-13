@@ -5,7 +5,7 @@
 import type { ValidationResult, ValidationIssue } from '../validation/types.js';
 
 export interface ProposedMutation {
-  source: 'tool' | 'watcher';
+  source: 'tool' | 'watcher' | 'normalizer';
   node_id: string | null;           // null for create-node
   file_path: string;                 // vault-relative path
   title: string;

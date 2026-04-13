@@ -61,7 +61,7 @@ export function executeMutation(
     const retainedValues: Record<string, { retained_value: unknown; rejected_value: unknown }> = {};
     const defaultedFields: Array<{ field: string; default_value: unknown; default_source: 'global' | 'claim' }> = [];
 
-    if (mutation.source === 'tool') {
+    if (mutation.source === 'tool' || mutation.source === 'normalizer') {
       // Tool path: check for blocking errors
       if (hasBlockingErrors(validation.issues)) {
         throw new PipelineError('VALIDATION_FAILED', 'Validation failed', validation);

@@ -49,10 +49,16 @@ describe('SyncLogger', () => {
     expect(rows[0].source).toBe('watcher');
   });
 
-  it('deferredWriteCancelled logs reason', () => {
-    logger.deferredWriteCancelled('note.md', 'tool-write');
+  it('deferredWriteCancelled derives source from reason', () => {
+    logger.deferredWriteCancelled('a.md', 'tool-write');
+    logger.deferredWriteCancelled('b.md', 'propagation');
+    logger.deferredWriteCancelled('c.md', 'new-edit');
+    logger.deferredWriteCancelled('d.md', 'unlink');
     const rows = getRows();
-    expect(rows[0].event).toBe('deferred-write-cancelled');
+    expect(rows[0].source).toBe('tool');
+    expect(rows[1].source).toBe('propagation');
+    expect(rows[2].source).toBe('watcher');
+    expect(rows[3].source).toBe('watcher');
     expect(JSON.parse(rows[0].details)).toEqual({ reason: 'tool-write' });
   });
 

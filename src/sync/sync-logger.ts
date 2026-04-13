@@ -11,6 +11,7 @@ export class SyncLogger {
     this.stmt = db.prepare(
       'INSERT INTO sync_log (timestamp, file_path, event, source, details) VALUES (?, ?, ?, ?, ?)',
     );
+    this.pruneStmt = db.prepare('DELETE FROM sync_log WHERE timestamp < ?');
     this.prune();
   }
 
@@ -27,7 +28,11 @@ export class SyncLogger {
   }
 
   deferredWriteCancelled(filePath: string, reason: string): void {
-    this.log(filePath, 'deferred-write-cancelled', 'watcher', { reason });
+    // Derive source from reason: tool-write → tool, propagation → propagation, else watcher
+    const source = reason === 'tool-write' ? 'tool'
+      : reason === 'propagation' ? 'propagation'
+      : 'watcher';
+    this.log(filePath, 'deferred-write-cancelled', source, { reason });
   }
 
   deferredWriteFired(filePath: string, intendedHash: string): void {
@@ -54,7 +59,9 @@ export class SyncLogger {
     if (++this.insertCount % 1000 === 0) this.prune();
   }
 
+  private readonly pruneStmt: Database.Statement;
+
   private prune(): void {
-    this.db.prepare('DELETE FROM sync_log WHERE timestamp < ?').run(Date.now() - this.retentionMs);
+    this.pruneStmt.run(Date.now() - this.retentionMs);
   }
 }

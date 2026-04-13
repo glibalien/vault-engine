@@ -7,7 +7,6 @@ import { deleteNodeByPath } from '../indexer/indexer.js';
 import { processFileChange } from './watcher.js';
 import type { IndexMutex } from './mutex.js';
 import type { WriteLockManager } from './write-lock.js';
-import type { WriteGate } from './write-gate.js';
 import type { SyncLogger } from './sync-logger.js';
 
 export interface ReconcilerOptions {
@@ -20,7 +19,6 @@ export function startReconciler(
   db: Database.Database,
   mutex: IndexMutex,
   writeLock?: WriteLockManager,
-  writeGate?: WriteGate,
   syncLogger?: SyncLogger,
   options?: ReconcilerOptions,
 ): { stop: () => void } {
@@ -72,7 +70,7 @@ export function startReconciler(
 
           // Process through pipeline if writeLock available, else skip
           if (writeLock) {
-            processFileChange(absPath, relPath, db, writeLock, vaultPath, writeGate, syncLogger);
+            processFileChange(absPath, relPath, db, writeLock, vaultPath, syncLogger);
           }
           stats.indexed++;
         } catch {

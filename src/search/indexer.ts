@@ -103,6 +103,7 @@ export function createEmbeddingIndexer(
 
   // In-memory queue
   const queue: EmbeddingQueueItem[] = [];
+  let processing = false;
 
   function itemKey(item: EmbeddingQueueItem): string {
     return `${item.node_id}::${item.source_type}::${item.extraction_ref ?? ''}`;
@@ -141,6 +142,8 @@ export function createEmbeddingIndexer(
     const item = queue.shift();
     if (!item) return false;
 
+    processing = true;
+    try {
     if (item.source_type === 'node') {
       const hash = contentHash(item.node_id);
       const extractionRef = item.extraction_ref ?? null;
@@ -172,6 +175,9 @@ export function createEmbeddingIndexer(
     }
 
     return true;
+    } finally {
+      processing = false;
+    }
   }
 
   async function processAll(): Promise<number> {
@@ -196,8 +202,12 @@ export function createEmbeddingIndexer(
       extractionsIndexed = (stmtCountExtractionsIndexed.get() as CountRow).cnt;
     }
 
+    const status = !embedder.isReady() ? 'disabled' as const
+      : queue.length > 0 || processing ? 'indexing' as const
+      : 'ready' as const;
+
     return {
-      status: 'ready',
+      status,
       nodes_total: nodesTotal,
       nodes_indexed: nodesIndexed,
       extractions_total: extractionsTotal,

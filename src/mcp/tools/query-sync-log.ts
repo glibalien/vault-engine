@@ -7,7 +7,7 @@ const paramsShape = {
   file_path: z.string().optional().describe('Filter to a single file path'),
   since: z.string().optional().describe('ISO timestamp or relative duration (e.g. "1h", "30m")'),
   events: z.array(z.string()).optional().describe('Filter to specific event types'),
-  source: z.string().optional().describe('Filter by source (watcher, tool, propagation, reconciler)'),
+  source: z.string().optional().describe('Filter by source (watcher, tool, propagation, reconciler, normalizer)'),
   limit: z.number().default(100).describe('Max rows to return (max 1000)'),
   sort_order: z.enum(['asc', 'desc']).default('asc').describe('Sort by timestamp'),
 };

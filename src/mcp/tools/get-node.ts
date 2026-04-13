@@ -3,6 +3,7 @@ import type Database from 'better-sqlite3';
 import { z } from 'zod';
 import { basename } from 'node:path';
 import { toolResult, toolErrorResult } from './errors.js';
+import { resolveFieldValue, type FieldRow } from '../field-value.js';
 import { resolveTarget } from '../../resolver/resolve.js';
 import { getNodeConformance } from '../../validation/conformance.js';
 import type { ExtractionCache } from '../../extraction/cache.js';
@@ -24,15 +25,6 @@ interface NodeRow {
   content_hash: string | null;
   file_mtime: number | null;
   indexed_at: number | null;
-}
-
-interface FieldRow {
-  field_name: string;
-  value_text: string | null;
-  value_number: number | null;
-  value_date: string | null;
-  value_json: string | null;
-  source: string;
 }
 
 interface RelRow {
@@ -96,21 +88,11 @@ export function registerGetNode(
         .all(node.id) as FieldRow[];
       const fields: Record<string, { value: unknown; type: string; source: string }> = {};
       for (const f of fieldRows) {
-        let value: unknown;
-        let type: string;
-        if (f.value_json !== null) {
-          value = JSON.parse(f.value_json);
-          type = 'json';
-        } else if (f.value_number !== null) {
-          value = f.value_number;
-          type = 'number';
-        } else if (f.value_date !== null) {
-          value = f.value_date;
-          type = 'date';
-        } else {
-          value = f.value_text;
-          type = 'text';
-        }
+        const value = resolveFieldValue(f);
+        const type = f.value_json !== null ? 'json'
+          : f.value_number !== null ? 'number'
+          : f.value_date !== null ? 'date'
+          : 'text';
         fields[f.field_name] = { value, type, source: f.source };
       }
 

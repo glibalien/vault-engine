@@ -3,6 +3,7 @@ import type { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import type Database from 'better-sqlite3';
 import { createTestDb } from '../helpers/db.js';
 import { registerVaultStats } from '../../src/mcp/tools/vault-stats.js';
+import { resolveFieldValue } from '../../src/mcp/field-value.js';
 import { registerListTypes } from '../../src/mcp/tools/list-types.js';
 import { registerListSchemas } from '../../src/mcp/tools/list-schemas.js';
 import { registerDescribeSchema } from '../../src/mcp/tools/describe-schema.js';
@@ -432,5 +433,32 @@ describe('get-node', () => {
     expect(result.metadata.content_hash).toBe('h1');
     expect(result.metadata.file_mtime).toBe(1000);
     expect(result.metadata.indexed_at).toBe(2000);
+  });
+});
+
+describe('resolveFieldValue', () => {
+  it('resolves value_json as parsed JSON', () => {
+    const row = { field_name: 'tags', value_text: null, value_number: null, value_date: null, value_json: '["a","b"]', source: 'frontmatter' };
+    expect(resolveFieldValue(row)).toEqual(['a', 'b']);
+  });
+
+  it('resolves value_number', () => {
+    const row = { field_name: 'priority', value_text: null, value_number: 3, value_date: null, value_json: null, source: 'frontmatter' };
+    expect(resolveFieldValue(row)).toBe(3);
+  });
+
+  it('resolves value_date', () => {
+    const row = { field_name: 'due', value_text: null, value_number: null, value_date: '2026-04-12', value_json: null, source: 'frontmatter' };
+    expect(resolveFieldValue(row)).toBe('2026-04-12');
+  });
+
+  it('resolves value_text as fallback', () => {
+    const row = { field_name: 'status', value_text: 'open', value_number: null, value_date: null, value_json: null, source: 'frontmatter' };
+    expect(resolveFieldValue(row)).toBe('open');
+  });
+
+  it('resolves null when all value columns are null', () => {
+    const row = { field_name: 'empty', value_text: null, value_number: null, value_date: null, value_json: null, source: 'frontmatter' };
+    expect(resolveFieldValue(row)).toBeNull();
   });
 });

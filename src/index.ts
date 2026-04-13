@@ -14,6 +14,7 @@ import { startReconciler } from './sync/reconciler.js';
 import { IndexMutex } from './sync/mutex.js';
 import { WriteLockManager } from './sync/write-lock.js';
 import { WriteGate } from './sync/write-gate.js';
+import { SyncLogger } from './sync/sync-logger.js';
 import { startupSchemaRender } from './schema/render.js';
 import { buildExtractorRegistry } from './extraction/setup.js';
 import { ExtractionCache } from './extraction/cache.js';
@@ -44,8 +45,9 @@ startupSchemaRender(db, vaultPath);
 const mutex = new IndexMutex();
 const writeLock = new WriteLockManager();
 const writeGate = new WriteGate({ quietPeriodMs: 3000 });
-const watcher = startWatcher(vaultPath, db, mutex, writeLock, writeGate);
-const reconciler = startReconciler(vaultPath, db, mutex, writeLock, writeGate);
+const syncLogger = new SyncLogger(db);
+const watcher = startWatcher(vaultPath, db, mutex, writeLock, writeGate, syncLogger);
+const reconciler = startReconciler(vaultPath, db, mutex, writeLock, writeGate, syncLogger);
 
 const extractorRegistry = buildExtractorRegistry(process.env as Record<string, string | undefined>);
 const extractionCache = new ExtractionCache(db, extractorRegistry);
@@ -53,7 +55,7 @@ if (process.env.ANTHROPIC_API_KEY) {
   extractionCache.setPdfFallback(new ClaudeVisionPdfExtractor(process.env.ANTHROPIC_API_KEY));
 }
 
-const serverFactory = () => createServer(db, { writeLock, writeGate, vaultPath, extractorRegistry, extractionCache });
+const serverFactory = () => createServer(db, { writeLock, writeGate, syncLogger, vaultPath, extractorRegistry, extractionCache });
 
 if (args.transport === 'stdio' || args.transport === 'both') {
   const server = serverFactory();

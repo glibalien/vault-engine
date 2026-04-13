@@ -3,7 +3,7 @@ import type Database from 'better-sqlite3';
 export class SyncLogger {
   private insertCount = 0;
   private readonly retentionMs: number;
-  private readonly stmt: ReturnType<Database.Database['prepare']>;
+  private readonly stmt: Database.Statement;
 
   constructor(private db: Database.Database) {
     const hours = parseInt(process.env.SYNC_LOG_RETENTION_HOURS ?? '24', 10);

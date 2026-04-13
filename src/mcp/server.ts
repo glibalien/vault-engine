@@ -5,6 +5,8 @@ import type { WriteGate } from '../sync/write-gate.js';
 import type { SyncLogger } from '../sync/sync-logger.js';
 import type { ExtractorRegistry } from '../extraction/registry.js';
 import type { ExtractionCache } from '../extraction/cache.js';
+import type { EmbeddingIndexer } from '../search/indexer.js';
+import type { Embedder } from '../search/embedder.js';
 import { registerAllTools } from './tools/index.js';
 
 export interface ServerContext {
@@ -15,6 +17,8 @@ export interface ServerContext {
   vaultPath?: string;
   extractorRegistry?: ExtractorRegistry;
   extractionCache?: ExtractionCache;
+  embeddingIndexer?: EmbeddingIndexer;
+  embedder?: Embedder;
 }
 
 export function createServer(db: Database.Database, ctx?: {
@@ -24,6 +28,8 @@ export function createServer(db: Database.Database, ctx?: {
   vaultPath?: string;
   extractorRegistry?: ExtractorRegistry;
   extractionCache?: ExtractionCache;
+  embeddingIndexer?: EmbeddingIndexer;
+  embedder?: Embedder;
 }): McpServer {
   const server = new McpServer({ name: 'vault-engine', version: '0.1.0' });
   registerAllTools(server, db, ctx);

@@ -25,7 +25,6 @@ export interface NodeQueryFilter {
   without_types?: string[];
   fields?: Record<string, FieldFilter>;
   without_fields?: string[];
-  full_text?: string;
   references?: ReferenceFilter;
   path_prefix?: string;
   without_path_prefix?: string;
@@ -115,13 +114,6 @@ export function buildNodeQuery(filter: NodeQueryFilter, db?: Database.Database):
       whereClauses.push(`n.id NOT IN (SELECT node_id FROM node_fields WHERE field_name = ?)`);
       params.push(fieldName);
     }
-  }
-
-  // FTS5 full-text search
-  if (filter.full_text) {
-    joins.push('INNER JOIN nodes_fts ON nodes_fts.rowid = n.rowid');
-    whereClauses.push('nodes_fts MATCH ?');
-    params.push(filter.full_text);
   }
 
   // Reference filter

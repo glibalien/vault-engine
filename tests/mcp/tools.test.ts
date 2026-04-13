@@ -273,16 +273,9 @@ describe('query-nodes', () => {
     expect(result.nodes[0].id).toBe('n1');
   });
 
-  it('filters by FTS5 full_text', async () => {
-    // Manually populate nodes_fts since we bypassed the indexer
-    // FTS5 contentless tables: use INSERT with rowid matching nodes.rowid
-    const rows = db.prepare('SELECT rowid, title, body FROM nodes').all() as Array<{ rowid: number; title: string; body: string }>;
-    for (const row of rows) {
-      db.prepare('INSERT INTO nodes_fts (rowid, title, body) VALUES (?, ?, ?)').run(row.rowid, row.title, row.body);
-    }
-
+  it('filters by type (meeting)', async () => {
     const handler = getToolHandler(registerQueryNodes);
-    const result = parseResult(await handler({ full_text: 'Meeting' }) as any) as any;
+    const result = parseResult(await handler({ types: ['meeting'] }) as any) as any;
     expect(result.total).toBe(1);
     expect(result.nodes[0].id).toBe('n1');
   });
@@ -369,16 +362,13 @@ describe('query-nodes', () => {
     db.prepare(
       'INSERT INTO nodes (id, file_path, title, body, content_hash, file_mtime, indexed_at) VALUES (?, ?, ?, ?, ?, ?, ?)'
     ).run('n_json', 'notes/json-test.md', 'JSON Test', '', 'hj', 5000, 5000);
-    db.prepare('INSERT INTO node_types (node_id, schema_type) VALUES (?, ?)').run('n_json', 'note');
+    db.prepare('INSERT INTO node_types (node_id, schema_type) VALUES (?, ?)').run('n_json', 'json-test-type');
     db.prepare(
       'INSERT INTO node_fields (node_id, field_name, value_text, value_number, value_date, value_json, source) VALUES (?, ?, ?, ?, ?, ?, ?)'
     ).run('n_json', 'tags', null, null, null, '["design","spec"]', 'frontmatter');
-    // Populate FTS index for full_text search
-    const row = db.prepare('SELECT rowid, title, body FROM nodes WHERE id = ?').get('n_json') as { rowid: number; title: string; body: string };
-    db.prepare('INSERT INTO nodes_fts (rowid, title, body) VALUES (?, ?, ?)').run(row.rowid, row.title, row.body);
 
     const handler = getToolHandler(registerQueryNodes);
-    const result = parseResult(await handler({ full_text: 'JSON Test', include_fields: ['tags'] }) as any) as any;
+    const result = parseResult(await handler({ types: ['json-test-type'], include_fields: ['tags'] }) as any) as any;
     expect(result.nodes[0].fields).toEqual({ tags: ['design', 'spec'] });
   });
 

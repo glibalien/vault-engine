@@ -54,9 +54,9 @@ export class DeepgramExtractor implements Extractor {
       model: 'nova-3',
       smart_format: true,
       diarize: true,
+      utterances: true,
     });
 
-    // result is ListenV1Response | ListenV1AcceptedResponse
     const utterances =
       ('results' in result ? result.results?.utterances : undefined) ?? [];
     const segments: DiarizedSegment[] = utterances.map(u => ({

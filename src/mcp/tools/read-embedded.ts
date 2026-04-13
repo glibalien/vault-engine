@@ -2,8 +2,29 @@ import type { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import type Database from 'better-sqlite3';
 import { z } from 'zod';
 import { join, basename } from 'node:path';
+import { stat, readdir } from 'node:fs/promises';
 import { toolResult } from './errors.js';
 import type { ExtractionCache } from '../../extraction/cache.js';
+
+/** Search vault recursively for a file by basename (binary files aren't in nodes table). */
+async function findFileInVault(vaultPath: string, filename: string): Promise<string | null> {
+  const target = basename(filename);
+  async function search(dir: string): Promise<string | null> {
+    let entries;
+    try { entries = await readdir(dir, { withFileTypes: true }); } catch { return null; }
+    for (const entry of entries) {
+      if (entry.name.startsWith('.')) continue;
+      const fullPath = join(dir, entry.name);
+      if (entry.isFile() && entry.name === target) return fullPath;
+      if (entry.isDirectory()) {
+        const found = await search(fullPath);
+        if (found) return found;
+      }
+    }
+    return null;
+  }
+  return search(vaultPath);
+}
 
 export function registerReadEmbedded(
   server: McpServer,
@@ -38,7 +59,19 @@ export function registerReadEmbedded(
         const matches = allNodes.filter(n => basename(n.file_path) === filename);
 
         if (matches.length === 0) {
-          resolvedPath = join(vaultPath, filename!);
+          // Binary files (audio, images) aren't in nodes table — search vault
+          const directPath = join(vaultPath, filename!);
+          try {
+            await stat(directPath);
+            resolvedPath = directPath;
+          } catch {
+            const found = await findFileInVault(vaultPath, filename!);
+            if (found) {
+              resolvedPath = found;
+            } else {
+              return toolResult({ error: `File not found in vault: ${filename}`, code: 'NOT_FOUND' });
+            }
+          }
         } else if (matches.length === 1) {
           resolvedPath = join(vaultPath, matches[0].file_path);
         } else {

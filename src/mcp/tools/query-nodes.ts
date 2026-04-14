@@ -24,6 +24,8 @@ const paramsShape = {
     exists: z.boolean().optional(),
   }).strict()).optional(),
   without_fields: z.array(z.string()).optional(),
+  title_eq: z.string().optional(),
+  title_contains: z.string().optional(),
   query: z.string().optional(),
   references: z.object({
     target: z.string(),
@@ -102,7 +104,7 @@ export function registerQueryNodes(
 ): void {
   server.tool(
     'query-nodes',
-    'Query nodes with filtering by type, fields, semantic search, references, path, and date. Use the query param for full-text and semantic (vector) search with ranked results. Scores use Reciprocal Rank Fusion (RRF) — absolute values are not meaningful, only relative ordering matters. match_sources indicates retrieval method: "fts" (full-text match), "semantic" (vector/embedding match), or both. Returns paginated results. Use include_fields to return field values inline (e.g. ["project","status"] or ["*"] for all).',
+    'Query nodes with filtering by type, fields, semantic search, references, path, and date. Use the query param for full-text and semantic (vector) search with ranked results. Scores use Reciprocal Rank Fusion (RRF) — absolute values are not meaningful, only relative ordering matters. match_sources indicates retrieval method: "fts" (full-text match), "semantic" (vector/embedding match), or both. Returns paginated results. Use include_fields to return field values inline (e.g. ["project","status"] or ["*"] for all). When you know the exact title, prefer get-node with title param. For partial title matching, use title_contains. For exact title filtering combined with other constraints, use title_eq.',
     paramsShape,
     async (params) => {
       const sortBy = params.sort_by ?? 'title';
@@ -118,6 +120,8 @@ export function registerQueryNodes(
         params.fields ||
         params.without_fields?.length ||
         params.references ||
+        params.title_eq ||
+        params.title_contains ||
         params.path_prefix ||
         params.without_path_prefix ||
         params.path_dir !== undefined ||
@@ -135,6 +139,8 @@ export function registerQueryNodes(
             fields: params.fields as NodeQueryFilter['fields'],
             without_fields: params.without_fields,
             references: params.references,
+            title_eq: params.title_eq,
+            title_contains: params.title_contains,
             path_prefix: params.path_prefix,
             without_path_prefix: params.without_path_prefix,
             path_dir: params.path_dir,
@@ -193,6 +199,8 @@ export function registerQueryNodes(
         fields: params.fields as NodeQueryFilter['fields'],
         without_fields: params.without_fields,
         references: params.references,
+        title_eq: params.title_eq,
+        title_contains: params.title_contains,
         path_prefix: params.path_prefix,
         without_path_prefix: params.without_path_prefix,
         path_dir: params.path_dir,

@@ -26,6 +26,8 @@ export interface NodeQueryFilter {
   fields?: Record<string, FieldFilter>;
   without_fields?: string[];
   references?: ReferenceFilter;
+  title_eq?: string;
+  title_contains?: string;
   path_prefix?: string;
   without_path_prefix?: string;
   path_dir?: string;
@@ -173,6 +175,16 @@ export function buildNodeQuery(filter: NodeQueryFilter, db?: Database.Database):
         joins.push(joinCond);
       }
     }
+  }
+
+  // Title filters
+  if (filter.title_eq !== undefined) {
+    whereClauses.push('n.title = ? COLLATE NOCASE');
+    whereParams.push(filter.title_eq);
+  }
+  if (filter.title_contains !== undefined) {
+    whereClauses.push('n.title LIKE ? COLLATE NOCASE');
+    whereParams.push(`%${filter.title_contains}%`);
   }
 
   // Path prefix filter

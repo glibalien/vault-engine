@@ -256,7 +256,7 @@ describe('normalizer edits_log', () => {
 
 describe('normalizer backfill of missing defaults', () => {
   it('populates missing field with static default on normalize sweep', () => {
-    createGlobalField(db, { name: 'status', field_type: 'string', default_value: 'open' });
+    createGlobalField(db, { name: 'status', field_type: 'string', default_value: 'open', required: true });
     createSchemaDefinition(db, { name: 'task', field_claims: [
       { field: 'status', sort_order: 100 },
     ] });
@@ -292,7 +292,7 @@ describe('normalizer backfill of missing defaults', () => {
   });
 
   it('populates missing field with $ctime token using DB created_at', () => {
-    createGlobalField(db, { name: 'date', field_type: 'reference', reference_target: 'daily-note', default_value: '$ctime:YYYY-MM-DD' });
+    createGlobalField(db, { name: 'date', field_type: 'reference', reference_target: 'daily-note', default_value: '$ctime:YYYY-MM-DD', required: true });
     createSchemaDefinition(db, { name: 'note', field_claims: [
       { field: 'date', sort_order: 100 },
     ] });
@@ -328,7 +328,7 @@ describe('normalizer backfill of missing defaults', () => {
   });
 
   it('does not overwrite existing field values during backfill', () => {
-    createGlobalField(db, { name: 'status', field_type: 'string', default_value: 'open' });
+    createGlobalField(db, { name: 'status', field_type: 'string', default_value: 'open', required: true });
     createSchemaDefinition(db, { name: 'task', field_claims: [
       { field: 'status', sort_order: 100 },
     ] });

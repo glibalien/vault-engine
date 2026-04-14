@@ -123,7 +123,7 @@ describe('rename-node behavior', () => {
 
 describe('add-type-to-node behavior', () => {
   it('populates defaults for newly-claimed fields', () => {
-    createGlobalField(db, { name: 'status', field_type: 'string', default_value: 'open' });
+    createGlobalField(db, { name: 'status', field_type: 'string', default_value: 'open', required: true });
     createSchemaDefinition(db, { name: 'task', field_claims: [{ field: 'status' }] });
 
     const created = createNode();

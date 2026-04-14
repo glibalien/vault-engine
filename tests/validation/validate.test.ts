@@ -80,7 +80,7 @@ describe('validateProposedState', () => {
     expect(result.issues[0].field).toBe('title');
   });
 
-  it('default supplied — missing field with default_value', () => {
+  it('non-required field with default — NOT auto-populated (default is just metadata)', () => {
     const globals = new Map([
       ['status', gf({ name: 'status', default_value: 'open' })],
     ]);
@@ -96,10 +96,7 @@ describe('validateProposedState', () => {
     );
 
     expect(result.valid).toBe(true);
-    expect(result.coerced_state.status).toBeDefined();
-    expect(result.coerced_state.status.value).toBe('open');
-    expect(result.coerced_state.status.source).toBe('defaulted');
-    expect(result.coerced_state.status.changed).toBe(false);
+    expect(result.coerced_state.status).toBeUndefined();
   });
 
   it('null overrides default on non-required — field excluded from coerced_state', () => {
@@ -494,7 +491,7 @@ describe('validateProposedState', () => {
       createdAtMs: new Date('2024-06-15T09:00:00').getTime(),
     };
     const globals = new Map([
-      ['date', gf({ name: 'date', field_type: 'reference', default_value: '$ctime:YYYY-MM-DD' })],
+      ['date', gf({ name: 'date', field_type: 'reference', required: true, default_value: '$ctime:YYYY-MM-DD' })],
     ]);
     const claims = new Map([
       ['note', [claim({ schema_name: 'note', field: 'date' })]],
@@ -518,7 +515,7 @@ describe('validateProposedState', () => {
       mtimeMs: new Date('2025-01-01T12:00:00').getTime(),
     };
     const globals = new Map([
-      ['updated', gf({ name: 'updated', default_value: '$mtime:YYYY-MM-DD' })],
+      ['updated', gf({ name: 'updated', required: true, default_value: '$mtime:YYYY-MM-DD' })],
     ]);
     const claims = new Map([
       ['note', [claim({ schema_name: 'note', field: 'updated' })]],
@@ -586,7 +583,7 @@ describe('validateProposedState', () => {
 
   it('date token default — no fileCtx falls back to $now', () => {
     const globals = new Map([
-      ['date', gf({ name: 'date', default_value: '$mtime:YYYY-MM-DD' })],
+      ['date', gf({ name: 'date', required: true, default_value: '$mtime:YYYY-MM-DD' })],
     ]);
     const claims = new Map([
       ['note', [claim({ schema_name: 'note', field: 'date' })]],

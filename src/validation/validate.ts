@@ -70,7 +70,7 @@ export function validateProposedState(
     }
 
     if (!provided) {
-      if (ef.resolved_default_value !== null) {
+      if (ef.resolved_required && ef.resolved_default_value !== null) {
         const resolved = resolveDefaultValue(ef.resolved_default_value, fileCtx ?? null);
         coerced_state[fieldName] = {
           field: fieldName,
@@ -86,6 +86,7 @@ export function validateProposedState(
           message: `Required field "${fieldName}" is missing`,
         });
       }
+      // Non-required fields without a value: absent is fine, default is just metadata
       continue;
     }
 

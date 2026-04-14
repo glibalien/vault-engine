@@ -40,7 +40,7 @@ export function populateDefaults(
     // Only populate if the node doesn't already have this field
     if (fieldName in currentFields && currentFields[fieldName] !== undefined) continue;
 
-    if (ef.resolved_default_value !== null) {
+    if (ef.resolved_required && ef.resolved_default_value !== null) {
       const resolved = resolveDefaultValue(ef.resolved_default_value, fileCtx ?? null);
       defaults[fieldName] = resolved;
 

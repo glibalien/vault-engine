@@ -150,7 +150,7 @@ export function runNormalizerSweep(
 
       for (const [fieldName, ef] of effFields) {
         if (fieldName in fields && fields[fieldName] !== undefined && fields[fieldName] !== null) continue;
-        if (ef.resolved_default_value === null) continue;
+        if (!ef.resolved_required || ef.resolved_default_value === null) continue;
         fields[fieldName] = resolveDefaultValue(ef.resolved_default_value, fileCtx);
         hasBackfill = true;
       }

@@ -148,8 +148,8 @@ describe('executeMutation — tool path create', () => {
     expect(content).toContain('custom: my-value');
   });
 
-  it('populates defaults for missing fields', () => {
-    createGlobalField(db, { name: 'status', field_type: 'string', default_value: 'open' });
+  it('populates defaults for missing required fields', () => {
+    createGlobalField(db, { name: 'status', field_type: 'string', default_value: 'open', required: true });
     createSchemaDefinition(db, { name: 'task', field_claims: [{ field: 'status' }] });
 
     const result = executeMutation(db, writeLock, vaultPath, makeMutation({

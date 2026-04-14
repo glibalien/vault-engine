@@ -1,10 +1,12 @@
 // src/validation/coerce.ts
 
+import * as chrono from 'chrono-node';
 import type { FieldType } from './types.js';
 
 export type CoercionCode =
   | 'STRING_TO_NUMBER'
   | 'STRING_TO_DATE'
+  | 'STRING_TO_DATE_FUZZY'
   | 'STRING_TO_BOOLEAN'
   | 'STRING_TO_ENUM'
   | 'STRING_TO_REFERENCE'
@@ -82,7 +84,8 @@ function stringToDate(value: string): CoercionResult {
   const dateTimeMatch = DATE_TIME_RE.exec(trimmed);
 
   if (!dateOnlyMatch && !dateTimeMatch) {
-    return failure(`Invalid date format: "${value}"`, 'string', 'date');
+    // Fuzzy parse via chrono-node for natural-language dates
+    return fuzzyParseDate(trimmed, value);
   }
 
   const match = dateOnlyMatch || dateTimeMatch;
@@ -106,6 +109,35 @@ function stringToDate(value: string): CoercionResult {
   }
 
   return success(trimmed, true, 'STRING_TO_DATE');
+}
+
+function fuzzyParseDate(trimmed: string, original: string): CoercionResult {
+  // Strip common noise: trailing brackets, pipes, etc.
+  const cleaned = trimmed.replace(/[|\[\]]+/g, ' ').trim();
+  const parsed = chrono.parseDate(cleaned);
+  if (!parsed || Number.isNaN(parsed.getTime())) {
+    return failure(`Unrecognizable date: "${original}"`, 'string', 'date');
+  }
+
+  // Check if the parsed result includes a meaningful time component
+  const result = chrono.parse(cleaned);
+  const hasTime = result.length > 0 && result[0].start.isCertain('hour');
+
+  if (hasTime) {
+    // Preserve time as ISO datetime (local, no timezone — matches Obsidian convention)
+    const yyyy = String(parsed.getFullYear());
+    const mm = String(parsed.getMonth() + 1).padStart(2, '0');
+    const dd = String(parsed.getDate()).padStart(2, '0');
+    const hh = String(parsed.getHours()).padStart(2, '0');
+    const min = String(parsed.getMinutes()).padStart(2, '0');
+    return success(`${yyyy}-${mm}-${dd}T${hh}:${min}`, true, 'STRING_TO_DATE_FUZZY');
+  }
+
+  // Date-only
+  const yyyy = String(parsed.getFullYear());
+  const mm = String(parsed.getMonth() + 1).padStart(2, '0');
+  const dd = String(parsed.getDate()).padStart(2, '0');
+  return success(`${yyyy}-${mm}-${dd}`, true, 'STRING_TO_DATE_FUZZY');
 }
 
 // ── string → boolean ────────────────────────────────────────────────

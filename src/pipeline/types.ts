@@ -4,6 +4,8 @@
 
 import type { ValidationResult, ValidationIssue } from '../validation/types.js';
 
+export type { FileContext } from '../validation/resolve-default.js';
+
 export interface ProposedMutation {
   source: 'tool' | 'watcher' | 'normalizer';
   node_id: string | null;           // null for create-node

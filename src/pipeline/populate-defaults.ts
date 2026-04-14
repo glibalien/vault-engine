@@ -7,6 +7,7 @@
 import type Database from 'better-sqlite3';
 import { mergeFieldClaims } from '../validation/merge.js';
 import { loadSchemaContext } from './schema-context.js';
+import { resolveDefaultValue, type FileContext } from '../validation/resolve-default.js';
 
 export interface PopulatedDefault {
   field: string;
@@ -23,6 +24,7 @@ export function populateDefaults(
   db: Database.Database,
   types: string[],
   currentFields: Record<string, unknown>,
+  fileCtx?: FileContext | null,
 ): { defaults: Record<string, unknown>; populated: PopulatedDefault[] } {
   const { claimsByType, globalFields } = loadSchemaContext(db, types);
   const mergeResult = mergeFieldClaims(types, claimsByType, globalFields);
@@ -39,7 +41,8 @@ export function populateDefaults(
     if (fieldName in currentFields && currentFields[fieldName] !== undefined) continue;
 
     if (ef.resolved_default_value !== null) {
-      defaults[fieldName] = ef.resolved_default_value;
+      const resolved = resolveDefaultValue(ef.resolved_default_value, fileCtx ?? null);
+      defaults[fieldName] = resolved;
 
       // Determine source: if any claim has a non-null default, it's from a claim
       let source: 'global' | 'claim' = 'global';
@@ -53,7 +56,7 @@ export function populateDefaults(
         if (source === 'claim') break;
       }
 
-      populated.push({ field: fieldName, default_value: ef.resolved_default_value, default_source: source });
+      populated.push({ field: fieldName, default_value: resolved, default_source: source });
     }
   }
 

@@ -4,6 +4,7 @@
 // Section 5 of the Phase 3 spec.
 
 import { join } from 'node:path';
+import { statSync } from 'node:fs';
 import type Database from 'better-sqlite3';
 import { nanoid } from 'nanoid';
 import { validateProposedState } from '../validation/validate.js';
@@ -21,6 +22,7 @@ import { buildDeviationEntries, writeEditsLogEntries } from './edits-log.js';
 import { atomicWriteFile, readFileOrNull } from './file-writer.js';
 import type { ProposedMutation, PipelineResult } from './types.js';
 import { PipelineError } from './types.js';
+import type { FileContext } from '../validation/resolve-default.js';
 
 /**
  * Execute a mutation through the full write pipeline.
@@ -40,6 +42,16 @@ export function executeMutation(
   syncLogger?: SyncLogger,
 ): PipelineResult {
   const absPath = join(vaultPath, mutation.file_path);
+
+  // Stat file for date token resolution (ctime/mtime defaults)
+  let fileCtx: FileContext | null = null;
+  try {
+    const st = statSync(absPath);
+    fileCtx = { birthtimeMs: st.birthtimeMs, mtimeMs: st.mtimeMs };
+  } catch {
+    // File doesn't exist yet (create-node) — tokens fall back to $now
+  }
+
   const tmpDir = join(vaultPath, '.vault-engine', 'tmp');
 
   // ── DB Transaction spans Stages 1–6 ──────────────────────────────
@@ -53,6 +65,7 @@ export function executeMutation(
       mutation.types,
       claimsByType,
       globalFields,
+      fileCtx,
     );
 
     // ── Stage 3: Source-specific error handling ──────────────────────

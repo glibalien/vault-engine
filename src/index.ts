@@ -30,7 +30,7 @@ if (!vaultPath) {
   process.exit(1);
 }
 
-const dbPath = args.dbPath ?? process.env.DB_PATH ?? resolve(vaultPath, '.vault-engine', 'vault.db');
+const dbPath = args.dbPath ?? process.env.DB_PATH ?? resolve(vaultPath, '.vault-engine', 'vault-new.db');
 const db = openDatabase(dbPath);
 createSchema(db);
 upgradeToPhase2(db);

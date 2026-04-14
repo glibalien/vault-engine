@@ -107,33 +107,7 @@ export function runNormalizerSweep(
         continue;
       }
 
-      // 2. Render from DB state
-      const renderedHash = renderFromDb(db, node.id);
-      if (renderedHash === null) {
-        stats.errored++;
-        continue;
-      }
-
-      // 3. Staleness check
-      if (renderedHash === node.content_hash) {
-        stats.skipped_canonical++;
-        continue;
-      }
-
-      if (dryRun) {
-        console.log(`[normalizer] Would rewrite: ${node.file_path}`);
-        stats.would_rewrite.push(node.file_path);
-        stats.rewritten++;
-        continue;
-      }
-
-      // 4. Write through pipeline
-      const nodeRow = db.prepare('SELECT body FROM nodes WHERE id = ?').get(node.id) as {
-        body: string;
-      };
-      const base = basename(node.file_path);
-      const title = base.endsWith('.md') ? base.slice(0, -3) : base;
-
+      // 2. Check for missing defaults that need backfilling
       const types = (db.prepare('SELECT schema_type FROM node_types WHERE node_id = ?')
         .all(node.id) as Array<{ schema_type: string }>).map(t => t.schema_type);
 
@@ -158,10 +132,13 @@ export function runNormalizerSweep(
       // ── Backfill missing defaults ──────────────────────────────────
       // Check effective fields for any that are missing from the node
       // and have a default value. Resolve tokens and add to fields.
+      // This must happen BEFORE the staleness check so that nodes
+      // needing backfill are not skipped as canonical.
       const ctx = loadSchemaContext(db, types);
       const mergeResult = mergeFieldClaims(types, ctx.claimsByType, ctx.globalFields);
       const effFields = mergeResult.ok ? mergeResult.effective_fields : mergeResult.partial_fields;
 
+      let hasBackfill = false;
       let fileCtx: FileContext | null = null;
       try {
         const fileStat = statSync(absPath);
@@ -174,7 +151,35 @@ export function runNormalizerSweep(
         if (fieldName in fields && fields[fieldName] !== undefined && fields[fieldName] !== null) continue;
         if (ef.resolved_default_value === null) continue;
         fields[fieldName] = resolveDefaultValue(ef.resolved_default_value, fileCtx);
+        hasBackfill = true;
       }
+
+      // 3. Render from DB state (without backfilled fields) for staleness check
+      const renderedHash = renderFromDb(db, node.id);
+      if (renderedHash === null) {
+        stats.errored++;
+        continue;
+      }
+
+      // 4. Staleness check — skip if canonical AND no backfill needed
+      if (renderedHash === node.content_hash && !hasBackfill) {
+        stats.skipped_canonical++;
+        continue;
+      }
+
+      if (dryRun) {
+        console.log(`[normalizer] Would rewrite: ${node.file_path}`);
+        stats.would_rewrite.push(node.file_path);
+        stats.rewritten++;
+        continue;
+      }
+
+      // 5. Write through pipeline
+      const nodeRow = db.prepare('SELECT body FROM nodes WHERE id = ?').get(node.id) as {
+        body: string;
+      };
+      const base = basename(node.file_path);
+      const title = base.endsWith('.md') ? base.slice(0, -3) : base;
 
       executeMutation(db, writeLock, vaultPath, {
         source: 'normalizer',

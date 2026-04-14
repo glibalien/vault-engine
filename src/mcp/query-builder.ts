@@ -2,8 +2,6 @@ import type Database from 'better-sqlite3';
 import { basename } from 'node:path';
 import { resolveTarget } from '../resolver/resolve.js';
 
-const ISO_DATE_RE = /^\d{4}-\d{2}-\d{2}/;
-
 export interface FieldFilter {
   eq?: unknown;
   ne?: unknown;
@@ -99,8 +97,6 @@ export function buildNodeQuery(filter: NodeQueryFilter, db?: Database.Database):
         } else if (op === 'eq') {
           if (typeof value === 'number') {
             whereClauses.push(`${alias}.value_number = ?`);
-          } else if (typeof value === 'string' && ISO_DATE_RE.test(value)) {
-            whereClauses.push(`${alias}.value_date = ?`);
           } else {
             whereClauses.push(`${alias}.value_text = ?`);
           }
@@ -108,18 +104,17 @@ export function buildNodeQuery(filter: NodeQueryFilter, db?: Database.Database):
         } else if (op === 'ne') {
           if (typeof value === 'number') {
             whereClauses.push(`${alias}.value_number != ?`);
-          } else if (typeof value === 'string' && ISO_DATE_RE.test(value)) {
-            whereClauses.push(`${alias}.value_date != ?`);
           } else {
             whereClauses.push(`${alias}.value_text != ?`);
           }
           whereParams.push(value);
         } else if (['gt', 'lt', 'gte', 'lte'].includes(op)) {
           const sqlOp = op === 'gt' ? '>' : op === 'lt' ? '<' : op === 'gte' ? '>=' : '<=';
-          if (typeof value === 'string' && ISO_DATE_RE.test(value as string)) {
-            whereClauses.push(`${alias}.value_date ${sqlOp} ?`);
-          } else {
+          if (typeof value === 'number') {
             whereClauses.push(`${alias}.value_number ${sqlOp} ?`);
+          } else {
+            // ISO date strings sort lexicographically in value_text
+            whereClauses.push(`${alias}.value_text ${sqlOp} ?`);
           }
           whereParams.push(value);
         }

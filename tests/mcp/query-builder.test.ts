@@ -32,6 +32,10 @@ function seedTestData() {
   insertField.run('n1', 'status', 'open', null, null, null, 'frontmatter');
   insertField.run('n2', 'status', 'done', null, null, null, 'frontmatter');
   insertField.run('n3', 'status', 'open', null, null, null, 'frontmatter');
+  // Date fields stored as ISO strings in value_text (classifyValue treats them as strings)
+  insertField.run('n1', 'scheduled', '2026-01-15', null, null, null, 'frontmatter');
+  insertField.run('n2', 'scheduled', '2026-04-01', null, null, null, 'frontmatter');
+  insertField.run('n3', 'scheduled', '2026-06-30', null, null, null, 'frontmatter');
 
   const insertRel = db.prepare(
     'INSERT INTO relationships (source_id, target, rel_type, context) VALUES (?, ?, ?, ?)'
@@ -339,6 +343,49 @@ describe('buildNodeQuery', () => {
       const { rows, total } = runQuery({ fields: { project: { contains: 'Vault' } } });
       expect(total).toBe(1);
       expect(rows[0].id).toBe('n1');
+    });
+  });
+
+  describe('date comparison operators', () => {
+    it('lte returns nodes with date on or before the threshold', () => {
+      // n1=2026-01-15, n2=2026-04-01, n3=2026-06-30
+      const { rows, total } = runQuery({ fields: { scheduled: { lte: '2026-04-01' } } });
+      expect(total).toBe(2);
+      const ids = rows.map(r => r.id).sort();
+      expect(ids).toEqual(['n1', 'n2']);
+    });
+
+    it('gte returns nodes with date on or after the threshold', () => {
+      const { rows, total } = runQuery({ fields: { scheduled: { gte: '2026-04-01' } } });
+      expect(total).toBe(2);
+      const ids = rows.map(r => r.id).sort();
+      expect(ids).toEqual(['n2', 'n3']);
+    });
+
+    it('gt returns nodes with date strictly after the threshold', () => {
+      const { rows, total } = runQuery({ fields: { scheduled: { gt: '2026-04-01' } } });
+      expect(total).toBe(1);
+      expect(rows[0].id).toBe('n3');
+    });
+
+    it('lt returns nodes with date strictly before the threshold', () => {
+      const { rows, total } = runQuery({ fields: { scheduled: { lt: '2026-04-01' } } });
+      expect(total).toBe(1);
+      expect(rows[0].id).toBe('n1');
+    });
+
+    it('date range with gte + lte combined on same field', () => {
+      const { rows, total } = runQuery({
+        fields: { scheduled: { gte: '2026-02-01', lte: '2026-05-01' } },
+      });
+      expect(total).toBe(1);
+      expect(rows[0].id).toBe('n2');
+    });
+
+    it('eq on date string matches via value_text', () => {
+      const { rows, total } = runQuery({ fields: { scheduled: { eq: '2026-04-01' } } });
+      expect(total).toBe(1);
+      expect(rows[0].id).toBe('n2');
     });
   });
 

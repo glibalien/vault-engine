@@ -220,7 +220,9 @@ export function processFileChange(
       // (Phase 1 fallback behavior)
       const fallbackNodeId = indexFile(absPath, vaultPath, db);
       embeddingIndexer?.enqueue({ node_id: fallbackNodeId, source_type: 'node' });
-      embeddingIndexer?.processOne().catch(() => {});
+      embeddingIndexer?.processOne().catch(err => {
+        console.error('[watcher] Embedding error:', err instanceof Error ? err.message : err);
+      });
     }
     return;
   }

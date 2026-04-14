@@ -11,6 +11,7 @@ import type Database from 'better-sqlite3';
 import { shouldIgnore } from '../indexer/ignore.js';
 import { loadSchemaContext } from '../pipeline/schema-context.js';
 import { mergeFieldClaims } from '../validation/merge.js';
+import { resolveDefaultValue, type FileContext } from '../validation/resolve-default.js';
 import { reconstructValue } from '../pipeline/classify-value.js';
 import { renderNode } from '../renderer/render.js';
 import type { FieldOrderEntry } from '../renderer/types.js';
@@ -152,6 +153,27 @@ export function runNormalizerSweep(
       for (const row of fieldRows) {
         fields[row.field_name] = reconstructValue(row);
         if (row.value_raw_text) rawFieldTexts[row.field_name] = row.value_raw_text;
+      }
+
+      // ── Backfill missing defaults ──────────────────────────────────
+      // Check effective fields for any that are missing from the node
+      // and have a default value. Resolve tokens and add to fields.
+      const ctx = loadSchemaContext(db, types);
+      const mergeResult = mergeFieldClaims(types, ctx.claimsByType, ctx.globalFields);
+      const effFields = mergeResult.ok ? mergeResult.effective_fields : mergeResult.partial_fields;
+
+      let fileCtx: FileContext | null = null;
+      try {
+        const fileStat = statSync(absPath);
+        fileCtx = { birthtimeMs: fileStat.birthtimeMs, mtimeMs: fileStat.mtimeMs };
+      } catch {
+        // Already checked file exists above, but guard anyway
+      }
+
+      for (const [fieldName, ef] of effFields) {
+        if (fieldName in fields && fields[fieldName] !== undefined && fields[fieldName] !== null) continue;
+        if (ef.resolved_default_value === null) continue;
+        fields[fieldName] = resolveDefaultValue(ef.resolved_default_value, fileCtx);
       }
 
       executeMutation(db, writeLock, vaultPath, {

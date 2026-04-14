@@ -9,7 +9,7 @@ import { executeMutation } from '../../src/pipeline/execute.js';
 import { createGlobalField } from '../../src/global-fields/crud.js';
 import { createSchemaDefinition } from '../../src/schema/crud.js';
 import { sha256 } from '../../src/indexer/hash.js';
-import { startNormalizer } from '../../src/sync/normalizer.js';
+import { startNormalizer, runNormalizerSweep } from '../../src/sync/normalizer.js';
 import { createTempVault } from '../helpers/vault.js';
 
 let vaultPath: string;
@@ -251,5 +251,102 @@ describe('normalizer edits_log', () => {
     expect(parsed.skipped_missing).toBe(2);
     expect(parsed.rewritten).toBe(6);
     expect(parsed.errored).toBe(2);
+  });
+});
+
+describe('normalizer backfill of missing defaults', () => {
+  it('populates missing field with static default on normalize sweep', () => {
+    createGlobalField(db, { name: 'status', field_type: 'string', default_value: 'open' });
+    createSchemaDefinition(db, { name: 'task', field_claims: [
+      { field: 'status', sort_order: 100 },
+    ] });
+
+    // Create node WITHOUT status field (simulates pre-existing node)
+    const nodeId = createNodeViaToolPath('backfill.md', {
+      title: 'Backfill Test',
+      types: ['task'],
+      fields: {},
+    });
+
+    // Remove the status field from DB (simulates it never having been set —
+    // the tool path would have defaulted it, so we strip it to simulate a
+    // node created before the default was configured)
+    db.prepare('DELETE FROM node_fields WHERE node_id = ? AND field_name = ?').run(nodeId, 'status');
+    // Invalidate content hash so normalizer sees it as stale
+    db.prepare('UPDATE nodes SET content_hash = ? WHERE id = ?').run('stale', nodeId);
+
+    makeFileOld('backfill.md', 2 * 60 * 60 * 1000);
+
+    const stats = runNormalizerSweep(vaultPath, db, writeLock, syncLogger, {
+      skipQuiescence: true,
+    });
+
+    expect(stats.rewritten).toBeGreaterThanOrEqual(1);
+
+    // Verify the field was populated in DB
+    const row = db.prepare(
+      'SELECT value_text FROM node_fields WHERE node_id = ? AND field_name = ?',
+    ).get(nodeId, 'status') as { value_text: string } | undefined;
+    expect(row).toBeDefined();
+    expect(row!.value_text).toBe('open');
+  });
+
+  it('populates missing field with $ctime token using file birthtime', () => {
+    createGlobalField(db, { name: 'date', field_type: 'reference', reference_target: 'daily-note', default_value: '$ctime:YYYY-MM-DD' });
+    createSchemaDefinition(db, { name: 'note', field_claims: [
+      { field: 'date', sort_order: 100 },
+    ] });
+
+    const nodeId = createNodeViaToolPath('ctime-backfill.md', {
+      title: 'Ctime Backfill',
+      types: ['note'],
+      fields: {},
+    });
+
+    // Strip the date field and invalidate hash
+    db.prepare('DELETE FROM node_fields WHERE node_id = ? AND field_name = ?').run(nodeId, 'date');
+    db.prepare('UPDATE nodes SET content_hash = ? WHERE id = ?').run('stale', nodeId);
+
+    makeFileOld('ctime-backfill.md', 2 * 60 * 60 * 1000);
+
+    const stats = runNormalizerSweep(vaultPath, db, writeLock, syncLogger, {
+      skipQuiescence: true,
+    });
+
+    expect(stats.rewritten).toBeGreaterThanOrEqual(1);
+
+    // Verify the date field was populated (value will be the file's birthtime)
+    const row = db.prepare(
+      'SELECT value_text FROM node_fields WHERE node_id = ? AND field_name = ?',
+    ).get(nodeId, 'date') as { value_text: string } | undefined;
+    expect(row).toBeDefined();
+    // Should be a YYYY-MM-DD formatted date string
+    expect(row!.value_text).toMatch(/^\d{4}-\d{2}-\d{2}$/);
+  });
+
+  it('does not overwrite existing field values during backfill', () => {
+    createGlobalField(db, { name: 'status', field_type: 'string', default_value: 'open' });
+    createSchemaDefinition(db, { name: 'task', field_claims: [
+      { field: 'status', sort_order: 100 },
+    ] });
+
+    const nodeId = createNodeViaToolPath('no-overwrite.md', {
+      title: 'No Overwrite',
+      types: ['task'],
+      fields: { status: 'closed' },
+    });
+
+    // Invalidate hash so normalizer processes it
+    db.prepare('UPDATE nodes SET content_hash = ? WHERE id = ?').run('stale', nodeId);
+    makeFileOld('no-overwrite.md', 2 * 60 * 60 * 1000);
+
+    runNormalizerSweep(vaultPath, db, writeLock, syncLogger, {
+      skipQuiescence: true,
+    });
+
+    const row = db.prepare(
+      'SELECT value_text FROM node_fields WHERE node_id = ? AND field_name = ?',
+    ).get(nodeId, 'status') as { value_text: string };
+    expect(row.value_text).toBe('closed');
   });
 });

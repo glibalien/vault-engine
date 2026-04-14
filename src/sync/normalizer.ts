@@ -8,6 +8,7 @@ import { statSync } from 'node:fs';
 import { join, basename } from 'node:path';
 import { Cron } from 'croner';
 import type Database from 'better-sqlite3';
+import { shouldIgnore } from '../indexer/ignore.js';
 import { loadSchemaContext } from '../pipeline/schema-context.js';
 import { mergeFieldClaims } from '../validation/merge.js';
 import { reconstructValue } from '../pipeline/classify-value.js';
@@ -32,6 +33,7 @@ export interface SweepOptions {
 
 export interface SweepStats {
   scanned: number;
+  skipped_excluded: number;
   skipped_quiescent: number;
   skipped_canonical: number;
   skipped_missing: number;
@@ -57,6 +59,7 @@ export function runNormalizerSweep(
 
   const stats: SweepStats = {
     scanned: 0,
+    skipped_excluded: 0,
     skipped_quiescent: 0,
     skipped_canonical: 0,
     skipped_missing: 0,
@@ -79,6 +82,12 @@ export function runNormalizerSweep(
 
   for (const node of nodes) {
     stats.scanned++;
+
+    // Skip excluded directories (same rules as indexer/watcher)
+    if (shouldIgnore(node.file_path)) {
+      stats.skipped_excluded++;
+      continue;
+    }
 
     try {
       // 1. Stat the file — skip if missing or quiescent
@@ -172,8 +181,8 @@ export function runNormalizerSweep(
 
   console.log(
     `[normalizer] Complete: ${stats.scanned} scanned, ${stats.rewritten} ${dryRun ? 'would rewrite' : 'rewritten'}, ` +
-    `${stats.skipped_canonical} already canonical, ${stats.skipped_quiescent} quiescent, ` +
-    `${stats.skipped_missing} missing, ${stats.errored} errors`,
+    `${stats.skipped_canonical} already canonical, ${stats.skipped_excluded} excluded, ` +
+    `${stats.skipped_quiescent} quiescent, ${stats.skipped_missing} missing, ${stats.errored} errors`,
   );
 
   if (!dryRun) {
@@ -182,6 +191,7 @@ export function runNormalizerSweep(
       'INSERT INTO edits_log (node_id, timestamp, event_type, details) VALUES (?, ?, ?, ?)',
     ).run(null, Date.now(), 'normalizer-sweep', JSON.stringify({
       scanned: stats.scanned,
+      skipped_excluded: stats.skipped_excluded,
       skipped_quiescent: stats.skipped_quiescent,
       skipped_canonical: stats.skipped_canonical,
       skipped_missing: stats.skipped_missing,

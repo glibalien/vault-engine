@@ -1,5 +1,9 @@
 import { resolve } from 'node:path';
+import { config as loadDotenv } from 'dotenv';
 import { StdioServerTransport } from '@modelcontextprotocol/sdk/server/stdio.js';
+
+// Load .env from project root (no-op if vars already set, e.g. via systemd EnvironmentFile)
+loadDotenv({ path: resolve(import.meta.dirname ?? '.', '..', '.env') });
 import { openDatabase } from './db/connection.js';
 import { createSchema } from './db/schema.js';
 import { upgradeToPhase2, upgradeToPhase3, upgradeToPhase4, upgradeToPhase6 } from './db/migrate.js';

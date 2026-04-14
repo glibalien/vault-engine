@@ -1,9 +1,9 @@
 import { describe, it, expect } from 'vitest';
 import { resolveDefaultValue, type FileContext } from '../../src/validation/resolve-default.js';
 
-// Use local time (no Z suffix) — formatDate uses getHours() etc. which return local time
 const ctx: FileContext = {
   mtimeMs: new Date('2025-01-20T14:45:00').getTime(),
+  createdAtMs: new Date('2024-03-15T10:30:00').getTime(),
 };
 
 describe('resolveDefaultValue', () => {
@@ -18,7 +18,27 @@ describe('resolveDefaultValue', () => {
   it('returns non-token strings unchanged', () => {
     expect(resolveDefaultValue('open', ctx)).toBe('open');
     expect(resolveDefaultValue('$unknown', ctx)).toBe('$unknown');
-    expect(resolveDefaultValue('mtime:YYYY', ctx)).toBe('mtime:YYYY');
+    expect(resolveDefaultValue('ctime:YYYY', ctx)).toBe('ctime:YYYY');
+  });
+
+  // ── $ctime (from DB created_at) ───────────────────────────────────
+  it('$ctime with default format', () => {
+    expect(resolveDefaultValue('$ctime', ctx)).toBe('2024-03-15');
+  });
+
+  it('$ctime with explicit format', () => {
+    expect(resolveDefaultValue('$ctime:YYYY-MM-DD', ctx)).toBe('2024-03-15');
+  });
+
+  it('$ctime with time format', () => {
+    expect(resolveDefaultValue('$ctime:YYYY-MM-DDTHH:mm', ctx)).toBe('2024-03-15T10:30');
+  });
+
+  it('$ctime with null createdAtMs falls back to $now', () => {
+    const noCreated: FileContext = { mtimeMs: ctx.mtimeMs, createdAtMs: null };
+    const result = resolveDefaultValue('$ctime', noCreated);
+    const nowResult = resolveDefaultValue('$now', noCreated);
+    expect(result).toBe(nowResult);
   });
 
   // ── $mtime ─────────────────────────────────────────────────────────
@@ -44,10 +64,17 @@ describe('resolveDefaultValue', () => {
 
   it('$now ignores fileCtx and uses Date.now()', () => {
     const result = resolveDefaultValue('$now', ctx) as string;
+    expect(result).not.toBe('2024-03-15');
     expect(result).not.toBe('2025-01-20');
   });
 
   // ── Null FileContext fallback ──────────────────────────────────────
+  it('$ctime with null fileCtx falls back to $now', () => {
+    const withCtx = resolveDefaultValue('$now', null);
+    const withoutCtx = resolveDefaultValue('$ctime', null);
+    expect(withoutCtx).toBe(withCtx);
+  });
+
   it('$mtime with null fileCtx falls back to $now', () => {
     const withCtx = resolveDefaultValue('$now', null);
     const withoutCtx = resolveDefaultValue('$mtime', null);
@@ -60,6 +87,6 @@ describe('resolveDefaultValue', () => {
   });
 
   it('format with only year', () => {
-    expect(resolveDefaultValue('$mtime:YYYY', ctx)).toBe('2025');
+    expect(resolveDefaultValue('$ctime:YYYY', ctx)).toBe('2024');
   });
 });

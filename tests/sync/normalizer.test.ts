@@ -291,23 +291,27 @@ describe('normalizer backfill of missing defaults', () => {
     expect(row!.value_text).toBe('open');
   });
 
-  it('populates missing field with $mtime token using file mtime', () => {
-    createGlobalField(db, { name: 'date', field_type: 'reference', reference_target: 'daily-note', default_value: '$mtime:YYYY-MM-DD' });
+  it('populates missing field with $ctime token using DB created_at', () => {
+    createGlobalField(db, { name: 'date', field_type: 'reference', reference_target: 'daily-note', default_value: '$ctime:YYYY-MM-DD' });
     createSchemaDefinition(db, { name: 'note', field_claims: [
       { field: 'date', sort_order: 100 },
     ] });
 
-    const nodeId = createNodeViaToolPath('mtime-backfill.md', {
-      title: 'Mtime Backfill',
+    const nodeId = createNodeViaToolPath('ctime-backfill.md', {
+      title: 'Ctime Backfill',
       types: ['note'],
       fields: {},
     });
+
+    // Set a known created_at in the past
+    const knownCreatedAt = new Date('2023-07-20T10:00:00').getTime();
+    db.prepare('UPDATE nodes SET created_at = ? WHERE id = ?').run(knownCreatedAt, nodeId);
 
     // Strip the date field and invalidate hash
     db.prepare('DELETE FROM node_fields WHERE node_id = ? AND field_name = ?').run(nodeId, 'date');
     db.prepare('UPDATE nodes SET content_hash = ? WHERE id = ?').run('stale', nodeId);
 
-    makeFileOld('mtime-backfill.md', 2 * 60 * 60 * 1000);
+    makeFileOld('ctime-backfill.md', 2 * 60 * 60 * 1000);
 
     const stats = runNormalizerSweep(vaultPath, db, writeLock, syncLogger, {
       skipQuiescence: true,
@@ -315,13 +319,12 @@ describe('normalizer backfill of missing defaults', () => {
 
     expect(stats.rewritten).toBeGreaterThanOrEqual(1);
 
-    // Verify the date field was populated (value will be the file's mtime)
+    // Verify the date field was populated with the DB created_at, not today's date
     const row = db.prepare(
       'SELECT value_text FROM node_fields WHERE node_id = ? AND field_name = ?',
     ).get(nodeId, 'date') as { value_text: string } | undefined;
     expect(row).toBeDefined();
-    // Should be a YYYY-MM-DD formatted date string
-    expect(row!.value_text).toMatch(/^\d{4}-\d{2}-\d{2}$/);
+    expect(row!.value_text).toBe('2023-07-20');
   });
 
   it('does not overwrite existing field values during backfill', () => {

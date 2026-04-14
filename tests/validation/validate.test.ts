@@ -488,6 +488,31 @@ describe('validateProposedState', () => {
 
   // ── Date token resolution ───────────────────────────────────────────
 
+  it('date token default — $ctime resolved from fileCtx.createdAtMs', () => {
+    const fileCtx: FileContext = {
+      mtimeMs: new Date('2025-01-01T12:00:00').getTime(),
+      createdAtMs: new Date('2024-06-15T09:00:00').getTime(),
+    };
+    const globals = new Map([
+      ['date', gf({ name: 'date', field_type: 'reference', default_value: '$ctime:YYYY-MM-DD' })],
+    ]);
+    const claims = new Map([
+      ['note', [claim({ schema_name: 'note', field: 'date' })]],
+    ]);
+
+    const result = validateProposedState(
+      {},
+      ['note'],
+      claims,
+      globals,
+      fileCtx,
+    );
+
+    expect(result.valid).toBe(true);
+    expect(result.coerced_state.date.value).toBe('2024-06-15');
+    expect(result.coerced_state.date.source).toBe('defaulted');
+  });
+
   it('date token default — $mtime resolved from fileCtx', () => {
     const fileCtx: FileContext = {
       mtimeMs: new Date('2025-01-01T12:00:00').getTime(),

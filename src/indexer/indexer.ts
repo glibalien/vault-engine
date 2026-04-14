@@ -38,8 +38,8 @@ function prepareStatements(db: Database.Database): Statements {
     getNodeByPath: db.prepare('SELECT id, content_hash, file_mtime FROM nodes WHERE file_path = ?'),
     getNodeRowid: db.prepare('SELECT rowid FROM nodes WHERE id = ?'),
     upsertNode: db.prepare(`
-      INSERT INTO nodes (id, file_path, title, body, content_hash, file_mtime, indexed_at)
-      VALUES (@id, @file_path, @title, @body, @content_hash, @file_mtime, @indexed_at)
+      INSERT INTO nodes (id, file_path, title, body, content_hash, file_mtime, indexed_at, created_at)
+      VALUES (@id, @file_path, @title, @body, @content_hash, @file_mtime, @indexed_at, @created_at)
       ON CONFLICT(id) DO UPDATE SET
         file_path = @file_path,
         title = @title,
@@ -174,6 +174,7 @@ function doIndex(
     content_hash: contentHash,
     file_mtime: mtime,
     indexed_at: now,
+    created_at: now,
   });
 
   // Insert FTS entry using rowid from nodes table

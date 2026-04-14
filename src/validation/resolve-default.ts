@@ -1,13 +1,17 @@
 export interface FileContext {
   mtimeMs: number;
+  createdAtMs?: number | null;
 }
 
-const TOKEN_RE = /^\$(mtime|now)(?::(.+))?$/;
+const TOKEN_RE = /^\$(ctime|mtime|now)(?::(.+))?$/;
 const DEFAULT_FORMAT = 'YYYY-MM-DD';
 
 /**
- * If `defaultValue` is a date token ($mtime, $now), resolve it
+ * If `defaultValue` is a date token ($ctime, $mtime, $now), resolve it
  * to a formatted date string. Otherwise return unchanged.
+ *
+ * $ctime reads from the DB `created_at` column (via fileCtx.createdAtMs),
+ * NOT from filesystem birthtime (which is unreliable with atomic writes).
  */
 export function resolveDefaultValue(
   defaultValue: unknown,
@@ -23,6 +27,9 @@ export function resolveDefaultValue(
 
   let timestampMs: number;
   switch (token) {
+    case 'ctime':
+      timestampMs = fileCtx?.createdAtMs ?? Date.now();
+      break;
     case 'mtime':
       timestampMs = fileCtx?.mtimeMs ?? Date.now();
       break;

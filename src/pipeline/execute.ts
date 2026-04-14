@@ -43,11 +43,17 @@ export function executeMutation(
 ): PipelineResult {
   const absPath = join(vaultPath, mutation.file_path);
 
-  // Stat file for date token resolution (mtime defaults)
+  // Build FileContext for date token resolution ($ctime, $mtime defaults)
   let fileCtx: FileContext | null = null;
   try {
     const st = statSync(absPath);
-    fileCtx = { mtimeMs: st.mtimeMs };
+    // Read created_at from DB for existing nodes ($ctime source)
+    let createdAtMs: number | null = null;
+    if (mutation.node_id) {
+      const row = db.prepare('SELECT created_at FROM nodes WHERE id = ?').get(mutation.node_id) as { created_at: number | null } | undefined;
+      createdAtMs = row?.created_at ?? null;
+    }
+    fileCtx = { mtimeMs: st.mtimeMs, createdAtMs };
   } catch {
     // File doesn't exist yet (create-node) — tokens fall back to $now
   }
@@ -252,10 +258,10 @@ export function executeMutation(
         ? renderedHash
         : (mutation.source_content_hash ?? renderedHash);
 
-      // Upsert nodes row
+      // Upsert nodes row (created_at set on INSERT only, preserved on UPDATE)
       db.prepare(`
-        INSERT INTO nodes (id, file_path, title, body, content_hash, file_mtime, indexed_at)
-        VALUES (@id, @file_path, @title, @body, @content_hash, @file_mtime, @indexed_at)
+        INSERT INTO nodes (id, file_path, title, body, content_hash, file_mtime, indexed_at, created_at)
+        VALUES (@id, @file_path, @title, @body, @content_hash, @file_mtime, @indexed_at, @created_at)
         ON CONFLICT(id) DO UPDATE SET
           file_path = @file_path,
           title = @title,
@@ -271,6 +277,7 @@ export function executeMutation(
         content_hash: contentHash,
         file_mtime: now,
         indexed_at: now,
+        created_at: now,
       });
 
       // Delete and reinsert node_types

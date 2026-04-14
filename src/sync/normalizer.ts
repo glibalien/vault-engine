@@ -70,11 +70,12 @@ export function runNormalizerSweep(
   };
 
   const nodes = db.prepare(
-    'SELECT id, file_path, content_hash FROM nodes ORDER BY file_path',
+    'SELECT id, file_path, content_hash, created_at FROM nodes ORDER BY file_path',
   ).all() as Array<{
     id: string;
     file_path: string;
     content_hash: string;
+    created_at: number | null;
   }>;
 
   const now = Date.now();
@@ -142,7 +143,7 @@ export function runNormalizerSweep(
       let fileCtx: FileContext | null = null;
       try {
         const fileStat = statSync(absPath);
-        fileCtx = { mtimeMs: fileStat.mtimeMs };
+        fileCtx = { mtimeMs: fileStat.mtimeMs, createdAtMs: node.created_at };
       } catch {
         // Already checked file exists above, but guard anyway
       }

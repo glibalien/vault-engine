@@ -6,7 +6,7 @@ import { StdioServerTransport } from '@modelcontextprotocol/sdk/server/stdio.js'
 loadDotenv({ path: resolve(import.meta.dirname ?? '.', '..', '.env') });
 import { openDatabase } from './db/connection.js';
 import { createSchema } from './db/schema.js';
-import { upgradeToPhase2, upgradeToPhase3, upgradeToPhase4, upgradeToPhase6 } from './db/migrate.js';
+import { upgradeToPhase2, upgradeToPhase3, upgradeToPhase4, upgradeToPhase6, addCreatedAt } from './db/migrate.js';
 import { createServer } from './mcp/server.js';
 import { parseArgs } from './transport/args.js';
 import { startHttpTransport } from './transport/http.js';
@@ -42,6 +42,7 @@ upgradeToPhase2(db);
 upgradeToPhase3(db);
 upgradeToPhase4(db);
 upgradeToPhase6(db);
+addCreatedAt(db);
 
 const excludeDirs = (process.env.VAULT_EXCLUDE_DIRS ?? '').split(',').map(s => s.trim()).filter(Boolean);
 if (excludeDirs.length > 0) {

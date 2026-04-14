@@ -112,6 +112,22 @@ export function upgradeToPhase4(db: Database.Database): void {
   run();
 }
 
+export function addCreatedAt(db: Database.Database): void {
+  const run = db.transaction(() => {
+    const columns = (
+      db.prepare('PRAGMA table_info(nodes)').all() as { name: string }[]
+    ).map(c => c.name);
+
+    if (!columns.includes('created_at')) {
+      db.prepare('ALTER TABLE nodes ADD COLUMN created_at INTEGER').run();
+      // Backfill: use indexed_at as best available proxy for creation time
+      db.prepare('UPDATE nodes SET created_at = indexed_at WHERE created_at IS NULL AND indexed_at IS NOT NULL').run();
+    }
+  });
+
+  run();
+}
+
 export function upgradeToPhase2(db: Database.Database): void {
   const run = db.transaction(() => {
     // --- global_fields: add three new columns if missing ---

@@ -28,6 +28,7 @@ function requestLogger(req: Request, res: Response, next: NextFunction): void {
 export function createHttpApp(serverFactory: ServerFactory, authConfig?: AuthConfig): Express {
   const sessions = new Map<string, StreamableHTTPServerTransport>();
   const app = express();
+  app.set('trust proxy', 1);
 
   app.use(express.json());
   app.use(express.urlencoded({ extended: false }));

@@ -9,6 +9,18 @@ const IGNORED_DIRS = new Set([
   'node_modules',
 ]);
 
+let customExcludeDirs: string[] = [];
+
+/**
+ * Set additional directory prefixes to exclude from indexing.
+ * Matching is segment-based: excluding "Notes" won't match "TaskNotes".
+ */
+export function setExcludeDirs(dirs: string[]): void {
+  customExcludeDirs = dirs
+    .map(d => d.replace(/\/+$/, '').trim())
+    .filter(Boolean);
+}
+
 /**
  * Determine whether a vault-relative path should be ignored by the indexer.
  *
@@ -17,6 +29,7 @@ const IGNORED_DIRS = new Set([
  * - Obsidian .sync-conflict-* files
  * - Any path segment starting with "."
  * - Known ignored directories
+ * - Custom excluded directories (set via VAULT_EXCLUDE_DIRS)
  */
 export function shouldIgnore(relativePath: string): boolean {
   const name = basename(relativePath);
@@ -32,6 +45,15 @@ export function shouldIgnore(relativePath: string): boolean {
   for (const segment of segments) {
     if (segment.startsWith('.')) return true;
     if (IGNORED_DIRS.has(segment)) return true;
+  }
+
+  // Custom excluded directories — match on first segment(s)
+  for (const exclude of customExcludeDirs) {
+    const excludeSegments = exclude.split('/');
+    if (excludeSegments.length <= segments.length) {
+      const match = excludeSegments.every((es, i) => segments[i] === es);
+      if (match) return true;
+    }
   }
 
   return false;

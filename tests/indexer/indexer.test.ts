@@ -3,7 +3,7 @@ import { join } from 'node:path';
 import { unlinkSync, writeFileSync, utimesSync } from 'node:fs';
 import Database from 'better-sqlite3';
 import { createSchema } from '../../src/db/schema.js';
-import { fullIndex, indexFile, deleteNodeByPath, sha256, shouldIgnore } from '../../src/indexer/index.js';
+import { fullIndex, indexFile, deleteNodeByPath, sha256, shouldIgnore, setExcludeDirs } from '../../src/indexer/index.js';
 import { createTempVault } from '../helpers/vault.js';
 
 let vaultPath: string;
@@ -62,6 +62,22 @@ describe('shouldIgnore', () => {
     expect(shouldIgnore('.vault-engine/cache.md')).toBe(true);
     expect(shouldIgnore('node_modules/pkg/readme.md')).toBe(true);
     expect(shouldIgnore('.git/hooks/readme.md')).toBe(true);
+  });
+
+  it('ignores custom excluded directories', () => {
+    setExcludeDirs(['Templates', 'Archive/Old']);
+    try {
+      expect(shouldIgnore('Templates/Meeting Template.md')).toBe(true);
+      expect(shouldIgnore('Templates/sub/nested.md')).toBe(true);
+      expect(shouldIgnore('Archive/Old/legacy.md')).toBe(true);
+      // Non-excluded paths still allowed
+      expect(shouldIgnore('Archive/New/note.md')).toBe(false);
+      expect(shouldIgnore('Notes/note.md')).toBe(false);
+      // Segment-based: "Templates" shouldn't match "MyTemplates"
+      expect(shouldIgnore('MyTemplates/file.md')).toBe(false);
+    } finally {
+      setExcludeDirs([]);
+    }
   });
 });
 

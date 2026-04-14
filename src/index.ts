@@ -9,6 +9,7 @@ import { startHttpTransport } from './transport/http.js';
 import { createAuthSchema } from './auth/schema.js';
 import { validateAuthEnv } from './auth/env.js';
 import { fullIndex } from './indexer/indexer.js';
+import { setExcludeDirs } from './indexer/ignore.js';
 import { startWatcher } from './sync/watcher.js';
 import { startReconciler } from './sync/reconciler.js';
 import { startNormalizer, runNormalizerSweep } from './sync/normalizer.js';
@@ -37,6 +38,12 @@ upgradeToPhase2(db);
 upgradeToPhase3(db);
 upgradeToPhase4(db);
 upgradeToPhase6(db);
+
+const excludeDirs = (process.env.VAULT_EXCLUDE_DIRS ?? '').split(',').map(s => s.trim()).filter(Boolean);
+if (excludeDirs.length > 0) {
+  setExcludeDirs(excludeDirs);
+  console.log(`Excluding directories: ${excludeDirs.join(', ')}`);
+}
 
 console.log(`Indexing vault at ${vaultPath}...`);
 const indexStart = Date.now();

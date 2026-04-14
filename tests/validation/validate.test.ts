@@ -4,6 +4,7 @@ import type {
   GlobalFieldDefinition,
   FieldClaim,
 } from '../../src/validation/types.js';
+import type { FileContext } from '../../src/validation/resolve-default.js';
 
 // ── Helpers ──────────────────────────────────────────────────────────────
 
@@ -439,5 +440,168 @@ describe('validateProposedState', () => {
     const details = result.issues[0].details as { element_errors: Array<{ index: number }> };
     expect(details.element_errors).toBeDefined();
     expect(details.element_errors[0].index).toBe(1);
+  });
+
+  // ── Required + Default interaction ──────────────────────────────────
+
+  it('required + default — missing field populated from default instead of erroring', () => {
+    const globals = new Map([
+      ['status', gf({ name: 'status', required: true, default_value: 'open' })],
+    ]);
+    const claims = new Map([
+      ['task', [claim({ schema_name: 'task', field: 'status' })]],
+    ]);
+
+    const result = validateProposedState(
+      {},
+      ['task'],
+      claims,
+      globals,
+    );
+
+    expect(result.valid).toBe(true);
+    expect(result.issues).toHaveLength(0);
+    expect(result.coerced_state.status).toBeDefined();
+    expect(result.coerced_state.status.value).toBe('open');
+    expect(result.coerced_state.status.source).toBe('defaulted');
+  });
+
+  it('required + no default — still errors with REQUIRED_MISSING', () => {
+    const globals = new Map([
+      ['title', gf({ name: 'title', required: true })],
+    ]);
+    const claims = new Map([
+      ['note', [claim({ schema_name: 'note', field: 'title' })]],
+    ]);
+
+    const result = validateProposedState(
+      {},
+      ['note'],
+      claims,
+      globals,
+    );
+
+    expect(result.valid).toBe(false);
+    expect(result.issues).toHaveLength(1);
+    expect(result.issues[0].code).toBe('REQUIRED_MISSING');
+  });
+
+  // ── Date token resolution ───────────────────────────────────────────
+
+  it('date token default — $ctime resolved from fileCtx', () => {
+    const fileCtx: FileContext = {
+      birthtimeMs: new Date('2024-06-15T09:00:00').getTime(),
+      mtimeMs: new Date('2025-01-01T12:00:00').getTime(),
+    };
+    const globals = new Map([
+      ['date', gf({ name: 'date', field_type: 'reference', default_value: '$ctime:YYYY-MM-DD' })],
+    ]);
+    const claims = new Map([
+      ['note', [claim({ schema_name: 'note', field: 'date' })]],
+    ]);
+
+    const result = validateProposedState(
+      {},
+      ['note'],
+      claims,
+      globals,
+      fileCtx,
+    );
+
+    expect(result.valid).toBe(true);
+    expect(result.coerced_state.date.value).toBe('2024-06-15');
+    expect(result.coerced_state.date.source).toBe('defaulted');
+  });
+
+  it('date token default — $mtime resolved from fileCtx', () => {
+    const fileCtx: FileContext = {
+      birthtimeMs: new Date('2024-06-15T09:00:00').getTime(),
+      mtimeMs: new Date('2025-01-01T12:00:00').getTime(),
+    };
+    const globals = new Map([
+      ['updated', gf({ name: 'updated', default_value: '$mtime:YYYY-MM-DD' })],
+    ]);
+    const claims = new Map([
+      ['note', [claim({ schema_name: 'note', field: 'updated' })]],
+    ]);
+
+    const result = validateProposedState(
+      {},
+      ['note'],
+      claims,
+      globals,
+      fileCtx,
+    );
+
+    expect(result.coerced_state.updated.value).toBe('2025-01-01');
+  });
+
+  it('date token default — existing value not overwritten', () => {
+    const fileCtx: FileContext = {
+      birthtimeMs: new Date('2024-06-15T09:00:00').getTime(),
+      mtimeMs: new Date('2025-01-01T12:00:00').getTime(),
+    };
+    const globals = new Map([
+      ['date', gf({ name: 'date', field_type: 'reference', default_value: '$ctime:YYYY-MM-DD' })],
+    ]);
+    const claims = new Map([
+      ['note', [claim({ schema_name: 'note', field: 'date' })]],
+    ]);
+
+    const result = validateProposedState(
+      { date: '2023-01-01' },
+      ['note'],
+      claims,
+      globals,
+      fileCtx,
+    );
+
+    expect(result.coerced_state.date.value).toBe('2023-01-01');
+    expect(result.coerced_state.date.source).toBe('provided');
+  });
+
+  it('date token default — required + token resolves without error', () => {
+    const fileCtx: FileContext = {
+      birthtimeMs: new Date('2024-06-15T09:00:00').getTime(),
+      mtimeMs: new Date('2025-01-01T12:00:00').getTime(),
+    };
+    const globals = new Map([
+      ['date', gf({ name: 'date', field_type: 'reference', required: true, default_value: '$ctime:YYYY-MM-DD' })],
+    ]);
+    const claims = new Map([
+      ['note', [claim({ schema_name: 'note', field: 'date' })]],
+    ]);
+
+    const result = validateProposedState(
+      {},
+      ['note'],
+      claims,
+      globals,
+      fileCtx,
+    );
+
+    expect(result.valid).toBe(true);
+    expect(result.coerced_state.date.value).toBe('2024-06-15');
+    expect(result.coerced_state.date.source).toBe('defaulted');
+  });
+
+  it('date token default — no fileCtx falls back to $now', () => {
+    const globals = new Map([
+      ['date', gf({ name: 'date', default_value: '$ctime:YYYY-MM-DD' })],
+    ]);
+    const claims = new Map([
+      ['note', [claim({ schema_name: 'note', field: 'date' })]],
+    ]);
+
+    const result = validateProposedState(
+      {},
+      ['note'],
+      claims,
+      globals,
+    );
+
+    const today = new Date();
+    const expected = `${today.getFullYear()}-${String(today.getMonth() + 1).padStart(2, '0')}-${String(today.getDate()).padStart(2, '0')}`;
+    expect(result.coerced_state.date.value).toBe(expected);
   });
 });

@@ -13,12 +13,14 @@ import type {
 import { mergeFieldClaims } from './merge.js';
 import { coerceValue } from './coerce.js';
 import type { CoercionFailure } from './coerce.js';
+import { resolveDefaultValue, type FileContext } from './resolve-default.js';
 
 export function validateProposedState(
   proposedFields: Record<string, unknown>,
   types: string[],
   claimsByType: Map<string, FieldClaim[]>,
   globalFields: Map<string, GlobalFieldDefinition>,
+  fileCtx?: FileContext | null,
 ): ValidationResult {
   const issues: ValidationIssue[] = [];
   const coerced_state: Record<string, CoercedValue> = {};
@@ -68,23 +70,21 @@ export function validateProposedState(
     }
 
     if (!provided) {
-      if (ef.resolved_required) {
+      if (ef.resolved_default_value !== null) {
+        const resolved = resolveDefaultValue(ef.resolved_default_value, fileCtx ?? null);
+        coerced_state[fieldName] = {
+          field: fieldName,
+          value: resolved,
+          source: 'defaulted',
+          changed: false,
+        };
+      } else if (ef.resolved_required) {
         issues.push({
           field: fieldName,
           severity: 'error',
           code: 'REQUIRED_MISSING',
           message: `Required field "${fieldName}" is missing`,
         });
-        continue;
-      }
-
-      if (ef.resolved_default_value !== null) {
-        coerced_state[fieldName] = {
-          field: fieldName,
-          value: ef.resolved_default_value,
-          source: 'defaulted',
-          changed: false,
-        };
       }
       continue;
     }

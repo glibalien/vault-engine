@@ -182,25 +182,39 @@ export function registerBatchMutate(
         return toolResult({ applied: true, results: applied });
       } catch {
         // DB transaction rolled back. Now revert file writes.
+        const rollbackFailures: string[] = [];
+
         // 1. Restore backed-up files (updates and deletes)
         for (const { filePath, backupPath } of backups) {
           try {
             restoreFile(backupPath, filePath);
-          } catch {
-            // Best effort
+          } catch (err) {
+            const msg = `Failed to restore ${filePath}: ${err instanceof Error ? err.message : err}`;
+            console.error(`[batch-mutate] ${msg}`);
+            rollbackFailures.push(msg);
           }
         }
         // 2. Delete newly created files
         for (const absPath of createdFiles) {
           try {
             unlinkSync(absPath);
-          } catch {
-            // Best effort
+          } catch (err) {
+            const msg = `Failed to delete ${absPath}: ${err instanceof Error ? err.message : err}`;
+            console.error(`[batch-mutate] ${msg}`);
+            rollbackFailures.push(msg);
           }
         }
 
         if (batchError) {
-          return toolResult({ applied: false, failed_at: batchError.failed_at, error: batchError.error });
+          const result: Record<string, unknown> = {
+            applied: false,
+            failed_at: batchError.failed_at,
+            error: batchError.error,
+          };
+          if (rollbackFailures.length > 0) {
+            result.rollback_failures = rollbackFailures;
+          }
+          return toolResult(result);
         }
         return toolErrorResult('INTERNAL_ERROR', 'Batch operation failed');
       }

@@ -6,11 +6,13 @@ const ISO_DATE_RE = /^\d{4}-\d{2}-\d{2}/;
 
 export interface FieldFilter {
   eq?: unknown;
+  ne?: unknown;
   gt?: unknown;
   lt?: unknown;
   gte?: unknown;
   lte?: unknown;
   contains?: string;
+  includes?: unknown;
   exists?: boolean;
 }
 
@@ -40,8 +42,9 @@ export interface NodeQueryResult {
 
 export function buildNodeQuery(filter: NodeQueryFilter, db?: Database.Database): NodeQueryResult {
   const joins: string[] = [];
+  const joinParams: unknown[] = [];
   const whereClauses: string[] = [];
-  const params: unknown[] = [];
+  const whereParams: unknown[] = [];
   let joinIdx = 0;
 
   // Type filter (intersection: node must have ALL specified types)
@@ -49,7 +52,7 @@ export function buildNodeQuery(filter: NodeQueryFilter, db?: Database.Database):
     for (const t of filter.types) {
       const alias = `t${joinIdx++}`;
       joins.push(`INNER JOIN node_types ${alias} ON ${alias}.node_id = n.id AND ${alias}.schema_type = ?`);
-      params.push(t);
+      joinParams.push(t);
     }
   }
 
@@ -57,7 +60,7 @@ export function buildNodeQuery(filter: NodeQueryFilter, db?: Database.Database):
   if (filter.without_types && filter.without_types.length > 0) {
     for (const t of filter.without_types) {
       whereClauses.push(`n.id NOT IN (SELECT node_id FROM node_types WHERE schema_type = ?)`);
-      params.push(t);
+      whereParams.push(t);
     }
   }
 
@@ -69,14 +72,14 @@ export function buildNodeQuery(filter: NodeQueryFilter, db?: Database.Database):
       // Check for exists: false (LEFT JOIN + IS NULL pattern)
       if ('exists' in ops && ops.exists === false) {
         joins.push(`LEFT JOIN node_fields ${alias} ON ${alias}.node_id = n.id AND ${alias}.field_name = ?`);
-        params.push(fieldName);
+        joinParams.push(fieldName);
         whereClauses.push(`${alias}.node_id IS NULL`);
         continue;
       }
 
       // Normal: INNER JOIN
       joins.push(`INNER JOIN node_fields ${alias} ON ${alias}.node_id = n.id AND ${alias}.field_name = ?`);
-      params.push(fieldName);
+      joinParams.push(fieldName);
 
       for (const [op, value] of Object.entries(ops)) {
         if (op === 'exists') {
@@ -84,8 +87,15 @@ export function buildNodeQuery(filter: NodeQueryFilter, db?: Database.Database):
           continue;
         }
         if (op === 'contains') {
-          whereClauses.push(`${alias}.value_text LIKE ?`);
-          params.push(`%${value}%`);
+          // Search both value_text (scalar strings) and value_json (arrays/objects)
+          whereClauses.push(`(${alias}.value_text LIKE ? OR ${alias}.value_json LIKE ?)`);
+          whereParams.push(`%${value}%`, `%${value}%`);
+        } else if (op === 'includes') {
+          // Array membership: check if value_json (a JSON array) contains the given element
+          whereClauses.push(
+            `EXISTS (SELECT 1 FROM json_each(${alias}.value_json) WHERE json_each.value = ?)`
+          );
+          whereParams.push(value);
         } else if (op === 'eq') {
           if (typeof value === 'number') {
             whereClauses.push(`${alias}.value_number = ?`);
@@ -94,7 +104,16 @@ export function buildNodeQuery(filter: NodeQueryFilter, db?: Database.Database):
           } else {
             whereClauses.push(`${alias}.value_text = ?`);
           }
-          params.push(value);
+          whereParams.push(value);
+        } else if (op === 'ne') {
+          if (typeof value === 'number') {
+            whereClauses.push(`${alias}.value_number != ?`);
+          } else if (typeof value === 'string' && ISO_DATE_RE.test(value)) {
+            whereClauses.push(`${alias}.value_date != ?`);
+          } else {
+            whereClauses.push(`${alias}.value_text != ?`);
+          }
+          whereParams.push(value);
         } else if (['gt', 'lt', 'gte', 'lte'].includes(op)) {
           const sqlOp = op === 'gt' ? '>' : op === 'lt' ? '<' : op === 'gte' ? '>=' : '<=';
           if (typeof value === 'string' && ISO_DATE_RE.test(value as string)) {
@@ -102,7 +121,7 @@ export function buildNodeQuery(filter: NodeQueryFilter, db?: Database.Database):
           } else {
             whereClauses.push(`${alias}.value_number ${sqlOp} ?`);
           }
-          params.push(value);
+          whereParams.push(value);
         }
       }
     }
@@ -112,7 +131,7 @@ export function buildNodeQuery(filter: NodeQueryFilter, db?: Database.Database):
   if (filter.without_fields && filter.without_fields.length > 0) {
     for (const fieldName of filter.without_fields) {
       whereClauses.push(`n.id NOT IN (SELECT node_id FROM node_fields WHERE field_name = ?)`);
-      params.push(fieldName);
+      whereParams.push(fieldName);
     }
   }
 
@@ -124,10 +143,10 @@ export function buildNodeQuery(filter: NodeQueryFilter, db?: Database.Database):
     if (dir === 'outgoing' || dir === 'both') {
       const alias = `r${joinIdx++}`;
       let joinCond = `INNER JOIN relationships ${alias} ON ${alias}.source_id = n.id AND ${alias}.target = ?`;
-      params.push(ref.target);
+      joinParams.push(ref.target);
       if (ref.rel_type) {
         joinCond += ` AND ${alias}.rel_type = ?`;
-        params.push(ref.rel_type);
+        joinParams.push(ref.rel_type);
       }
       joins.push(joinCond);
     }
@@ -136,18 +155,12 @@ export function buildNodeQuery(filter: NodeQueryFilter, db?: Database.Database):
       if (!db) {
         throw new Error('db is required for incoming reference filter (resolveTarget lookup)');
       }
-      // "Incoming to X" means: find nodes that link TO X.
-      // Result nodes are the sources of those relationships.
-      // Strategy: resolve the target param to a node, collect all raw strings
-      // that could refer to it, then match relationships whose target is one of those.
       const resolved = resolveTarget(db, ref.target);
       if (!resolved) {
-        // Target doesn't resolve — no incoming results possible
         whereClauses.push('1 = 0');
       } else {
         const targetNode = db.prepare('SELECT file_path, title FROM nodes WHERE id = ?')
           .get(resolved.id) as { file_path: string; title: string | null };
-        // Collect all raw strings that wiki-links might use to refer to this node
         const possibleTargets: string[] = [];
         if (targetNode.title) possibleTargets.push(targetNode.title);
         possibleTargets.push(targetNode.file_path);
@@ -157,10 +170,10 @@ export function buildNodeQuery(filter: NodeQueryFilter, db?: Database.Database):
         const alias = `r${joinIdx++}`;
         const placeholders = unique.map(() => '?').join(', ');
         let joinCond = `INNER JOIN relationships ${alias} ON ${alias}.source_id = n.id AND ${alias}.target IN (${placeholders})`;
-        params.push(...unique);
+        joinParams.push(...unique);
         if (ref.rel_type) {
           joinCond += ` AND ${alias}.rel_type = ?`;
-          params.push(ref.rel_type);
+          joinParams.push(ref.rel_type);
         }
         joins.push(joinCond);
       }
@@ -170,25 +183,23 @@ export function buildNodeQuery(filter: NodeQueryFilter, db?: Database.Database):
   // Path prefix filter
   if (filter.path_prefix) {
     whereClauses.push('n.file_path LIKE ?');
-    params.push(`${filter.path_prefix}%`);
+    whereParams.push(`${filter.path_prefix}%`);
   }
 
   // Negation path prefix filter
   if (filter.without_path_prefix) {
     whereClauses.push('n.file_path NOT LIKE ?');
-    params.push(`${filter.without_path_prefix}%`);
+    whereParams.push(`${filter.without_path_prefix}%`);
   }
 
   // Exact directory filter (matches files whose immediate parent is the given dir)
   if (filter.path_dir !== undefined) {
     if (filter.path_dir === '' || filter.path_dir === '.') {
-      // Root: file_path has no directory separator
       whereClauses.push("n.file_path NOT LIKE '%/%'");
     } else {
-      // Specific dir: under dir/ but not under dir/sub/
       whereClauses.push('n.file_path LIKE ? AND n.file_path NOT LIKE ?');
-      params.push(`${filter.path_dir}/%`);
-      params.push(`${filter.path_dir}/%/%`);
+      whereParams.push(`${filter.path_dir}/%`);
+      whereParams.push(`${filter.path_dir}/%/%`);
     }
   }
 
@@ -196,13 +207,16 @@ export function buildNodeQuery(filter: NodeQueryFilter, db?: Database.Database):
   if (filter.modified_since) {
     whereClauses.push('n.file_mtime >= ?');
     const ts = Math.floor(new Date(filter.modified_since).getTime() / 1000);
-    params.push(ts);
+    whereParams.push(ts);
   }
 
   const joinSql = joins.join('\n');
   const whereSql = whereClauses.length > 0
     ? 'WHERE ' + whereClauses.join(' AND ')
     : '';
+
+  // Params must match SQL placeholder order: all JOIN params first, then all WHERE params
+  const params = [...joinParams, ...whereParams];
 
   const baseFrom = `FROM nodes n`;
   const countSql = `SELECT COUNT(DISTINCT n.id) as total ${baseFrom} ${joinSql} ${whereSql}`.trimEnd();

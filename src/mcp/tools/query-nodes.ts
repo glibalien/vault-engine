@@ -12,7 +12,17 @@ import { hybridSearch } from '../../search/search.js';
 const paramsShape = {
   types: z.array(z.string()).optional(),
   without_types: z.array(z.string()).optional(),
-  fields: z.record(z.string(), z.record(z.string(), z.unknown())).optional(),
+  fields: z.record(z.string(), z.object({
+    eq: z.unknown().optional(),
+    ne: z.unknown().optional(),
+    gt: z.unknown().optional(),
+    lt: z.unknown().optional(),
+    gte: z.unknown().optional(),
+    lte: z.unknown().optional(),
+    contains: z.string().optional(),
+    includes: z.unknown().optional(),
+    exists: z.boolean().optional(),
+  }).strict()).optional(),
   without_fields: z.array(z.string()).optional(),
   query: z.string().optional(),
   references: z.object({

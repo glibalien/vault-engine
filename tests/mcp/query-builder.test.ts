@@ -25,6 +25,13 @@ function seedTestData() {
   insertField.run('n1', 'project', 'Vault Engine', null, null, null, 'frontmatter');
   insertField.run('n3', 'priority', null, 1, null, null, 'frontmatter');
   insertField.run('n2', 'old_field', 'leftover', null, null, null, 'orphan');
+  // List fields stored as JSON arrays (e.g. list-of-enum)
+  insertField.run('n1', 'context', null, null, null, '["work"]', 'frontmatter');
+  insertField.run('n3', 'context', null, null, null, '["personal","work"]', 'frontmatter');
+  // Enum field for ne testing
+  insertField.run('n1', 'status', 'open', null, null, null, 'frontmatter');
+  insertField.run('n2', 'status', 'done', null, null, null, 'frontmatter');
+  insertField.run('n3', 'status', 'open', null, null, null, 'frontmatter');
 
   const insertRel = db.prepare(
     'INSERT INTO relationships (source_id, target, rel_type, context) VALUES (?, ?, ?, ?)'
@@ -269,6 +276,108 @@ describe('buildNodeQuery', () => {
       expect(sql).toContain('NOT IN');
       expect(sql).toContain('node_fields');
       expect(params).toContain('project');
+    });
+  });
+
+  describe('ne operator', () => {
+    it('excludes nodes where text field equals the value', () => {
+      const { rows, total } = runQuery({ fields: { status: { ne: 'done' } } });
+      // n1=open, n2=done, n3=open — ne 'done' should return n1 and n3
+      expect(total).toBe(2);
+      const ids = rows.map(r => r.id).sort();
+      expect(ids).toEqual(['n1', 'n3']);
+    });
+
+    it('excludes nodes where numeric field equals the value', () => {
+      const { rows, total } = runQuery({ fields: { priority: { ne: 999 } } });
+      // Only n3 has priority (=1), and 1 != 999
+      expect(total).toBe(1);
+      expect(rows[0].id).toBe('n3');
+    });
+
+    it('returns empty when all matching nodes equal the ne value', () => {
+      const { rows, total } = runQuery({ fields: { priority: { ne: 1 } } });
+      // n3 has priority=1, ne 1 excludes it; no other nodes have priority
+      expect(total).toBe(0);
+      expect(rows).toHaveLength(0);
+    });
+  });
+
+  describe('includes operator (JSON array membership)', () => {
+    it('returns nodes whose list field contains the value', () => {
+      const { rows, total } = runQuery({ fields: { context: { includes: 'personal' } } });
+      // n1=["work"], n3=["personal","work"] — only n3 includes "personal"
+      expect(total).toBe(1);
+      expect(rows[0].id).toBe('n3');
+    });
+
+    it('returns multiple nodes when value appears in multiple lists', () => {
+      const { rows, total } = runQuery({ fields: { context: { includes: 'work' } } });
+      // n1=["work"], n3=["personal","work"] — both include "work"
+      expect(total).toBe(2);
+      const ids = rows.map(r => r.id).sort();
+      expect(ids).toEqual(['n1', 'n3']);
+    });
+
+    it('returns empty when no list contains the value', () => {
+      const { rows, total } = runQuery({ fields: { context: { includes: 'nonexistent' } } });
+      expect(total).toBe(0);
+      expect(rows).toHaveLength(0);
+    });
+  });
+
+  describe('contains operator on list fields', () => {
+    it('matches inside JSON array values', () => {
+      const { rows, total } = runQuery({ fields: { context: { contains: 'work' } } });
+      // Both n1 (["work"]) and n3 (["personal","work"]) have "work" in their JSON
+      expect(total).toBe(2);
+      const ids = rows.map(r => r.id).sort();
+      expect(ids).toEqual(['n1', 'n3']);
+    });
+
+    it('still works on scalar text fields', () => {
+      const { rows, total } = runQuery({ fields: { project: { contains: 'Vault' } } });
+      expect(total).toBe(1);
+      expect(rows[0].id).toBe('n1');
+    });
+  });
+
+  describe('multi-field filters (param ordering)', () => {
+    it('includes + eq across two fields returns correct results', () => {
+      // n1: context=["work"], status=open
+      // n3: context=["personal","work"], status=open
+      // n2: status=done (no context)
+      const { rows, total } = runQuery({
+        fields: { context: { includes: 'work' }, status: { eq: 'open' } },
+      });
+      expect(total).toBe(2);
+      const ids = rows.map(r => r.id).sort();
+      expect(ids).toEqual(['n1', 'n3']);
+    });
+
+    it('includes narrowing on specific value + eq', () => {
+      const { rows, total } = runQuery({
+        fields: { context: { includes: 'personal' }, status: { eq: 'open' } },
+      });
+      expect(total).toBe(1);
+      expect(rows[0].id).toBe('n3');
+    });
+
+    it('ne + eq across two fields', () => {
+      // status ne "done" (n1=open, n3=open) + priority exists with eq 1 (n3)
+      const { rows, total } = runQuery({
+        fields: { status: { ne: 'done' }, priority: { eq: 1 } },
+      });
+      expect(total).toBe(1);
+      expect(rows[0].id).toBe('n3');
+    });
+
+    it('contains on list + eq on scalar', () => {
+      const { rows, total } = runQuery({
+        fields: { context: { contains: 'personal' }, status: { eq: 'open' } },
+      });
+      expect(total).toBe(1);
+      expect(rows[0].id).toBe('n3');
     });
   });
 

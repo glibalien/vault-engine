@@ -92,7 +92,7 @@ export function registerQueryNodes(
 ): void {
   server.tool(
     'query-nodes',
-    'Query nodes with filtering by type, fields, semantic search, references, path, and date. Use the query param for full-text and semantic (vector) search with ranked results. Returns paginated results. Use include_fields to return field values inline (e.g. ["project","status"] or ["*"] for all).',
+    'Query nodes with filtering by type, fields, semantic search, references, path, and date. Use the query param for full-text and semantic (vector) search with ranked results. Scores use Reciprocal Rank Fusion (RRF) — absolute values are not meaningful, only relative ordering matters. match_sources indicates retrieval method: "fts" (full-text match), "semantic" (vector/embedding match), or both. Returns paginated results. Use include_fields to return field values inline (e.g. ["project","status"] or ["*"] for all).',
     paramsShape,
     async (params) => {
       const sortBy = params.sort_by ?? 'title';

@@ -17,7 +17,7 @@ export interface EmbeddingQueueItem {
 export interface SearchHit {
   node_id: string;
   score: number;
-  match_sources: Array<'node' | 'embed'>;
+  match_sources: Array<'fts' | 'semantic'>;
   matched_embed?: string;
   snippet?: string;
 }

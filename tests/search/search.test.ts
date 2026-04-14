@@ -90,7 +90,7 @@ describe('hybridSearch', () => {
     expect(results.length).toBeGreaterThan(0);
 
     // FTS match should have snippet
-    const hit = results.find(r => r.match_sources.includes('node') && r.snippet !== undefined);
+    const hit = results.find(r => r.match_sources.includes('fts') && r.snippet !== undefined);
     expect(hit).toBeDefined();
     expect(hit!.snippet).toContain('<mark>');
   });
@@ -152,7 +152,7 @@ describe('hybridSearch', () => {
     expect(results.length).toBeLessThanOrEqual(3);
   });
 
-  it('vector-only matches have embed in match_sources', async () => {
+  it('vector-only matches have semantic in match_sources', async () => {
     insertNode(db, 'node1', 'Quantum Physics', 'Study of subatomic particles');
     insertNode(db, 'node2', 'Some Unique Title ZZZ', 'Completely different content');
 
@@ -164,10 +164,10 @@ describe('hybridSearch', () => {
     // Do a vector-only search (query that won't match FTS but will match vectors)
     const results = await hybridSearch(db, fakeEmbedder, 'zzznomatchfts', { limit: 10 });
 
-    // If we get any vector-only results, they should have 'node' in match_sources
-    // (source_type = 'node' means match_sources includes 'node')
+    // Vector-only results should have 'semantic' in match_sources
     for (const hit of results) {
       expect(hit.match_sources.length).toBeGreaterThan(0);
+      expect(hit.match_sources).toContain('semantic');
     }
   });
 });

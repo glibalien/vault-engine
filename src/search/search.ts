@@ -145,7 +145,7 @@ function fuseResults(
     string,
     {
       score: number;
-      match_sources: Set<'node' | 'embed'>;
+      match_sources: Set<'fts' | 'semantic'>;
       snippet?: string;
       matched_embed?: string;
     }
@@ -166,7 +166,7 @@ function fuseResults(
     const rank = i + 1;
     const entry = getOrCreate(hit.node_id);
     entry.score += 1 / (RRF_K + rank);
-    entry.match_sources.add('node');
+    entry.match_sources.add('fts');
     // Build snippet from FTS hit content (highlight/snippet doesn't work on contentless FTS5)
     if (!entry.snippet) {
       const text = [hit.title, hit.body].filter(Boolean).join(' ');
@@ -180,15 +180,10 @@ function fuseResults(
     const rank = i + 1;
     const entry = getOrCreate(hit.node_id);
     entry.score += 1 / (RRF_K + rank);
+    entry.match_sources.add('semantic');
 
-    if (hit.source_type === 'extraction') {
-      entry.match_sources.add('embed');
-      if (hit.extraction_ref !== null && !entry.matched_embed) {
-        entry.matched_embed = hit.extraction_ref;
-      }
-    } else {
-      // source_type = 'node' — contributes 'node' to match_sources
-      entry.match_sources.add('node');
+    if (hit.source_type === 'extraction' && hit.extraction_ref !== null && !entry.matched_embed) {
+      entry.matched_embed = hit.extraction_ref;
     }
   }
 

@@ -69,6 +69,21 @@ function extractWikiLinksFromValue(
   }
 
   if (Array.isArray(value)) {
+    // Detect YAML-parsed unquoted wikilink: [[target]] → [["target"]]
+    // YAML flow notation interprets [[x]] as a nested array, not a string.
+    if (
+      value.length === 1 &&
+      Array.isArray(value[0]) &&
+      value[0].length === 1 &&
+      typeof value[0][0] === 'string'
+    ) {
+      const target = value[0][0] as string;
+      return {
+        cleaned: target,
+        links: [{ target, alias: null, context: fieldName }],
+      };
+    }
+
     const allLinks: WikiLink[] = [];
     const cleanedArr = value.map((item) => {
       const result = extractWikiLinksFromValue(item, fieldName);

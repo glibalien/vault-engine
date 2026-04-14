@@ -321,11 +321,20 @@ function extractRawFieldTexts(raw: string): Record<string, string> {
     if (key === 'title' || key === 'types') continue;
     if (typeof rawValue === 'string' && WIKILINK_RE.test(rawValue)) {
       result[key] = rawValue;
-    }
-    if (Array.isArray(rawValue)) {
-      const hasLinks = rawValue.some(v => typeof v === 'string' && WIKILINK_RE.test(String(v)));
-      if (hasLinks) {
-        result[key] = JSON.stringify(rawValue);
+    } else if (Array.isArray(rawValue)) {
+      // Unquoted [[target]] is parsed by YAML as nested array [["target"]]
+      if (
+        rawValue.length === 1 &&
+        Array.isArray(rawValue[0]) &&
+        rawValue[0].length === 1 &&
+        typeof rawValue[0][0] === 'string'
+      ) {
+        result[key] = `[[${rawValue[0][0]}]]`;
+      } else {
+        const hasLinks = rawValue.some(v => typeof v === 'string' && WIKILINK_RE.test(String(v)));
+        if (hasLinks) {
+          result[key] = JSON.stringify(rawValue);
+        }
       }
     }
   }

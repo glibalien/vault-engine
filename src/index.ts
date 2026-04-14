@@ -113,20 +113,15 @@ if (args.transport === 'http' || args.transport === 'both') {
   });
 }
 
-process.on('SIGTERM', async () => {
+async function shutdown(): Promise<void> {
   console.log('Shutting down...');
   reconciler.stop();
   normalizer.stop();
+  await mutex.onIdle();
   await watcher.close();
   db.close();
   process.exit(0);
-});
+}
 
-process.on('SIGINT', async () => {
-  console.log('Shutting down...');
-  reconciler.stop();
-  normalizer.stop();
-  await watcher.close();
-  db.close();
-  process.exit(0);
-});
+process.on('SIGTERM', shutdown);
+process.on('SIGINT', shutdown);

@@ -43,11 +43,11 @@ export function executeMutation(
 ): PipelineResult {
   const absPath = join(vaultPath, mutation.file_path);
 
-  // Stat file for date token resolution (ctime/mtime defaults)
+  // Stat file for date token resolution (mtime defaults)
   let fileCtx: FileContext | null = null;
   try {
     const st = statSync(absPath);
-    fileCtx = { birthtimeMs: st.birthtimeMs, mtimeMs: st.mtimeMs };
+    fileCtx = { mtimeMs: st.mtimeMs };
   } catch {
     // File doesn't exist yet (create-node) — tokens fall back to $now
   }

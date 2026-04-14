@@ -291,14 +291,14 @@ describe('normalizer backfill of missing defaults', () => {
     expect(row!.value_text).toBe('open');
   });
 
-  it('populates missing field with $ctime token using file birthtime', () => {
-    createGlobalField(db, { name: 'date', field_type: 'reference', reference_target: 'daily-note', default_value: '$ctime:YYYY-MM-DD' });
+  it('populates missing field with $mtime token using file mtime', () => {
+    createGlobalField(db, { name: 'date', field_type: 'reference', reference_target: 'daily-note', default_value: '$mtime:YYYY-MM-DD' });
     createSchemaDefinition(db, { name: 'note', field_claims: [
       { field: 'date', sort_order: 100 },
     ] });
 
-    const nodeId = createNodeViaToolPath('ctime-backfill.md', {
-      title: 'Ctime Backfill',
+    const nodeId = createNodeViaToolPath('mtime-backfill.md', {
+      title: 'Mtime Backfill',
       types: ['note'],
       fields: {},
     });
@@ -307,7 +307,7 @@ describe('normalizer backfill of missing defaults', () => {
     db.prepare('DELETE FROM node_fields WHERE node_id = ? AND field_name = ?').run(nodeId, 'date');
     db.prepare('UPDATE nodes SET content_hash = ? WHERE id = ?').run('stale', nodeId);
 
-    makeFileOld('ctime-backfill.md', 2 * 60 * 60 * 1000);
+    makeFileOld('mtime-backfill.md', 2 * 60 * 60 * 1000);
 
     const stats = runNormalizerSweep(vaultPath, db, writeLock, syncLogger, {
       skipQuiescence: true,
@@ -315,7 +315,7 @@ describe('normalizer backfill of missing defaults', () => {
 
     expect(stats.rewritten).toBeGreaterThanOrEqual(1);
 
-    // Verify the date field was populated (value will be the file's birthtime)
+    // Verify the date field was populated (value will be the file's mtime)
     const row = db.prepare(
       'SELECT value_text FROM node_fields WHERE node_id = ? AND field_name = ?',
     ).get(nodeId, 'date') as { value_text: string } | undefined;

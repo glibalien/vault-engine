@@ -142,7 +142,7 @@ export function runNormalizerSweep(
       let fileCtx: FileContext | null = null;
       try {
         const fileStat = statSync(absPath);
-        fileCtx = { birthtimeMs: fileStat.birthtimeMs, mtimeMs: fileStat.mtimeMs };
+        fileCtx = { mtimeMs: fileStat.mtimeMs };
       } catch {
         // Already checked file exists above, but guard anyway
       }

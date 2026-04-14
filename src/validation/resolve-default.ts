@@ -1,13 +1,12 @@
 export interface FileContext {
-  birthtimeMs: number;
   mtimeMs: number;
 }
 
-const TOKEN_RE = /^\$(ctime|mtime|now)(?::(.+))?$/;
+const TOKEN_RE = /^\$(mtime|now)(?::(.+))?$/;
 const DEFAULT_FORMAT = 'YYYY-MM-DD';
 
 /**
- * If `defaultValue` is a date token ($ctime, $mtime, $now), resolve it
+ * If `defaultValue` is a date token ($mtime, $now), resolve it
  * to a formatted date string. Otherwise return unchanged.
  */
 export function resolveDefaultValue(
@@ -24,9 +23,6 @@ export function resolveDefaultValue(
 
   let timestampMs: number;
   switch (token) {
-    case 'ctime':
-      timestampMs = fileCtx?.birthtimeMs ?? Date.now();
-      break;
     case 'mtime':
       timestampMs = fileCtx?.mtimeMs ?? Date.now();
       break;

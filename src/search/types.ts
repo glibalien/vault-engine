@@ -12,6 +12,7 @@ export interface EmbeddingQueueItem {
   node_id: string;
   source_type: 'node' | 'extraction';
   extraction_ref?: string;
+  retries?: number;
 }
 
 export interface SearchHit {

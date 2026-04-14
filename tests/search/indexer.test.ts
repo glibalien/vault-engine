@@ -317,6 +317,66 @@ describe('EmbeddingIndexer', () => {
     });
   });
 
+  describe('embedding error recovery', () => {
+    function createFailingEmbedder(failCount: number): Embedder & { callCount: number } {
+      let callCount = 0;
+
+      return {
+        get callCount() { return callCount; },
+        async embedDocument(text: string): Promise<Float32Array> {
+          callCount++;
+          if (callCount <= failCount) {
+            throw new Error(`Simulated embedding failure (call ${callCount})`);
+          }
+          const arr = new Float32Array(256);
+          for (let i = 0; i < 256; i++) {
+            arr[i] = (text.length % 100) / 100 + i * 0.001;
+          }
+          return arr;
+        },
+        async embedQuery(_text: string): Promise<Float32Array> {
+          return new Float32Array(256).fill(0.5);
+        },
+        isReady(): boolean {
+          return true;
+        },
+      };
+    }
+
+    it('requeues item on embedding failure', async () => {
+      const failingEmbedder = createFailingEmbedder(1);
+      const failingIndexer = createEmbeddingIndexer(db, failingEmbedder);
+
+      insertNode(db, 'n1', 'Hello World', 'Some body text');
+      failingIndexer.enqueue({ node_id: 'n1', source_type: 'node' });
+
+      // First processOne should fail and requeue
+      const result1 = await failingIndexer.processOne();
+      expect(result1).toBe(false);
+      expect(failingIndexer.queueSize()).toBe(1);
+
+      // Second processOne should succeed
+      const result2 = await failingIndexer.processOne();
+      expect(result2).toBe(true);
+      expect(failingIndexer.queueSize()).toBe(0);
+    });
+
+    it('drops item after 3 failures', async () => {
+      const alwaysFailingEmbedder = createFailingEmbedder(Infinity);
+      const failingIndexer = createEmbeddingIndexer(db, alwaysFailingEmbedder);
+
+      insertNode(db, 'n1', 'Hello World', 'Some body text');
+      failingIndexer.enqueue({ node_id: 'n1', source_type: 'node' });
+
+      await failingIndexer.processOne();
+      await failingIndexer.processOne();
+      await failingIndexer.processOne();
+
+      expect(failingIndexer.queueSize()).toBe(0);
+      expect(alwaysFailingEmbedder.callCount).toBe(3);
+    });
+  });
+
   describe('clearAll', () => {
     it('clears all embedding data and queue', async () => {
       insertNode(db, 'n1', 'Node 1');

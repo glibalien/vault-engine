@@ -144,37 +144,46 @@ export function createEmbeddingIndexer(
 
     processing = true;
     try {
-    if (item.source_type === 'node') {
-      const hash = contentHash(item.node_id);
-      const extractionRef = item.extraction_ref ?? null;
+      if (item.source_type === 'node') {
+        const hash = contentHash(item.node_id);
+        const extractionRef = item.extraction_ref ?? null;
 
-      const existing = stmtGetExistingMeta.get(item.node_id, item.source_type, extractionRef);
+        const existing = stmtGetExistingMeta.get(item.node_id, item.source_type, extractionRef);
 
-      if (existing && existing.source_hash === hash) {
-        // Content unchanged — skip embedding
-        return true;
+        if (existing && existing.source_hash === hash) {
+          // Content unchanged — skip embedding
+          return true;
+        }
+
+        // Embed the content
+        const content = assembleContent(item.node_id);
+        const vector = await embedder.embedDocument(content);
+        const vectorBytes = new Uint8Array(vector.buffer, vector.byteOffset, vector.byteLength);
+        const now = new Date().toISOString();
+
+        if (existing) {
+          // Update existing rows
+          stmtUpdateMeta.run(hash, now, existing.id);
+          stmtUpdateVec.run(vectorBytes, existing.id);
+        } else {
+          // Insert new rows — use lastInsertRowid for the vec ID
+          const insertResult = stmtInsertMeta.run(item.node_id, item.source_type, hash, 0, extractionRef, now);
+          // sqlite-vec vec0 requires BigInt for explicit primary key values
+          const metaId = BigInt(insertResult.lastInsertRowid);
+          stmtInsertVec.run(metaId, vectorBytes);
+        }
       }
 
-      // Embed the content
-      const content = assembleContent(item.node_id);
-      const vector = await embedder.embedDocument(content);
-      const vectorBytes = new Uint8Array(vector.buffer, vector.byteOffset, vector.byteLength);
-      const now = new Date().toISOString();
-
-      if (existing) {
-        // Update existing rows
-        stmtUpdateMeta.run(hash, now, existing.id);
-        stmtUpdateVec.run(vectorBytes, existing.id);
+      return true;
+    } catch (err) {
+      const retries = (item.retries ?? 0) + 1;
+      if (retries < 3) {
+        console.warn(`[embedding-indexer] embed failed for ${item.node_id} (attempt ${retries}), requeueing:`, err);
+        queue.push({ ...item, retries });
       } else {
-        // Insert new rows — use lastInsertRowid for the vec ID
-        const insertResult = stmtInsertMeta.run(item.node_id, item.source_type, hash, 0, extractionRef, now);
-        // sqlite-vec vec0 requires BigInt for explicit primary key values
-        const metaId = BigInt(insertResult.lastInsertRowid);
-        stmtInsertVec.run(metaId, vectorBytes);
+        console.error(`[embedding-indexer] embed failed for ${item.node_id} after 3 attempts, dropping:`, err);
       }
-    }
-
-    return true;
+      return false;
     } finally {
       processing = false;
     }

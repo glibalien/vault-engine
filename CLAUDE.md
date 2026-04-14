@@ -60,4 +60,4 @@ npm run start:http   # node dist/index.js --transport http
 - **Phase 1**: SQLite schema, parser, indexer, read-only MCP tools, watcher ✓
 - **Phase 2**: global field pool, schema system, validation ✓
 - **Phase 3**: write path, renderer, full sync loop — minimum shippable product ✓
-- **Phase 4–7**: semantic search, field reconciliation, content extraction, workflow tools
+- **Phase 4–6**: semantic search, content extraction, workflow tools

@@ -74,7 +74,7 @@ function stringToNumber(value: string): CoercionResult {
 // ── string → date ────────────────────────────────────────────────────
 
 const DATE_ONLY_RE = /^\d{4}-(\d{2})-(\d{2})$/;
-const DATE_TIME_RE = /^\d{4}-(\d{2})-(\d{2})T\d{2}:\d{2}:\d{2}(?:\.\d+)?(?:Z|[+-]\d{2}:\d{2})?$/;
+const DATE_TIME_RE = /^\d{4}-(\d{2})-(\d{2})[T ]\d{2}:\d{2}(?::\d{2})?(?:\.\d+)?(?:Z|[+-]\d{2}:\d{2})?$/;
 
 function stringToDate(value: string): CoercionResult {
   const trimmed = value.trim();

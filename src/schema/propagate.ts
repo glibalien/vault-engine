@@ -105,8 +105,8 @@ export function propagateSchemaChange(
 
   try {
     for (const nodeId of nodeIds) {
-      const nodeRow = db.prepare('SELECT file_path, title, body FROM nodes WHERE id = ?').get(nodeId) as {
-        file_path: string; title: string; body: string;
+      const nodeRow = db.prepare('SELECT file_path, body FROM nodes WHERE id = ?').get(nodeId) as {
+        file_path: string; body: string;
       };
 
       const types = (db.prepare('SELECT schema_type FROM node_types WHERE node_id = ?')
@@ -193,7 +193,6 @@ export function propagateSchemaChange(
       }
 
       const renderInput: RenderInput = {
-        title: nodeRow.title,
         types,
         fields: currentFields,
         body: nodeRow.body,
@@ -356,7 +355,6 @@ export function rerenderNodesWithField(
     }
 
     const renderInput: RenderInput = {
-      title: nodeRow.title,
       types,
       fields: currentFields,
       body: nodeRow.body,

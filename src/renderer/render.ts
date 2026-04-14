@@ -38,7 +38,6 @@ function wrapListRef(value: unknown): unknown {
  */
 export function renderNode(input: RenderInput): string {
   const {
-    title,
     types,
     fields,
     body,
@@ -51,10 +50,7 @@ export function renderNode(input: RenderInput): string {
   // Build frontmatter object with insertion-order keys
   const fm: Record<string, unknown> = {};
 
-  // title always first
-  fm.title = title;
-
-  // types always second — non-empty as block sequence, empty as implicit null.
+  // types always first — non-empty as block sequence, empty as implicit null.
   // Empty arrays serialize as flow-notation `types: []` which Obsidian
   // can't edit: adding items produces `types: []\n  - x` (invalid YAML).
   // Implicit null (`types:`) lets Obsidian append `\n  - person` cleanly.

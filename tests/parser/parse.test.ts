@@ -47,24 +47,24 @@ Body text.
   });
 
   describe('title resolution', () => {
-    it('uses frontmatter title when present', () => {
+    it('always derives title from filename, ignoring frontmatter title', () => {
       const result = parseMarkdown(fixture('body-wikilinks.md'), 'body-wikilinks.md');
-      expect(result.title).toBe('Body Links Test');
+      expect(result.title).toBe('body-wikilinks');
     });
 
-    it('falls back to first H1 when no frontmatter title', () => {
+    it('always derives title from filename, ignoring H1', () => {
       const result = parseMarkdown(fixture('plain-no-frontmatter.md'), 'plain-no-frontmatter.md');
-      expect(result.title).toBe('A Plain Note');
+      expect(result.title).toBe('plain-no-frontmatter');
     });
 
-    it('falls back to filename when no title or H1', () => {
+    it('derives title from filename with empty frontmatter', () => {
       const result = parseMarkdown(fixture('empty-frontmatter.md'), 'empty-frontmatter.md');
       expect(result.title).toBe('empty-frontmatter');
     });
 
-    it('preserves unicode in title', () => {
-      const result = parseMarkdown(fixture('unicode-title.md'), 'unicode-title.md');
-      expect(result.title).toBe('Café Meeting — 東京');
+    it('derives title from filename with subdirectory path', () => {
+      const result = parseMarkdown(fixture('unicode-title.md'), 'Notes/unicode-title.md');
+      expect(result.title).toBe('unicode-title');
     });
   });
 
@@ -86,9 +86,9 @@ Body text.
       expect(result.fields.get('company')).toBe('Acme Corp');
     });
 
-    it('does NOT include title in fields map', () => {
+    it('includes frontmatter title as a regular field', () => {
       const result = parseMarkdown(fixture('multi-type.md'), 'multi-type.md');
-      expect(result.fields.has('title')).toBe(false);
+      expect(result.fields.has('title')).toBe(true);
     });
 
     it('does NOT include types in fields map', () => {

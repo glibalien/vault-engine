@@ -285,7 +285,7 @@ export function processFileChange(
       source: 'watcher',
       node_id: nodeId,
       file_path: relPath,
-      title: parsed.title ?? relPath.replace(/\.md$/, ''),
+      title: parsed.title,
       types: parsed.types,
       fields: parsedFields,
       body: parsed.body,
@@ -318,7 +318,7 @@ function extractRawFieldTexts(raw: string): Record<string, string> {
 
   const result: Record<string, string> = {};
   for (const [key, rawValue] of Object.entries(rawParsed as Record<string, unknown>)) {
-    if (key === 'title' || key === 'types') continue;
+    if (key === 'types') continue;
     if (typeof rawValue === 'string' && WIKILINK_RE.test(rawValue)) {
       result[key] = rawValue;
     } else if (Array.isArray(rawValue)) {

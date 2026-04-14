@@ -1,7 +1,6 @@
 // src/renderer/types.ts
 
 export interface RenderInput {
-  title: string;
   types: string[];
   fields: Record<string, unknown>;        // field values from DB (reconstructed)
   body: string;

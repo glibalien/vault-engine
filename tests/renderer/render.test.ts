@@ -7,7 +7,6 @@ import type { RenderInput, FieldOrderEntry } from '../../src/renderer/types.js';
 
 function makeInput(overrides: Partial<RenderInput> = {}): RenderInput {
   return {
-    title: 'Test Note',
     types: ['note'],
     fields: {},
     body: '',
@@ -26,27 +25,25 @@ function ordering(...entries: Array<[string, 'claimed' | 'orphan']>): FieldOrder
 // ── Structure tests ─────────────────────────────────────────────────────
 
 describe('renderNode', () => {
-  it('renders minimal node with title and types', () => {
+  it('renders minimal node with types', () => {
     const result = renderNode(makeInput());
 
-    expect(result).toContain('title: Test Note');
+    expect(result).not.toContain('title:');
     expect(result).toContain('types:\n  - note');
     expect(result).toMatch(/^---\n/);
     expect(result).toMatch(/---\n$/);
   });
 
-  it('title always first, types always second', () => {
+  it('types always first, fields after', () => {
     const result = renderNode(makeInput({
       fields: { status: 'open' },
       fieldOrdering: ordering(['status', 'claimed']),
     }));
 
     const lines = result.split('\n');
-    const titleIdx = lines.findIndex(l => l.startsWith('title:'));
     const typesIdx = lines.findIndex(l => l.startsWith('types:'));
     const statusIdx = lines.findIndex(l => l.startsWith('status:'));
 
-    expect(titleIdx).toBeLessThan(typesIdx);
     expect(typesIdx).toBeLessThan(statusIdx);
   });
 

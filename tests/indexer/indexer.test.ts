@@ -252,7 +252,7 @@ describe('indexFile', () => {
     expect(id2).toBe(id1);
 
     const node = db.prepare('SELECT title FROM nodes WHERE id = ?').get(id1) as { title: string };
-    expect(node.title).toBe('Updated');
+    expect(node.title).toBe('multi-type');
   });
 });
 

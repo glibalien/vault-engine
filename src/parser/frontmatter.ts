@@ -10,7 +10,6 @@ import type { YamlValue, WikiLink } from './types.js';
 const WIKILINK_RE = /\[\[([^\]|]+)(?:\|([^\]]+))?\]\]/g;
 
 export interface FrontmatterResult {
-  title: string | null;
   types: string[];
   fields: Map<string, YamlValue>;
   wikiLinks: WikiLink[];
@@ -116,7 +115,6 @@ export function parseFrontmatter(raw: string): FrontmatterResult {
 
   if (yamlStr === null) {
     return {
-      title: null,
       types: [],
       fields: new Map(),
       wikiLinks: [],
@@ -130,7 +128,6 @@ export function parseFrontmatter(raw: string): FrontmatterResult {
     parsed = parseYaml(yamlStr, { uniqueKeys: false });
   } catch (err) {
     return {
-      title: null,
       types: [],
       fields: new Map(),
       wikiLinks: [],
@@ -142,7 +139,6 @@ export function parseFrontmatter(raw: string): FrontmatterResult {
   // Empty frontmatter (--- followed immediately by ---)
   if (parsed === null || parsed === undefined) {
     return {
-      title: null,
       types: [],
       fields: new Map(),
       wikiLinks: [],
@@ -153,7 +149,6 @@ export function parseFrontmatter(raw: string): FrontmatterResult {
 
   if (typeof parsed !== 'object' || Array.isArray(parsed)) {
     return {
-      title: null,
       types: [],
       fields: new Map(),
       wikiLinks: [],
@@ -165,14 +160,6 @@ export function parseFrontmatter(raw: string): FrontmatterResult {
   const data = parsed as Record<string, YamlValue>;
   const allLinks: WikiLink[] = [];
   const fields = new Map<string, YamlValue>();
-
-  // Extract title
-  let title: string | null = null;
-  if ('title' in data && data.title != null) {
-    const titleResult = extractWikiLinksFromValue(data.title, 'title');
-    allLinks.push(...titleResult.links);
-    title = String(titleResult.cleaned);
-  }
 
   // Extract types
   let types: string[] = [];
@@ -189,11 +176,11 @@ export function parseFrontmatter(raw: string): FrontmatterResult {
 
   // Extract all other fields
   for (const [key, value] of Object.entries(data)) {
-    if (key === 'title' || key === 'types') continue;
+    if (key === 'types') continue;
     const result = extractWikiLinksFromValue(value, key);
     allLinks.push(...result.links);
     fields.set(key, result.cleaned);
   }
 
-  return { title, types, fields, wikiLinks: allLinks, body, parseError: null };
+  return { types, fields, wikiLinks: allLinks, body, parseError: null };
 }

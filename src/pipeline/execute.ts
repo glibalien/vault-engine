@@ -184,7 +184,6 @@ export function executeMutation(
     }
 
     const renderInput: RenderInput = {
-      title: mutation.title,
       types: mutation.types,
       fields: finalFields,
       body: mutation.body,

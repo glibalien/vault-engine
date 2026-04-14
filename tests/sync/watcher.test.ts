@@ -88,7 +88,7 @@ describe('watcher integration', () => {
     const before = db.prepare("SELECT title FROM nodes WHERE file_path = 'initial.md'").get() as {
       title: string;
     };
-    expect(before.title).toBe('Initial');
+    expect(before.title).toBe('initial');
 
     writeFileSync(
       join(vaultPath, 'initial.md'),
@@ -102,7 +102,7 @@ describe('watcher integration', () => {
     const after = db.prepare("SELECT title FROM nodes WHERE file_path = 'initial.md'").get() as {
       title: string;
     };
-    expect(after.title).toBe('Updated Title');
+    expect(after.title).toBe('initial');
   });
 
   it('deletes a removed file', async () => {

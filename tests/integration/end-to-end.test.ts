@@ -80,7 +80,7 @@ describe('end-to-end', () => {
 
     // Verify typed field storage
     const statusField = db.prepare(
-      "SELECT value_text FROM node_fields nf JOIN nodes n ON n.id = nf.node_id WHERE n.title = 'Vault Engine' AND nf.field_name = 'status'"
+      "SELECT value_text FROM node_fields nf JOIN nodes n ON n.id = nf.node_id WHERE n.file_path = 'project.md' AND nf.field_name = 'status'"
     ).get() as { value_text: string };
     expect(statusField.value_text).toBe('active');
 
@@ -100,7 +100,7 @@ Found something about [[SQLite FTS5]].
 
     expect((db.prepare('SELECT COUNT(*) as c FROM nodes').get() as { c: number }).c).toBe(3);
 
-    const newNode = db.prepare("SELECT id FROM nodes WHERE title = 'New Discovery'").get() as { id: string };
+    const newNode = db.prepare("SELECT id FROM nodes WHERE file_path = 'new-note.md'").get() as { id: string };
     expect(newNode).toBeDefined();
 
     const newRels = db.prepare('SELECT target FROM relationships WHERE source_id = ?')

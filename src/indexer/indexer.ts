@@ -117,7 +117,7 @@ function extractRawFieldTexts(raw: string): Record<string, string> {
 
   const result: Record<string, string> = {};
   for (const [key, rawValue] of Object.entries(rawParsed as Record<string, unknown>)) {
-    if (key === 'title' || key === 'types') continue;
+    if (key === 'types') continue;
     if (typeof rawValue === 'string' && WIKILINK_RE.test(rawValue)) {
       result[key] = rawValue;
     } else if (Array.isArray(rawValue)) {

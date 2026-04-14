@@ -38,6 +38,7 @@ npm run start:http   # node dist/index.js --transport http
 - Config: `/etc/cloudflared/config.yml`
 - Env vars loaded via systemd `EnvironmentFile=/home/barry/projects/vault-engine/.env`
 - Required env: `OAUTH_OWNER_PASSWORD`, `OAUTH_ISSUER_URL`
+- Optional env: `VAULT_EXCLUDE_DIRS` (comma-separated folder prefixes to exclude from indexing entirely, e.g. `Templates`)
 
 ## Conventions
 
@@ -50,9 +51,11 @@ npm run start:http   # node dist/index.js --transport http
 - **Watcher is DB-only**: the watcher never writes files to disk. It updates the DB and stops. Files catch up via tool writes and schema propagation. This prevents Obsidian merge collisions that corrupted frontmatter.
 - **Watcher debounce**: 2.5 seconds (matches Obsidian's 2s save cycle). Max-wait 5 seconds.
 - **Parse retry**: if YAML parsing fails (e.g. Obsidian truncation bug where growing files are temporarily truncated on disk), the watcher retries up to 3 times with 2s delay before logging a parse error.
-- **Shared query builder**: `src/mcp/query-builder.ts` — single SQL builder used by both `query-nodes` and `update-node` query mode. Supports negation filters (`without_types`, `without_fields`).
+- **Shared query builder**: `src/mcp/query-builder.ts` — single SQL builder used by both `query-nodes` and `update-node` query mode. Supports negation filters (`without_types`, `without_fields`), title filters (`title_eq`, `title_contains`).
 - **Bulk mutate**: `update-node` query mode supports `add_types`, `remove_types`, `set_fields` across filtered node sets. Best-effort execution (not transactional). Dry-run defaults to true in query mode.
 - **Type safety**: Tool-initiated writes reject types without schemas (`UNKNOWN_TYPE` error with `available_schemas`). Watcher path stays permissive. `create-node` and `update-node` single-node mode support `dry_run`. `update-node` single-node mode supports `add_types`/`remove_types` (not just `set_types`). See `src/pipeline/check-types.ts`.
+- **Date coercion**: accepts ISO 8601 (with `T` or space separator, seconds optional), and falls back to fuzzy natural-language parsing via `chrono-node` (e.g. `"6 March 2020 | 6:35 am"` → `2020-03-06T06:35`). Fuzzy-parsed dates are tagged `STRING_TO_DATE_FUZZY` in coercion results.
+- **Folder exclusion**: `VAULT_EXCLUDE_DIRS` env var excludes folders from all subsystems (indexer, watcher, reconciler, normalizer). Segment-based matching — excluding `Notes` won't match `TaskNotes`. See `src/indexer/ignore.ts`.
 
 ## Phased delivery
 

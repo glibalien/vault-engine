@@ -38,6 +38,7 @@ Create a `.env` file or export these variables:
 | `DEEPGRAM_API_KEY` | No | Enables Deepgram Nova-3 for audio transcription |
 | `NORMALIZE_CRON` | No | Cron expression for periodic normalizer (e.g. `0 3 * * *` for daily at 3 AM) |
 | `NORMALIZE_QUIESCENCE_MINUTES` | No | Skip files modified within this window (default: 60) |
+| `VAULT_EXCLUDE_DIRS` | No | Comma-separated folder prefixes to exclude from indexing (e.g. `Templates,Archive/Old`) |
 
 ### Running
 

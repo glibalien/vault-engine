@@ -4,6 +4,8 @@ export interface ParsedArgs {
   transport: 'stdio' | 'http' | 'both';
   port: number;
   reindexSearch: boolean;
+  normalize: boolean;
+  dryRun: boolean;
 }
 
 const VALID_TRANSPORTS = new Set(['stdio', 'http', 'both']);
@@ -15,6 +17,8 @@ export function parseArgs(argv: string[]): ParsedArgs {
     transport: 'stdio',
     port: 3333,
     reindexSearch: false,
+    normalize: false,
+    dryRun: false,
   };
 
   const positional: string[] = [];
@@ -42,6 +46,10 @@ export function parseArgs(argv: string[]): ParsedArgs {
       result.port = num;
     } else if (arg === '--reindex-search') {
       result.reindexSearch = true;
+    } else if (arg === '--normalize') {
+      result.normalize = true;
+    } else if (arg === '--dry-run') {
+      result.dryRun = true;
     } else if (!arg.startsWith('--')) {
       positional.push(arg);
     }

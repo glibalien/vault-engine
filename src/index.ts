@@ -11,7 +11,7 @@ import { validateAuthEnv } from './auth/env.js';
 import { fullIndex } from './indexer/indexer.js';
 import { startWatcher } from './sync/watcher.js';
 import { startReconciler } from './sync/reconciler.js';
-import { startNormalizer } from './sync/normalizer.js';
+import { startNormalizer, runNormalizerSweep } from './sync/normalizer.js';
 import { IndexMutex } from './sync/mutex.js';
 import { WriteLockManager } from './sync/write-lock.js';
 import { SyncLogger } from './sync/sync-logger.js';
@@ -44,6 +44,17 @@ await fullIndex(vaultPath, db);
 console.log(`Indexing complete in ${Date.now() - indexStart}ms`);
 
 startupSchemaRender(db, vaultPath);
+
+// --- One-shot normalize mode ---
+if (args.normalize) {
+  const writeLock = new WriteLockManager();
+  const syncLogger = new SyncLogger(db);
+  const stats = runNormalizerSweep(vaultPath, db, writeLock, syncLogger, {
+    dryRun: args.dryRun,
+  });
+  db.close();
+  process.exit(stats.errored > 0 ? 1 : 0);
+}
 
 // --- Phase 4: Embedding indexer ---
 let embeddingIndexer: EmbeddingIndexer | undefined;

@@ -147,7 +147,7 @@ export async function startHttpTransport(
 
   return new Promise((resolve) => {
     const httpServer = createNodeHttpServer(app);
-    httpServer.listen(port, () => {
+    httpServer.listen(port, '127.0.0.1', () => {
       process.stderr.write(`[vault-engine] HTTP listening on http://localhost:${port}/mcp\n`);
       resolve({ app, httpServer });
     });

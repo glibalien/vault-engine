@@ -28,9 +28,9 @@ export function validateProposedState(
   globalFields: Map<string, GlobalFieldDefinition>,
   fileCtxOrOpts?: FileContext | null | ValidateOptions,
 ): ValidationResult {
-  const opts: ValidateOptions = fileCtxOrOpts !== null && typeof fileCtxOrOpts === 'object' && 'skipDefaults' in fileCtxOrOpts
-    ? fileCtxOrOpts
-    : { fileCtx: fileCtxOrOpts };
+  const opts: ValidateOptions = fileCtxOrOpts !== null && fileCtxOrOpts !== undefined && 'skipDefaults' in fileCtxOrOpts
+    ? fileCtxOrOpts as ValidateOptions
+    : { fileCtx: fileCtxOrOpts as FileContext | null | undefined };
   const fileCtx = opts.fileCtx;
   const skipDefaults = opts.skipDefaults ?? false;
   const issues: ValidationIssue[] = [];

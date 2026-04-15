@@ -22,6 +22,125 @@ import type { SyncLogger } from '../../sync/sync-logger.js';
 
 const SKIP_TYPES = new Set(['code', 'inlineCode', 'yaml']);
 
+/**
+ * Core rename logic: renames file on disk, updates DB, re-renders, and rewrites references.
+ * Must be called inside a db.transaction().
+ */
+export function executeRename(
+  db: Database.Database,
+  writeLock: WriteLockManager,
+  vaultPath: string,
+  node: { node_id: string; file_path: string; title: string },
+  newTitle: string,
+  newFilePath: string,
+  syncLogger?: SyncLogger,
+): { refsUpdated: number } {
+  const oldTitle = node.title;
+  const oldFilePath = node.file_path;
+
+  // Find all referencing nodes using full five-tier resolution
+  const distinctTargets = db.prepare('SELECT DISTINCT target FROM relationships').all() as { target: string }[];
+  const targetsPointingToNode: string[] = [];
+  for (const { target } of distinctTargets) {
+    const resolved = resolveTarget(db, target);
+    if (resolved && resolved.id === node.node_id) {
+      targetsPointingToNode.push(target);
+    }
+  }
+
+  const referencingNodeIds = new Set<string>();
+  if (targetsPointingToNode.length > 0) {
+    const placeholders = targetsPointingToNode.map(() => '?').join(',');
+    const refs = db.prepare(
+      `SELECT DISTINCT source_id FROM relationships WHERE target IN (${placeholders}) AND source_id != ?`
+    ).all(...targetsPointingToNode, node.node_id) as { source_id: string }[];
+    for (const r of refs) referencingNodeIds.add(r.source_id);
+  }
+
+  // 1. Rename file on disk
+  if (newFilePath !== oldFilePath) {
+    const oldAbs = join(vaultPath, oldFilePath);
+    const newAbs = join(vaultPath, newFilePath);
+    if (existsSync(oldAbs)) {
+      const newDirPath = dirname(newAbs);
+      if (!existsSync(newDirPath)) mkdirSync(newDirPath, { recursive: true });
+      renameSync(oldAbs, newAbs);
+    }
+  }
+
+  // 2. Update the renamed node's DB state
+  db.prepare('UPDATE nodes SET file_path = ?, title = ? WHERE id = ?').run(
+    newFilePath, newTitle, node.node_id,
+  );
+
+  // 3. Re-render the renamed node at new path
+  const types = (db.prepare('SELECT schema_type FROM node_types WHERE node_id = ?')
+    .all(node.node_id) as Array<{ schema_type: string }>).map(t => t.schema_type);
+  const fields: Record<string, unknown> = {};
+  const fieldRows = db.prepare('SELECT field_name, value_text, value_number, value_date, value_json FROM node_fields WHERE node_id = ?')
+    .all(node.node_id) as Array<{ field_name: string; value_text: string | null; value_number: number | null; value_date: string | null; value_json: string | null }>;
+  for (const row of fieldRows) {
+    fields[row.field_name] = reconstructValue(row);
+  }
+  const body = (db.prepare('SELECT body FROM nodes WHERE id = ?').get(node.node_id) as { body: string }).body;
+
+  executeMutation(db, writeLock, vaultPath, {
+    source: 'tool',
+    node_id: node.node_id,
+    file_path: newFilePath,
+    title: newTitle,
+    types,
+    fields,
+    body,
+  }, syncLogger);
+
+  // 4. Update references in referencing nodes
+  let refsUpdated = 0;
+  for (const refNodeId of referencingNodeIds) {
+    const refNode = db.prepare('SELECT file_path, title, body FROM nodes WHERE id = ?').get(refNodeId) as { file_path: string; title: string; body: string };
+    const refTypes = (db.prepare('SELECT schema_type FROM node_types WHERE node_id = ?')
+      .all(refNodeId) as Array<{ schema_type: string }>).map(t => t.schema_type);
+    const refFields: Record<string, unknown> = {};
+    const refFieldRows = db.prepare('SELECT field_name, value_text, value_number, value_date, value_json FROM node_fields WHERE node_id = ?')
+      .all(refNodeId) as Array<{ field_name: string; value_text: string | null; value_number: number | null; value_date: string | null; value_json: string | null }>;
+    for (const row of refFieldRows) {
+      refFields[row.field_name] = reconstructValue(row);
+    }
+
+    let changed = false;
+    for (const [fieldName, value] of Object.entries(refFields)) {
+      if (typeof value === 'string' && value === oldTitle) {
+        refFields[fieldName] = newTitle;
+        changed = true;
+      } else if (Array.isArray(value)) {
+        const newArr = value.map(v => (typeof v === 'string' && v === oldTitle) ? newTitle : v);
+        if (JSON.stringify(newArr) !== JSON.stringify(value)) {
+          refFields[fieldName] = newArr;
+          changed = true;
+        }
+      }
+    }
+
+    const newBody = rewriteBodyWikiLinks(refNode.body, targetsPointingToNode, newTitle);
+    if (newBody !== refNode.body) changed = true;
+
+    if (changed) {
+      executeMutation(db, writeLock, vaultPath, {
+        source: 'tool',
+        node_id: refNodeId,
+        file_path: refNode.file_path,
+        title: refNode.title,
+        types: refTypes,
+        fields: refFields,
+        body: newBody,
+      }, syncLogger);
+      refsUpdated++;
+    }
+  }
+
+  return { refsUpdated };
+}
+
 const paramsShape = {
   node_id: z.string().optional(),
   file_path: z.string().optional(),
@@ -91,117 +210,17 @@ export function registerRenameNode(
         }
       }
 
-      // Find all referencing nodes using full five-tier resolution
-      const distinctTargets = db.prepare('SELECT DISTINCT target FROM relationships').all() as { target: string }[];
-      const targetsPointingToNode: string[] = [];
-      for (const { target } of distinctTargets) {
-        const resolved = resolveTarget(db, target);
-        if (resolved && resolved.id === node.node_id) {
-          targetsPointingToNode.push(target);
-        }
-      }
-
-      // Collect referencing nodes (source nodes that have relationships with matching targets)
-      const referencingNodeIds = new Set<string>();
-      if (targetsPointingToNode.length > 0) {
-        const placeholders = targetsPointingToNode.map(() => '?').join(',');
-        const refs = db.prepare(
-          `SELECT DISTINCT source_id FROM relationships WHERE target IN (${placeholders}) AND source_id != ?`
-        ).all(...targetsPointingToNode, node.node_id) as { source_id: string }[];
-        for (const r of refs) referencingNodeIds.add(r.source_id);
-      }
-
       // Execute in a single transaction
       const txn = db.transaction(() => {
-        // 1. Rename file on disk
-        if (newFilePath !== oldFilePath) {
-          const oldAbs = join(vaultPath, oldFilePath);
-          const newAbs = join(vaultPath, newFilePath);
-          if (existsSync(oldAbs)) {
-            const newDir = dirname(newAbs);
-            if (!existsSync(newDir)) mkdirSync(newDir, { recursive: true });
-            renameSync(oldAbs, newAbs);
-          }
-        }
-
-        // 2. Update the renamed node's DB state
-        db.prepare('UPDATE nodes SET file_path = ?, title = ? WHERE id = ?').run(
-          newFilePath, params.new_title, node.node_id,
-        );
-
-        // 3. Re-render the renamed node at new path
-        const types = (db.prepare('SELECT schema_type FROM node_types WHERE node_id = ?')
-          .all(node.node_id) as Array<{ schema_type: string }>).map(t => t.schema_type);
-        const fields: Record<string, unknown> = {};
-        const fieldRows = db.prepare('SELECT field_name, value_text, value_number, value_date, value_json FROM node_fields WHERE node_id = ?')
-          .all(node.node_id) as Array<{ field_name: string; value_text: string | null; value_number: number | null; value_date: string | null; value_json: string | null }>;
-        for (const row of fieldRows) {
-          fields[row.field_name] = reconstructValue(row);
-        }
-        const body = (db.prepare('SELECT body FROM nodes WHERE id = ?').get(node.node_id) as { body: string }).body;
-
-        executeMutation(db, writeLock, vaultPath, {
-          source: 'tool',
+        return executeRename(db, writeLock, vaultPath, {
           node_id: node.node_id,
-          file_path: newFilePath,
-          title: params.new_title,
-          types,
-          fields,
-          body,
-        }, syncLogger);
-
-        // 4. Update references in referencing nodes
-        let refsUpdated = 0;
-        for (const refNodeId of referencingNodeIds) {
-          const refNode = db.prepare('SELECT file_path, title, body FROM nodes WHERE id = ?').get(refNodeId) as { file_path: string; title: string; body: string };
-          const refTypes = (db.prepare('SELECT schema_type FROM node_types WHERE node_id = ?')
-            .all(refNodeId) as Array<{ schema_type: string }>).map(t => t.schema_type);
-          const refFields: Record<string, unknown> = {};
-          const refFieldRows = db.prepare('SELECT field_name, value_text, value_number, value_date, value_json FROM node_fields WHERE node_id = ?')
-            .all(refNodeId) as Array<{ field_name: string; value_text: string | null; value_number: number | null; value_date: string | null; value_json: string | null }>;
-          for (const row of refFieldRows) {
-            refFields[row.field_name] = reconstructValue(row);
-          }
-
-          // Update field values that reference the old title
-          let changed = false;
-          for (const [fieldName, value] of Object.entries(refFields)) {
-            if (typeof value === 'string' && value === oldTitle) {
-              refFields[fieldName] = params.new_title;
-              changed = true;
-            } else if (Array.isArray(value)) {
-              const newArr = value.map(v => (typeof v === 'string' && v === oldTitle) ? params.new_title : v);
-              if (JSON.stringify(newArr) !== JSON.stringify(value)) {
-                refFields[fieldName] = newArr;
-                changed = true;
-              }
-            }
-          }
-
-          // Update body wiki-links using AST-aware replacement
-          // (skips code blocks, inline code, and YAML frontmatter)
-          const newBody = rewriteBodyWikiLinks(refNode.body, targetsPointingToNode, params.new_title);
-          if (newBody !== refNode.body) changed = true;
-
-          if (changed) {
-            executeMutation(db, writeLock, vaultPath, {
-              source: 'tool',
-              node_id: refNodeId,
-              file_path: refNode.file_path,
-              title: refNode.title,
-              types: refTypes,
-              fields: refFields,
-              body: newBody,
-            }, syncLogger);
-            refsUpdated++;
-          }
-        }
-
-        return refsUpdated;
+          file_path: oldFilePath,
+          title: oldTitle,
+        }, params.new_title, newFilePath, syncLogger);
       });
 
       try {
-        const refsUpdated = txn();
+        const { refsUpdated } = txn();
         const issues: ToolIssue[] = checkTitleSafety(params.new_title);
         return toolResult({
           node_id: node.node_id,

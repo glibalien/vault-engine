@@ -302,13 +302,13 @@ describe('update-node query mode — requires operation', () => {
   });
 });
 
-describe('update-node query mode — set_path', () => {
-  it('rejects set_path in single-node mode', async () => {
+describe('update-node query mode — set_directory', () => {
+  it('rejects set_directory in single-node mode', async () => {
     createNode({ file_path: 'a.md', title: 'A', types: [] });
 
     const result = parseResult(await handler({
       title: 'A',
-      set_path: 'Persons',
+      set_directory: 'Persons',
     }));
 
     expect(result.error).toContain('rename-node');
@@ -321,7 +321,7 @@ describe('update-node query mode — set_path', () => {
 
     const result = parseResult(await handler({
       query: { types: ['person'] },
-      set_path: 'Persons',
+      set_directory: 'Persons',
       dry_run: true,
     }));
 
@@ -348,7 +348,7 @@ describe('update-node query mode — set_path', () => {
 
     const result = parseResult(await handler({
       query: { path_prefix: 'Alice.md' },
-      set_path: 'Persons',
+      set_directory: 'Persons',
       dry_run: true,
     }));
 
@@ -367,7 +367,7 @@ describe('update-node query mode — set_path', () => {
 
     const result = parseResult(await handler({
       query: { types: ['person'] },
-      set_path: 'Persons',
+      set_directory: 'Persons',
       dry_run: false,
     }));
 
@@ -386,7 +386,7 @@ describe('update-node query mode — set_path', () => {
 
     const result = parseResult(await handler({
       query: { types: ['person'] },
-      set_path: 'Persons',
+      set_directory: 'Persons',
       dry_run: false,
     }));
 
@@ -402,7 +402,7 @@ describe('update-node query mode — set_path', () => {
 
     const result = parseResult(await handler({
       query: { path_prefix: '' },
-      set_path: 'Persons',
+      set_directory: 'Persons',
       add_types: ['person'],
       dry_run: false,
     }));
@@ -414,12 +414,12 @@ describe('update-node query mode — set_path', () => {
     expect(bob.file_path).toBe('Persons/Bob.md');
   });
 
-  it('combines set_path with add_types', async () => {
+  it('combines set_directory with add_types', async () => {
     createNode({ file_path: 'Alice.md', title: 'Alice', types: [] });
 
     const result = parseResult(await handler({
       query: { path_prefix: 'Alice.md' },
-      set_path: 'Persons',
+      set_directory: 'Persons',
       add_types: ['person'],
       dry_run: false,
     }));
@@ -433,12 +433,12 @@ describe('update-node query mode — set_path', () => {
     expect(types.map(t => t.schema_type)).toContain('person');
   });
 
-  it('moves to vault root with set_path empty string', async () => {
+  it('moves to vault root with set_directory empty string', async () => {
     createNode({ file_path: 'Persons/Alice.md', title: 'Alice', types: ['person'] });
 
     const result = parseResult(await handler({
       query: { types: ['person'] },
-      set_path: '',
+      set_directory: '',
       dry_run: false,
     }));
 

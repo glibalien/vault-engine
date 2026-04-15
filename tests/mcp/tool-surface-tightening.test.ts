@@ -10,6 +10,7 @@ import { createGlobalField } from '../../src/global-fields/crud.js';
 import { createSchemaDefinition } from '../../src/schema/crud.js';
 import { registerRenameNode } from '../../src/mcp/tools/rename-node.js';
 import { registerCreateNode } from '../../src/mcp/tools/create-node.js';
+import { registerUpdateNode } from '../../src/mcp/tools/update-node.js';
 import { createTempVault } from '../helpers/vault.js';
 import { checkTitleSafety, checkBodyFrontmatter } from '../../src/mcp/tools/title-warnings.js';
 
@@ -272,5 +273,184 @@ describe('create-node surface tightening', () => {
     expect(result.node_id).toBeDefined();
     const issues = result.issues as Array<{ code: string }>;
     expect(issues.some(i => i.code === 'FRONTMATTER_IN_BODY')).toBe(true);
+  });
+});
+
+describe('update-node set_title renames file', () => {
+  let vaultPath: string;
+  let cleanupVault: () => void;
+  let db: Database.Database;
+  let writeLock: WriteLockManager;
+  let handler: (args: Record<string, unknown>) => Promise<unknown>;
+
+  function parseResult(result: unknown): Record<string, unknown> {
+    const r = result as { content: Array<{ type: string; text: string }> };
+    return JSON.parse(r.content[0].text);
+  }
+
+  function captureHandler() {
+    let captured: (args: Record<string, unknown>) => Promise<unknown>;
+    const fakeServer = {
+      tool: (_name: string, _desc: string, _schema: unknown, h: (...args: unknown[]) => unknown) => {
+        captured = (args) => h(args) as Promise<unknown>;
+      },
+    } as unknown as McpServer;
+    registerUpdateNode(fakeServer, db, writeLock, vaultPath);
+    return captured!;
+  }
+
+  function createNode(fp: string, title: string, opts: { types?: string[]; fields?: Record<string, unknown>; body?: string } = {}) {
+    return executeMutation(db, writeLock, vaultPath, {
+      source: 'tool', node_id: null, file_path: fp, title,
+      types: opts.types ?? [], fields: opts.fields ?? {}, body: opts.body ?? '',
+    });
+  }
+
+  beforeEach(() => {
+    ({ vaultPath, cleanup: cleanupVault } = createTempVault());
+    db = new Database(':memory:');
+    db.pragma('journal_mode = WAL');
+    db.pragma('foreign_keys = ON');
+    createSchema(db);
+    writeLock = new WriteLockManager();
+    handler = captureHandler();
+  });
+
+  afterEach(() => {
+    db.close();
+    cleanupVault();
+  });
+
+  it('set_title renames the file on disk', async () => {
+    const node = createNode('Notes/Original.md', 'Original');
+    const result = parseResult(await handler({
+      node_id: node.node_id,
+      set_title: 'Renamed',
+    }));
+    expect(result.file_path).toBe('Notes/Renamed.md');
+    expect(existsSync(join(vaultPath, 'Notes/Renamed.md'))).toBe(true);
+    expect(existsSync(join(vaultPath, 'Notes/Original.md'))).toBe(false);
+  });
+
+  it('set_title updates wiki-link references', async () => {
+    createGlobalField(db, { name: 'project', field_type: 'reference' });
+    createSchemaDefinition(db, { name: 'task', field_claims: [{ field: 'project' }] });
+
+    const target = createNode('Notes/Old Name.md', 'Old Name');
+    createNode('Notes/Referencing.md', 'Referencing', {
+      types: ['task'],
+      fields: { project: 'Old Name' },
+      body: 'See [[Old Name]] for details.',
+    });
+
+    await handler({
+      node_id: target.node_id,
+      set_title: 'New Name',
+    });
+
+    const refFields = db.prepare('SELECT value_text FROM node_fields WHERE node_id = (SELECT id FROM nodes WHERE title = ?) AND field_name = ?')
+      .get('Referencing', 'project') as { value_text: string };
+    expect(refFields.value_text).toBe('New Name');
+  });
+
+  it('set_title returns conflict error when target path exists', async () => {
+    createNode('Notes/A.md', 'A');
+    createNode('Notes/B.md', 'B');
+    const result = parseResult(await handler({
+      title: 'A',
+      set_title: 'B',
+    }));
+    expect(result.code).toBe('CONFLICT');
+  });
+
+  it('set_title with same title is a no-op', async () => {
+    const node = createNode('Notes/Same.md', 'Same');
+    const result = parseResult(await handler({
+      node_id: node.node_id,
+      set_title: 'Same',
+    }));
+    expect(result.file_path).toBe('Notes/Same.md');
+  });
+
+  it('set_title includes title safety warnings', async () => {
+    const node = createNode('Notes/Old.md', 'Old');
+    const result = parseResult(await handler({
+      node_id: node.node_id,
+      set_title: 'New (with parens)',
+    }));
+    expect(result.file_path).toBe('Notes/New (with parens).md');
+    const issues = result.issues as Array<{ code: string }>;
+    expect(issues.some(i => i.code === 'TITLE_WIKILINK_UNSAFE')).toBe(true);
+  });
+});
+
+describe('update-node query mode set_directory', () => {
+  let vaultPath: string;
+  let cleanupVault: () => void;
+  let db: Database.Database;
+  let writeLock: WriteLockManager;
+  let handler: (args: Record<string, unknown>) => Promise<unknown>;
+
+  function parseResult(result: unknown): Record<string, unknown> {
+    const r = result as { content: Array<{ type: string; text: string }> };
+    return JSON.parse(r.content[0].text);
+  }
+
+  function captureHandler() {
+    let captured: (args: Record<string, unknown>) => Promise<unknown>;
+    const fakeServer = {
+      tool: (_name: string, _desc: string, _schema: unknown, h: (...args: unknown[]) => unknown) => {
+        captured = (args) => h(args) as Promise<unknown>;
+      },
+    } as unknown as McpServer;
+    registerUpdateNode(fakeServer, db, writeLock, vaultPath);
+    return captured!;
+  }
+
+  function createNode(fp: string, title: string, opts: { types?: string[]; fields?: Record<string, unknown>; body?: string } = {}) {
+    return executeMutation(db, writeLock, vaultPath, {
+      source: 'tool', node_id: null, file_path: fp, title,
+      types: opts.types ?? [], fields: opts.fields ?? {}, body: opts.body ?? '',
+    });
+  }
+
+  beforeEach(() => {
+    ({ vaultPath, cleanup: cleanupVault } = createTempVault());
+    db = new Database(':memory:');
+    db.pragma('journal_mode = WAL');
+    db.pragma('foreign_keys = ON');
+    createSchema(db);
+    writeLock = new WriteLockManager();
+    handler = captureHandler();
+  });
+
+  afterEach(() => {
+    db.close();
+    cleanupVault();
+  });
+
+  it('rejects set_directory ending in .md', async () => {
+    const result = parseResult(await handler({
+      query: { types: ['task'] },
+      set_directory: 'Archive/foo.md',
+      dry_run: true,
+    }));
+    expect(result.code).toBe('INVALID_PARAMS');
+    expect(result.error).toMatch(/directory.*must be a folder/i);
+  });
+
+  it('set_directory moves files in query mode', async () => {
+    createGlobalField(db, { name: 'status', field_type: 'string' });
+    createSchemaDefinition(db, { name: 'task', field_claims: [{ field: 'status' }] });
+    createNode('Tasks/A.md', 'A', { types: ['task'] });
+
+    const result = parseResult(await handler({
+      query: { types: ['task'] },
+      set_directory: 'Archive',
+      dry_run: false,
+      confirm_large_batch: true,
+    }));
+    expect(result.updated).toBe(1);
+    expect(existsSync(join(vaultPath, 'Archive/A.md'))).toBe(true);
   });
 });

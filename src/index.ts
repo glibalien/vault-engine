@@ -24,7 +24,7 @@ import { startupSchemaRender } from './schema/render.js';
 import { buildExtractorRegistry } from './extraction/setup.js';
 import { ExtractionCache } from './extraction/cache.js';
 import { ClaudeVisionPdfExtractor } from './extraction/extractors/claude-vision.js';
-import { createEmbedder, type Embedder } from './search/embedder.js';
+import { createSubprocessEmbedder, type Embedder } from './search/embedder.js';
 import { createEmbeddingIndexer, type EmbeddingIndexer } from './search/indexer.js';
 
 const args = parseArgs(process.argv.slice(2));
@@ -68,14 +68,14 @@ if (args.normalize) {
   process.exit(stats.errored > 0 ? 1 : 0);
 }
 
-// --- Phase 4: Embedding indexer ---
+// --- Phase 4: Embedding indexer (subprocess-isolated) ---
 let embeddingIndexer: EmbeddingIndexer | undefined;
-let embedderRef: Embedder | undefined;
+let embedderRef: (Embedder & { shutdown(): Promise<void> }) | undefined;
 
 const modelsDir = resolve(vaultPath, '.vault-engine', 'models');
-console.log('Loading embedding model...');
+console.log('Initializing embedder subprocess...');
 try {
-  const embedder = await createEmbedder({ modelsDir });
+  const embedder = createSubprocessEmbedder({ modelsDir });
   embedderRef = embedder;
   embeddingIndexer = createEmbeddingIndexer(db, embedder);
 
@@ -97,9 +97,9 @@ try {
   };
   backgroundProcess().catch(err => console.error('Embedding error:', err instanceof Error ? err.message : err));
 
-  console.log(`Embedding model loaded, ${allNodes.length} nodes queued`);
+  console.log(`Embedder ready, ${allNodes.length} nodes queued`);
 } catch (err) {
-  console.error('Failed to load embedding model — search disabled:', err instanceof Error ? err.message : err);
+  console.error('Failed to initialize embedder — search disabled:', err instanceof Error ? err.message : err);
 }
 
 const mutex = new IndexMutex();
@@ -140,6 +140,7 @@ async function shutdown(): Promise<void> {
   console.log('Shutting down...');
   reconciler.stop();
   normalizer.stop();
+  await embedderRef?.shutdown();
   await mutex.onIdle();
   await watcher.close();
   db.close();

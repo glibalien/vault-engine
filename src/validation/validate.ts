@@ -133,7 +133,7 @@ export function validateProposedState(
     } else {
       const fail = result as CoercionFailure;
       let code: IssueCode;
-      if (fail.closest_matches) {
+      if (fail.to_type === 'enum' || fail.closest_matches) {
         code = 'ENUM_MISMATCH';
       } else if (fail.element_errors) {
         code = 'LIST_ITEM_COERCION_FAILED';
@@ -221,7 +221,7 @@ export function validateProposedState(
     } else {
       const fail = result as CoercionFailure;
       let code: IssueCode;
-      if (fail.closest_matches) {
+      if (fail.to_type === 'enum' || fail.closest_matches) {
         code = 'ENUM_MISMATCH';
       } else if (fail.element_errors) {
         code = 'LIST_ITEM_COERCION_FAILED';

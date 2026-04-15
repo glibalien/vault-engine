@@ -173,8 +173,10 @@ function levenshtein(a: string, b: string): number {
 
 function closestMatches(value: string, candidates: string[], max = 3): string[] {
   const lower = value.toLowerCase();
+  const maxInputDist = Math.max(2, Math.ceil(0.4 * lower.length));
   return candidates
     .map((c) => ({ c, d: levenshtein(lower, c.toLowerCase()) }))
+    .filter((x) => x.d <= maxInputDist && x.d <= Math.ceil(0.5 * x.c.length))
     .sort((a, b) => a.d - b.d)
     .slice(0, max)
     .map((x) => x.c);
@@ -189,11 +191,12 @@ function toEnum(value: unknown, enumValues: string[]): CoercionResult {
     if (ev.toLowerCase() === trimmed.toLowerCase()) return success(ev, true, 'STRING_TO_ENUM');
   }
 
+  const matches = closestMatches(trimmed, enumValues);
   return failure(
     `"${trimmed}" is not a valid enum value`,
     detectType(value),
     'enum',
-    { closest_matches: closestMatches(trimmed, enumValues) },
+    matches.length > 0 ? { closest_matches: matches } : undefined,
   );
 }
 

@@ -15,6 +15,8 @@ const DEFAULT_IDLE_MS = 5 * 60 * 1000; // 5 minutes
 export interface SubprocessEmbedderOptions {
   modelsDir: string;
   idleTimeoutMs?: number;
+  /** Override the worker script path. Defaults to embedder-worker.js next to this module. */
+  workerPath?: string;
 }
 
 interface PendingRequest {
@@ -24,7 +26,7 @@ interface PendingRequest {
 
 export function createSubprocessEmbedder(options: SubprocessEmbedderOptions): Embedder & { shutdown(): Promise<void> } {
   const idleTimeoutMs = options.idleTimeoutMs ?? DEFAULT_IDLE_MS;
-  const workerPath = resolve(import.meta.dirname ?? '.', 'embedder-worker.js');
+  const workerPath = options.workerPath ?? resolve(import.meta.dirname ?? '.', 'embedder-worker.js');
 
   let child: ChildProcess | null = null;
   let readyPromise: Promise<void> | null = null;
@@ -89,9 +91,10 @@ export function createSubprocessEmbedder(options: SubprocessEmbedderOptions): Em
         }
       });
 
+      const thisChild = child;
       child.on('exit', (code) => {
-        // If child exits unexpectedly, reject pending and reset state
-        if (child) {
+        // Only act if this is still the active child (not a previously-killed one)
+        if (child === thisChild) {
           child = null;
           readyPromise = null;
           if (idleTimer) {

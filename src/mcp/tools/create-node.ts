@@ -34,7 +34,7 @@ export function registerCreateNode(
 ): void {
   server.tool(
     'create-node',
-    'Create a new node and write it to disk. Every type in types must have a defined schema — call list-schemas to see available types. For general-purpose notes and reference material, use type note. If no path is provided, the file location is derived from the type\'s filename template (e.g., notes go to Notes/, meetings go to Meetings/). Use dry_run: true to validate types and fields before generating long body content — this catches errors without wasting work.',
+    'Create a new node and write it to disk. Every type in types must have a defined schema — call list-schemas to see available types. For general-purpose notes and reference material, use type note. File location is derived from the type\'s schema (default_directory + filename_template). To override the schema directory, pass directory with override_default_directory: true. Use dry_run: true to validate types and fields before generating long body content — this catches errors without wasting work.',
     paramsShape,
     async (params) => {
       const { title, types = [], fields = {}, body = '', directory, override_default_directory = false, dry_run: dryRun = false } = params;

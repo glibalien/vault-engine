@@ -158,7 +158,7 @@ export function registerRenameNode(
 ): void {
   server.tool(
     'rename-node',
-    'Rename a node: updates file path, title, and all wiki-link references vault-wide.',
+    'Rename a node: updates title, file path, and all wiki-link references vault-wide. The filename is always derived from new_title. Pass directory to move the file; omit it to use the schema default_directory or keep the current directory.',
     paramsShape,
     async (params) => {
       const resolved = resolveNodeIdentity(db, {

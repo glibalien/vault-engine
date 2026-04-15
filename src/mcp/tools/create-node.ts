@@ -15,6 +15,7 @@ import type { SyncLogger } from '../../sync/sync-logger.js';
 import { checkTypesHaveSchemas } from '../../pipeline/check-types.js';
 import { loadSchemaContext } from '../../pipeline/schema-context.js';
 import { validateProposedState } from '../../validation/validate.js';
+import { buildFixable } from '../../validation/fixable.js';
 
 const paramsShape = {
   title: z.string(),
@@ -102,6 +103,7 @@ export function registerCreateNode(
         const conflict = existing
           ? `File path "${filePath}" already exists (node: ${existing.title})`
           : diskConflict ? `File "${filePath}" already exists on disk` : undefined;
+        const allIssues = [...validation.issues, ...extraIssues];
         return toolResult({
           dry_run: true,
           would_create: {
@@ -109,7 +111,8 @@ export function registerCreateNode(
             title,
             types,
             coerced_state: validation.coerced_state,
-            issues: [...validation.issues, ...extraIssues],
+            issues: allIssues,
+            fixable: buildFixable(validation.issues, validation.effective_fields),
             orphan_fields: validation.orphan_fields,
             ...(conflict ? { conflict } : {}),
           },

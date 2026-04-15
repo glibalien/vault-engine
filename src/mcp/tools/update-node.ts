@@ -17,6 +17,7 @@ import { reconstructValue } from '../../pipeline/classify-value.js';
 import { hasBlockingErrors } from '../../pipeline/errors.js';
 import { loadSchemaContext } from '../../pipeline/schema-context.js';
 import { validateProposedState } from '../../validation/validate.js';
+import { buildFixable } from '../../validation/fixable.js';
 import { buildNodeQuery } from '../query-builder.js';
 import type { NodeQueryFilter } from '../query-builder.js';
 import type { WriteLockManager } from '../../sync/write-lock.js';
@@ -214,6 +215,7 @@ export function registerUpdateNode(
             types: finalTypes,
             coerced_state: validation.coerced_state,
             issues: [...validation.issues, ...titleIssues],
+            fixable: buildFixable(validation.issues, validation.effective_fields),
             orphan_fields: validation.orphan_fields,
           },
         });

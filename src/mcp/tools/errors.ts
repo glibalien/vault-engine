@@ -21,6 +21,6 @@ export function toolValidationErrorResult(validation: ValidationResult) {
     error: `Validation failed with ${validation.issues.filter(i => i.severity === 'error').length} error(s)`,
     code: 'VALIDATION_FAILED' as ErrorCode,
     issues: validation.issues,
-    fixable: fixable.length > 0 ? fixable : undefined,
+    fixable,
   });
 }

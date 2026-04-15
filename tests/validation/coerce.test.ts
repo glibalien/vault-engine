@@ -192,9 +192,9 @@ describe('string → enum', () => {
     expect(result.closest_matches).toContain('Active');
   });
 
-  it('completely non-matching', () => {
+  it('completely non-matching — no closest_matches when distance too high', () => {
     const result = expectFailure(coerceValue('zzzzz', 'enum', opts));
-    expect(result.closest_matches).toBeDefined();
+    expect(result.closest_matches).toBeUndefined();
   });
 });
 

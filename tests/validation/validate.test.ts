@@ -191,6 +191,28 @@ describe('validateProposedState', () => {
     expect(details.closest_match).toBe('open');
   });
 
+  it('enum mismatch — gibberish input produces null closest_match', () => {
+    const globals = new Map([
+      ['status', gf({ name: 'status', field_type: 'enum', enum_values: ['open', 'closed', 'in-progress'] })],
+    ]);
+    const claims = new Map([
+      ['task', [claim({ schema_name: 'task', field: 'status' })]],
+    ]);
+
+    const result = validateProposedState(
+      { status: 'xyzzy' },
+      ['task'],
+      claims,
+      globals,
+    );
+
+    expect(result.valid).toBe(false);
+    const details = result.issues[0].details as EnumMismatchDetails;
+    expect(details.provided).toBe('xyzzy');
+    expect(details.allowed_values).toEqual(['open', 'closed', 'in-progress']);
+    expect(details.closest_match).toBeNull();
+  });
+
   it('orphan pass-through — unknown field in coerced_state with source="orphan"', () => {
     const globals = new Map([
       ['title', gf({ name: 'title' })],
@@ -618,7 +640,7 @@ describe('validateProposedState', () => {
     ]);
 
     const result = validateProposedState(
-      { priority: 'medium' },
+      { priority: 'normall' },
       ['task'],
       claims,
       globals,
@@ -627,9 +649,9 @@ describe('validateProposedState', () => {
     expect(result.valid).toBe(false);
     const issue = result.issues.find(i => i.code === 'ENUM_MISMATCH')!;
     const details = issue.details as EnumMismatchDetails;
-    expect(details.provided).toBe('medium');
+    expect(details.provided).toBe('normall');
     expect(details.allowed_values).toEqual(['low', 'normal', 'high', 'critical']);
-    expect(details.closest_match).toBe('high');
+    expect(details.closest_match).toBe('normal');
   });
 
   it('ENUM_MISMATCH on conflicted field — same enriched details', () => {
@@ -642,7 +664,7 @@ describe('validateProposedState', () => {
     ]);
 
     const result = validateProposedState(
-      { status: 'pending' },
+      { status: 'opn' },
       ['task', 'project'],
       claims,
       globals,
@@ -650,9 +672,9 @@ describe('validateProposedState', () => {
 
     const enumIssue = result.issues.find(i => i.code === 'ENUM_MISMATCH')!;
     const details = enumIssue.details as EnumMismatchDetails;
-    expect(details.provided).toBe('pending');
+    expect(details.provided).toBe('opn');
     expect(details.allowed_values).toEqual(['open', 'closed']);
-    expect(details.closest_match).not.toBeNull();
+    expect(details.closest_match).toBe('open');
   });
 
   it('REQUIRED_MISSING — details include field_type and allowed_values for enum field', () => {

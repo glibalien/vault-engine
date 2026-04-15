@@ -67,7 +67,7 @@ describe('structured validation error responses', () => {
         file_path: 'Tasks/My Task.md',
         title: 'My Task',
         types: ['task'],
-        fields: { status: 'medium' },
+        fields: { status: 'opne' },
         body: '',
       });
     } catch (err) {
@@ -88,17 +88,15 @@ describe('structured validation error responses', () => {
     expect(enumIssue!.field).toBe('status');
 
     const details = enumIssue!.details as Record<string, unknown>;
-    expect(details.provided).toBe('medium');
+    expect(details.provided).toBe('opne');
     expect(Array.isArray(details.allowed_values)).toBe(true);
     expect(details.allowed_values).toEqual(expect.arrayContaining(['open', 'in-progress', 'done', 'dropped']));
-    expect('closest_match' in details).toBe(true);
+    expect(details.closest_match).toBe('open');
 
-    const fixable = result.fixable as Array<Record<string, unknown>> | undefined;
-    expect(fixable).toBeDefined();
-    const statusFix = fixable!.find(f => f.field === 'status');
+    const fixable = result.fixable as Array<Record<string, unknown>>;
+    const statusFix = fixable.find(f => f.field === 'status');
     expect(statusFix).toBeDefined();
-    // closest_match should be a suggestion (string or null)
-    expect('suggestion' in statusFix!).toBe(true);
+    expect(statusFix!.suggestion).toBe('open');
   });
 
   it('missing required field → fixable entry with allowed_values and null suggestion', () => {

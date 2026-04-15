@@ -6,6 +6,7 @@ import { z } from 'zod';
 import { existsSync } from 'node:fs';
 import { join } from 'node:path';
 import { toolResult, toolErrorResult } from './errors.js';
+import { checkTitleSafety, checkBodyFrontmatter } from './title-warnings.js';
 import { executeMutation } from '../../pipeline/execute.js';
 import { PipelineError } from '../../pipeline/types.js';
 import type { WriteLockManager } from '../../sync/write-lock.js';
@@ -19,7 +20,8 @@ const paramsShape = {
   types: z.array(z.string()).default([]),
   fields: z.record(z.string(), z.unknown()).default({}),
   body: z.string().default(''),
-  path: z.string().optional(),
+  directory: z.string().optional(),
+  override_default_directory: z.boolean().default(false),
   dry_run: z.boolean().default(false),
 };
 
@@ -35,7 +37,7 @@ export function registerCreateNode(
     'Create a new node and write it to disk. Every type in types must have a defined schema — call list-schemas to see available types. For general-purpose notes and reference material, use type note. If no path is provided, the file location is derived from the type\'s filename template (e.g., notes go to Notes/, meetings go to Meetings/). Use dry_run: true to validate types and fields before generating long body content — this catches errors without wasting work.',
     paramsShape,
     async (params) => {
-      const { title, types, fields, body, path: dirPath, dry_run: dryRun } = params;
+      const { title, types = [], fields = {}, body = '', directory, override_default_directory = false, dry_run: dryRun = false } = params;
 
       // ── Type-schema check (Stage 1 gate) ──────────────────────────
       const typeCheck = checkTypesHaveSchemas(db, types);
@@ -49,34 +51,43 @@ export function registerCreateNode(
         });
       }
 
+      // ── Validate directory param ──────────────────────────────────
+      if (directory !== undefined && directory.endsWith('.md')) {
+        return toolErrorResult('INVALID_PARAMS',
+          '"directory" must be a folder path, not a filename. The filename is always derived from the node title.');
+      }
+
       // Derive file path
       let filePath: string;
-      if (dirPath && dirPath.endsWith('.md')) {
-        // Treat as full file path, not a directory
-        filePath = dirPath;
-      } else if (dirPath) {
-        filePath = `${dirPath}/${title}.md`;
-      } else {
-        // Derive from schema: default_directory + filename_template
-        let fileName = `${title}.md`;
-        let dir = '';
+      let fileName = `${title}.md`;
+      let schemaDefaultDir: string | null = null;
 
-        if (types.length >= 1) {
-          const schema = db.prepare('SELECT filename_template, default_directory FROM schemas WHERE name = ?').get(types[0]) as { filename_template: string | null; default_directory: string | null } | undefined;
-          if (schema?.default_directory) {
-            dir = schema.default_directory;
-          }
-          if (schema?.filename_template) {
-            const derived = evaluateTemplate(schema.filename_template, title, fields);
-            if (derived === null) {
-              return toolErrorResult('INVALID_PARAMS', 'Filename template has unresolved variables');
-            }
-            fileName = derived;
-          }
+      if (types.length >= 1) {
+        const schema = db.prepare('SELECT filename_template, default_directory FROM schemas WHERE name = ?')
+          .get(types[0]) as { filename_template: string | null; default_directory: string | null } | undefined;
+        schemaDefaultDir = schema?.default_directory ?? null;
+
+        if (directory !== undefined && schemaDefaultDir && !override_default_directory) {
+          return toolErrorResult('INVALID_PARAMS',
+            `Type "${types[0]}" routes to "${schemaDefaultDir}/" via schema. Pass override_default_directory: true to place this node elsewhere.`);
         }
 
-        filePath = dir ? `${dir}/${fileName}` : fileName;
+        if (schema?.filename_template) {
+          const derived = evaluateTemplate(schema.filename_template, title, fields);
+          if (derived === null) {
+            return toolErrorResult('INVALID_PARAMS', 'Filename template has unresolved variables');
+          }
+          fileName = derived;
+        }
       }
+
+      const dir = directory ?? schemaDefaultDir ?? '';
+      filePath = dir ? `${dir}/${fileName}` : fileName;
+
+      // ── Compute warnings ────────────────────────────────────────
+      const titleIssues = checkTitleSafety(title);
+      const bodyIssues = checkBodyFrontmatter(body);
+      const extraIssues = [...titleIssues, ...bodyIssues];
 
       // Conflict check
       const existing = db.prepare('SELECT id, title FROM nodes WHERE file_path = ?').get(filePath) as { id: string; title: string } | undefined;
@@ -96,7 +107,7 @@ export function registerCreateNode(
             title,
             types,
             coerced_state: validation.coerced_state,
-            issues: validation.issues,
+            issues: [...validation.issues, ...extraIssues],
             orphan_fields: validation.orphan_fields,
             ...(conflict ? { conflict } : {}),
           },
@@ -128,7 +139,7 @@ export function registerCreateNode(
           title,
           types,
           coerced_state: result.validation.coerced_state,
-          issues: result.validation.issues,
+          issues: [...result.validation.issues, ...extraIssues],
           orphan_fields: result.validation.orphan_fields,
         });
       } catch (err) {

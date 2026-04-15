@@ -13,6 +13,7 @@ import type { Node, Parent } from 'unist';
 import type { Text } from 'mdast';
 import { toolResult, toolErrorResult } from './errors.js';
 import { resolveNodeIdentity } from './resolve-identity.js';
+import { checkTitleSafety, type ToolIssue } from './title-warnings.js';
 import { executeMutation } from '../../pipeline/execute.js';
 import { reconstructValue } from '../../pipeline/classify-value.js';
 import { resolveTarget } from '../../resolver/resolve.js';
@@ -26,7 +27,7 @@ const paramsShape = {
   file_path: z.string().optional(),
   title: z.string().optional(),
   new_title: z.string(),
-  new_path: z.string().optional(),
+  directory: z.string().optional(),
 };
 
 export function registerRenameNode(
@@ -53,10 +54,31 @@ export function registerRenameNode(
       const oldTitle = node.title;
       const oldFilePath = node.file_path;
 
-      // Derive new file path
-      const oldDir = dirname(oldFilePath);
-      const newDir = params.new_path ?? oldDir;
-      const newFilePath = newDir === '.' ? `${params.new_title}.md` : `${newDir}/${params.new_title}.md`;
+      // ── Validate directory param ──────────────────────────────────
+      if (params.directory !== undefined && params.directory.endsWith('.md')) {
+        return toolErrorResult('INVALID_PARAMS',
+          '"directory" must be a folder path, not a filename. The filename is always derived from the node title.');
+      }
+
+      // Derive new directory: explicit param > schema default > current directory
+      let newDir: string;
+      if (params.directory !== undefined) {
+        newDir = params.directory;
+      } else {
+        const nodeType = db.prepare('SELECT schema_type FROM node_types WHERE node_id = ? LIMIT 1')
+          .get(node.node_id) as { schema_type: string } | undefined;
+        let schemaDefault: string | null = null;
+        if (nodeType) {
+          const schema = db.prepare('SELECT default_directory FROM schemas WHERE name = ?')
+            .get(nodeType.schema_type) as { default_directory: string | null } | undefined;
+          schemaDefault = schema?.default_directory ?? null;
+        }
+        newDir = schemaDefault ?? dirname(oldFilePath);
+      }
+
+      const newFilePath = newDir === '.' || newDir === ''
+        ? `${params.new_title}.md`
+        : `${newDir}/${params.new_title}.md`;
 
       // Conflict check
       if (newFilePath !== oldFilePath) {
@@ -180,6 +202,7 @@ export function registerRenameNode(
 
       try {
         const refsUpdated = txn();
+        const issues: ToolIssue[] = checkTitleSafety(params.new_title);
         return toolResult({
           node_id: node.node_id,
           old_file_path: oldFilePath,
@@ -187,6 +210,7 @@ export function registerRenameNode(
           old_title: oldTitle,
           new_title: params.new_title,
           references_updated: refsUpdated,
+          issues,
         });
       } catch (err) {
         return toolErrorResult('INTERNAL_ERROR', err instanceof Error ? err.message : String(err));

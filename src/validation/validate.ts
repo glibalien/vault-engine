@@ -15,13 +15,24 @@ import { coerceValue } from './coerce.js';
 import type { CoercionFailure } from './coerce.js';
 import { resolveDefaultValue, type FileContext } from './resolve-default.js';
 
+export interface ValidateOptions {
+  fileCtx?: FileContext | null;
+  /** Skip default population for missing fields (normalizer path — defaults are creation-only). */
+  skipDefaults?: boolean;
+}
+
 export function validateProposedState(
   proposedFields: Record<string, unknown>,
   types: string[],
   claimsByType: Map<string, FieldClaim[]>,
   globalFields: Map<string, GlobalFieldDefinition>,
-  fileCtx?: FileContext | null,
+  fileCtxOrOpts?: FileContext | null | ValidateOptions,
 ): ValidationResult {
+  const opts: ValidateOptions = fileCtxOrOpts !== null && typeof fileCtxOrOpts === 'object' && 'skipDefaults' in fileCtxOrOpts
+    ? fileCtxOrOpts
+    : { fileCtx: fileCtxOrOpts };
+  const fileCtx = opts.fileCtx;
+  const skipDefaults = opts.skipDefaults ?? false;
   const issues: ValidationIssue[] = [];
   const coerced_state: Record<string, CoercedValue> = {};
   const orphan_fields: string[] = [];
@@ -70,7 +81,7 @@ export function validateProposedState(
     }
 
     if (!provided) {
-      if (ef.resolved_required && ef.resolved_default_value !== null) {
+      if (!skipDefaults && ef.resolved_required && ef.resolved_default_value !== null) {
         const resolved = resolveDefaultValue(ef.resolved_default_value, fileCtx ?? null);
         coerced_state[fieldName] = {
           field: fieldName,

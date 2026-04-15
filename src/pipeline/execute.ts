@@ -15,7 +15,6 @@ import { sha256 } from '../indexer/hash.js';
 import type { WriteLockManager } from '../sync/write-lock.js';
 import type { SyncLogger } from '../sync/sync-logger.js';
 import { loadSchemaContext } from './schema-context.js';
-import { hasBlockingErrors } from './errors.js';
 import { classifyValue, reconstructValue } from './classify-value.js';
 import { deriveRelationships } from './relationships.js';
 import { buildDeviationEntries, writeEditsLogEntries } from './edits-log.js';
@@ -71,7 +70,7 @@ export function executeMutation(
       mutation.types,
       claimsByType,
       globalFields,
-      fileCtx,
+      { fileCtx, skipDefaults: mutation.source === 'normalizer' },
     );
 
     // ── Stage 3: Source-specific error handling ──────────────────────
@@ -81,8 +80,13 @@ export function executeMutation(
     const defaultedFields: Array<{ field: string; default_value: unknown; default_source: 'global' | 'claim' }> = [];
 
     if (mutation.source === 'tool' || mutation.source === 'normalizer') {
-      // Tool path: check for blocking errors
-      if (hasBlockingErrors(validation.issues)) {
+      // Tool path: check for blocking errors. Normalizer also tolerates
+      // REQUIRED_MISSING since it re-renders existing DB state without
+      // backfilling defaults.
+      const toleratedCodes = mutation.source === 'normalizer'
+        ? new Set(['MERGE_CONFLICT', 'REQUIRED_MISSING'])
+        : new Set(['MERGE_CONFLICT']);
+      if (validation.issues.some(i => i.severity === 'error' && !toleratedCodes.has(i.code))) {
         throw new PipelineError('VALIDATION_FAILED', 'Validation failed', validation);
       }
 

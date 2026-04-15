@@ -254,80 +254,37 @@ describe('normalizer edits_log', () => {
   });
 });
 
-describe('normalizer backfill of missing defaults', () => {
-  it('populates missing field with static default on normalize sweep', () => {
+describe('normalizer does not backfill defaults', () => {
+  it('does not populate missing required+default field on normalize sweep', () => {
     createGlobalField(db, { name: 'status', field_type: 'string', default_value: 'open', required: true });
     createSchemaDefinition(db, { name: 'task', field_claims: [
       { field: 'status', sort_order: 100 },
     ] });
 
-    // Create node WITHOUT status field (simulates pre-existing node)
+    // Create node, then strip the status field to simulate a pre-existing node
     const nodeId = createNodeViaToolPath('backfill.md', {
       title: 'Backfill Test',
       types: ['task'],
       fields: {},
     });
 
-    // Remove the status field from DB (simulates it never having been set —
-    // the tool path would have defaulted it, so we strip it to simulate a
-    // node created before the default was configured)
     db.prepare('DELETE FROM node_fields WHERE node_id = ? AND field_name = ?').run(nodeId, 'status');
-    // Invalidate content hash so normalizer sees it as stale
     db.prepare('UPDATE nodes SET content_hash = ? WHERE id = ?').run('stale', nodeId);
 
     makeFileOld('backfill.md', 2 * 60 * 60 * 1000);
 
-    const stats = runNormalizerSweep(vaultPath, db, writeLock, syncLogger, {
+    runNormalizerSweep(vaultPath, db, writeLock, syncLogger, {
       skipQuiescence: true,
     });
 
-    expect(stats.rewritten).toBeGreaterThanOrEqual(1);
-
-    // Verify the field was populated in DB
+    // Verify the field was NOT populated — defaults are creation-only
     const row = db.prepare(
       'SELECT value_text FROM node_fields WHERE node_id = ? AND field_name = ?',
     ).get(nodeId, 'status') as { value_text: string } | undefined;
-    expect(row).toBeDefined();
-    expect(row!.value_text).toBe('open');
+    expect(row).toBeUndefined();
   });
 
-  it('populates missing field with $ctime token using DB created_at', () => {
-    createGlobalField(db, { name: 'date', field_type: 'reference', reference_target: 'daily-note', default_value: '$ctime:YYYY-MM-DD', required: true });
-    createSchemaDefinition(db, { name: 'note', field_claims: [
-      { field: 'date', sort_order: 100 },
-    ] });
-
-    const nodeId = createNodeViaToolPath('ctime-backfill.md', {
-      title: 'Ctime Backfill',
-      types: ['note'],
-      fields: {},
-    });
-
-    // Set a known created_at in the past
-    const knownCreatedAt = new Date('2023-07-20T10:00:00').getTime();
-    db.prepare('UPDATE nodes SET created_at = ? WHERE id = ?').run(knownCreatedAt, nodeId);
-
-    // Strip the date field and invalidate hash
-    db.prepare('DELETE FROM node_fields WHERE node_id = ? AND field_name = ?').run(nodeId, 'date');
-    db.prepare('UPDATE nodes SET content_hash = ? WHERE id = ?').run('stale', nodeId);
-
-    makeFileOld('ctime-backfill.md', 2 * 60 * 60 * 1000);
-
-    const stats = runNormalizerSweep(vaultPath, db, writeLock, syncLogger, {
-      skipQuiescence: true,
-    });
-
-    expect(stats.rewritten).toBeGreaterThanOrEqual(1);
-
-    // Verify the date field was populated with the DB created_at, not today's date
-    const row = db.prepare(
-      'SELECT value_text FROM node_fields WHERE node_id = ? AND field_name = ?',
-    ).get(nodeId, 'date') as { value_text: string } | undefined;
-    expect(row).toBeDefined();
-    expect(row!.value_text).toBe('2023-07-20');
-  });
-
-  it('does not overwrite existing field values during backfill', () => {
+  it('preserves existing field values on normalize sweep', () => {
     createGlobalField(db, { name: 'status', field_type: 'string', default_value: 'open', required: true });
     createSchemaDefinition(db, { name: 'task', field_claims: [
       { field: 'status', sort_order: 100 },
@@ -339,7 +296,6 @@ describe('normalizer backfill of missing defaults', () => {
       fields: { status: 'closed' },
     });
 
-    // Invalidate hash so normalizer processes it
     db.prepare('UPDATE nodes SET content_hash = ? WHERE id = ?').run('stale', nodeId);
     makeFileOld('no-overwrite.md', 2 * 60 * 60 * 1000);
 

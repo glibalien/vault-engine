@@ -5,6 +5,7 @@ import type Database from 'better-sqlite3';
 import { z } from 'zod';
 import { existsSync } from 'node:fs';
 import { join } from 'node:path';
+import { safeVaultPath } from '../../pipeline/safe-path.js';
 import { toolResult, toolErrorResult } from './errors.js';
 import { checkTitleSafety, checkBodyFrontmatter } from './title-warnings.js';
 import { executeMutation } from '../../pipeline/execute.js';
@@ -91,6 +92,7 @@ export function registerCreateNode(
 
       // Conflict check
       const existing = db.prepare('SELECT id, title FROM nodes WHERE file_path = ?').get(filePath) as { id: string; title: string } | undefined;
+      safeVaultPath(vaultPath, filePath); // throws on path traversal
       const diskConflict = existsSync(join(vaultPath, filePath));
 
       // ── Dry run: validate without writing ─────────────────────────

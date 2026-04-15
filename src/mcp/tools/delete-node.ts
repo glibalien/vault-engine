@@ -5,6 +5,7 @@ import type Database from 'better-sqlite3';
 import { z } from 'zod';
 import { join } from 'node:path';
 import { unlinkSync } from 'node:fs';
+import { safeVaultPath } from '../../pipeline/safe-path.js';
 import { toolResult, toolErrorResult } from './errors.js';
 import { resolveNodeIdentity } from './resolve-identity.js';
 import type { WriteLockManager } from '../../sync/write-lock.js';
@@ -83,7 +84,7 @@ export function registerDeleteNode(
       }
 
       // Confirmed deletion
-      const absPath = join(vaultPath, node.file_path);
+      const absPath = safeVaultPath(vaultPath, node.file_path);
 
       writeLock.withLockSync(absPath, () => {
         const txn = db.transaction(() => {

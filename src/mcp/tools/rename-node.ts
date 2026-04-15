@@ -5,6 +5,7 @@ import type Database from 'better-sqlite3';
 import { z } from 'zod';
 import { join, dirname } from 'node:path';
 import { existsSync, renameSync, mkdirSync } from 'node:fs';
+import { safeVaultPath } from '../../pipeline/safe-path.js';
 import { unified } from 'unified';
 import remarkParse from 'remark-parse';
 import remarkFrontmatter from 'remark-frontmatter';
@@ -60,7 +61,7 @@ export function executeRename(
   // 1. Rename file on disk
   if (newFilePath !== oldFilePath) {
     const oldAbs = join(vaultPath, oldFilePath);
-    const newAbs = join(vaultPath, newFilePath);
+    const newAbs = safeVaultPath(vaultPath, newFilePath);
     if (existsSync(oldAbs)) {
       const newDirPath = dirname(newAbs);
       if (!existsSync(newDirPath)) mkdirSync(newDirPath, { recursive: true });

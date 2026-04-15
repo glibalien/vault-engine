@@ -5,6 +5,7 @@ import type Database from 'better-sqlite3';
 import { z } from 'zod';
 import { existsSync, unlinkSync } from 'node:fs';
 import { join } from 'node:path';
+import { safeVaultPath } from '../../pipeline/safe-path.js';
 import { toolResult, toolErrorResult } from './errors.js';
 import { resolveNodeIdentity } from './resolve-identity.js';
 import { executeMutation } from '../../pipeline/execute.js';
@@ -66,7 +67,7 @@ export function registerBatchMutate(
               }
 
               const filePath = path ? `${path}/${title}.md` : `${title}.md`;
-              const absPath = join(vaultPath, filePath);
+              const absPath = safeVaultPath(vaultPath, filePath);
 
               const existing = db.prepare('SELECT id FROM nodes WHERE file_path = ?').get(filePath);
               if (existing || existsSync(absPath)) {

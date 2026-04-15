@@ -6,6 +6,7 @@ import { z } from 'zod';
 import { nanoid } from 'nanoid';
 import { dirname, join } from 'node:path';
 import { existsSync, renameSync, mkdirSync } from 'node:fs';
+import { safeVaultPath } from '../../pipeline/safe-path.js';
 import { toolResult, toolErrorResult } from './errors.js';
 import { resolveNodeIdentity } from './resolve-identity.js';
 import { executeRename } from './rename-node.js';
@@ -152,6 +153,7 @@ export function registerUpdateNode(
           if (conflict) {
             return toolErrorResult('CONFLICT', `Cannot rename — file "${effectiveFilePath}" already exists (node: ${conflict.title}). Use rename-node with a different directory to resolve.`);
           }
+          safeVaultPath(vaultPath, effectiveFilePath); // throws on path traversal
           if (existsSync(join(vaultPath, effectiveFilePath))) {
             return toolErrorResult('CONFLICT', `Cannot rename — file "${effectiveFilePath}" already exists on disk.`);
           }
@@ -382,6 +384,7 @@ function computeNewPath(currentFilePath: string, title: string, ops: QueryModeOp
 }
 
 function checkMoveConflict(db: Database.Database, vaultPath: string, newFilePath: string, currentNodeId: string): string | null {
+  safeVaultPath(vaultPath, newFilePath); // throws on path traversal
   const dbConflict = db.prepare('SELECT id, title FROM nodes WHERE file_path = ?').get(newFilePath) as { id: string; title: string } | undefined;
   if (dbConflict && dbConflict.id !== currentNodeId) {
     return `File path "${newFilePath}" already exists (node: ${dbConflict.title})`;
@@ -554,7 +557,7 @@ function handleExecution(
       }
 
       const oldAbs = join(vaultPath, node.file_path);
-      const newAbs = join(vaultPath, moveResult!.newFilePath);
+      const newAbs = safeVaultPath(vaultPath, moveResult!.newFilePath);
 
       if (!existsSync(oldAbs)) {
         errors.push({ node_id: node.id, file_path: node.file_path, error: 'Source file missing from disk' });

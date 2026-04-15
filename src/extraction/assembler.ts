@@ -1,5 +1,6 @@
 import { stat, readdir } from 'node:fs/promises';
 import { join, extname, basename } from 'node:path';
+import { safeVaultPath } from '../pipeline/safe-path.js';
 import type Database from 'better-sqlite3';
 import type { ExtractionCache } from './cache.js';
 import type { AssembledNode, EmbedEntry, EmbedError } from './types.js';
@@ -172,7 +173,7 @@ async function processEmbeds(
 
     if (ext !== '' && ext !== '.md') {
       // Non-markdown with extension: try relative path first, then search vault
-      const directPath = join(vaultPath, ref);
+      const directPath = safeVaultPath(vaultPath, ref);
       try {
         await stat(directPath);
         filePath = directPath;

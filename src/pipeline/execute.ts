@@ -5,6 +5,7 @@
 
 import { join } from 'node:path';
 import { statSync } from 'node:fs';
+import { safeVaultPath } from './safe-path.js';
 import type Database from 'better-sqlite3';
 import { nanoid } from 'nanoid';
 import { validateProposedState } from '../validation/validate.js';
@@ -40,7 +41,7 @@ export function executeMutation(
   mutation: ProposedMutation,
   syncLogger?: SyncLogger,
 ): PipelineResult {
-  const absPath = join(vaultPath, mutation.file_path);
+  const absPath = safeVaultPath(vaultPath, mutation.file_path);
 
   // Build FileContext for date token resolution ($ctime, $mtime defaults)
   let fileCtx: FileContext | null = null;

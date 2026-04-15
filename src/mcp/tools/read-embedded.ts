@@ -3,6 +3,7 @@ import type Database from 'better-sqlite3';
 import { z } from 'zod';
 import { join, basename } from 'node:path';
 import { stat, readdir } from 'node:fs/promises';
+import { safeVaultPath } from '../../pipeline/safe-path.js';
 import { toolResult } from './errors.js';
 import type { ExtractionCache } from '../../extraction/cache.js';
 
@@ -52,7 +53,7 @@ export function registerReadEmbedded(
       let resolvedPath: string;
 
       if (file_path) {
-        resolvedPath = join(vaultPath, file_path);
+        resolvedPath = safeVaultPath(vaultPath, file_path);
       } else {
         // Resolve filename: find all nodes whose basename matches
         const allNodes = db.prepare('SELECT file_path FROM nodes').all() as { file_path: string }[];
@@ -60,7 +61,7 @@ export function registerReadEmbedded(
 
         if (matches.length === 0) {
           // Binary files (audio, images) aren't in nodes table — search vault
-          const directPath = join(vaultPath, filename!);
+          const directPath = safeVaultPath(vaultPath, filename!);
           try {
             await stat(directPath);
             resolvedPath = directPath;

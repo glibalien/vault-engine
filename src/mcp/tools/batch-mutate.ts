@@ -13,6 +13,7 @@ import { PipelineError } from '../../pipeline/types.js';
 import { reconstructValue } from '../../pipeline/classify-value.js';
 import { backupFile, restoreFile, cleanupBackups } from '../../pipeline/file-writer.js';
 import { checkTypesHaveSchemas } from '../../pipeline/check-types.js';
+import { buildFixable } from '../../validation/fixable.js';
 import type { WriteLockManager } from '../../sync/write-lock.js';
 import type { SyncLogger } from '../../sync/sync-logger.js';
 
@@ -45,7 +46,7 @@ export function registerBatchMutate(
       const backups: Array<{ filePath: string; backupPath: string }> = [];
       const createdFiles: string[] = [];
 
-      let batchError: { failed_at: number; error: { op: string; message: string } } | null = null as { failed_at: number; error: { op: string; message: string } } | null;
+      let batchError: { failed_at: number; error: Record<string, unknown> } | null = null as { failed_at: number; error: Record<string, unknown> } | null;
 
       const txn = db.transaction(() => {
         for (let i = 0; i < params.operations.length; i++) {
@@ -164,7 +165,13 @@ export function registerBatchMutate(
             }
           } catch (err) {
             if (err instanceof PipelineError) {
-              batchError = { failed_at: i, error: { op, message: err.message } };
+              const errObj: Record<string, unknown> = { op, message: err.message };
+              if (err.validation) {
+                errObj.issues = err.validation.issues;
+                const fixable = buildFixable(err.validation.issues, err.validation.effective_fields);
+                if (fixable.length > 0) errObj.fixable = fixable;
+              }
+              batchError = { failed_at: i, error: errObj };
             } else {
               batchError = { failed_at: i, error: { op, message: err instanceof Error ? err.message : String(err) } };
             }

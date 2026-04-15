@@ -99,3 +99,31 @@ export interface ConformanceResult {
   types_with_schemas: string[];
   types_without_schemas: string[];
 }
+
+// ── Structured issue details ────────────────────────────────────────
+
+export interface EnumMismatchDetails {
+  provided: unknown;
+  allowed_values: string[];
+  closest_match: string | null;
+}
+
+export interface RequiredMissingDetails {
+  field_type: FieldType;
+  allowed_values?: string[];
+  default_value?: unknown;
+  reference_target?: string;
+}
+
+export interface TypeMismatchDetails {
+  expected_type: FieldType;
+  provided_type: string;
+  coercion_failed_reason: string;
+}
+
+export interface FixableEntry {
+  field: string;
+  suggestion: unknown;
+  allowed_values?: string[];
+  field_type?: FieldType;
+}

@@ -9,11 +9,20 @@ import type {
   ValidationIssue,
   ValidationResult,
   IssueCode,
+  RequiredMissingDetails,
 } from './types.js';
 import { mergeFieldClaims } from './merge.js';
 import { coerceValue } from './coerce.js';
 import type { CoercionFailure } from './coerce.js';
 import { resolveDefaultValue, type FileContext } from './resolve-default.js';
+
+function buildRequiredMissingDetails(gf: GlobalFieldDefinition): RequiredMissingDetails {
+  const details: RequiredMissingDetails = { field_type: gf.field_type };
+  if (gf.enum_values) details.allowed_values = gf.enum_values;
+  if (gf.default_value !== null) details.default_value = gf.default_value;
+  if (gf.reference_target) details.reference_target = gf.reference_target;
+  return details;
+}
 
 export interface ValidateOptions {
   fileCtx?: FileContext | null;
@@ -74,6 +83,7 @@ export function validateProposedState(
           severity: 'error',
           code: 'REQUIRED_MISSING',
           message: `Required field "${fieldName}" cannot be null`,
+          details: buildRequiredMissingDetails(ef.global_field),
         });
       }
       // Null excludes from coerced_state regardless
@@ -95,6 +105,7 @@ export function validateProposedState(
           severity: 'error',
           code: 'REQUIRED_MISSING',
           message: `Required field "${fieldName}" is missing`,
+          details: buildRequiredMissingDetails(ef.global_field),
         });
       }
       // Non-required fields without a value: absent is fine, default is just metadata
@@ -130,16 +141,31 @@ export function validateProposedState(
         code = 'TYPE_MISMATCH';
       }
 
-      const details: Record<string, unknown> = {};
-      if (fail.closest_matches) details.closest_matches = fail.closest_matches;
-      if (fail.element_errors) details.element_errors = fail.element_errors;
+      let details: unknown;
+      if (code === 'ENUM_MISMATCH') {
+        const fieldDef = effectiveFields.get(fieldName) ?? conflictedFields.get(fieldName);
+        details = {
+          provided: value,
+          allowed_values: fieldDef?.global_field.enum_values ?? [],
+          closest_match: fail.closest_matches?.[0] ?? null,
+        };
+      } else if (code === 'TYPE_MISMATCH') {
+        const fieldDef = effectiveFields.get(fieldName) ?? conflictedFields.get(fieldName);
+        details = {
+          expected_type: fieldDef?.global_field.field_type ?? fail.to_type,
+          provided_type: fail.from_type,
+          coercion_failed_reason: fail.reason,
+        };
+      } else if (fail.element_errors) {
+        details = { element_errors: fail.element_errors };
+      }
 
       issues.push({
         field: fieldName,
         severity: 'error',
         code,
         message: fail.reason,
-        details: Object.keys(details).length > 0 ? details : undefined,
+        details,
       });
     }
   }
@@ -168,6 +194,7 @@ export function validateProposedState(
           severity: 'error',
           code: 'REQUIRED_MISSING',
           message: `Required field "${fieldName}" is missing and default is conflicted`,
+          details: buildRequiredMissingDetails(cf.global_field),
         });
       }
       continue;
@@ -202,16 +229,31 @@ export function validateProposedState(
         code = 'TYPE_MISMATCH';
       }
 
-      const details: Record<string, unknown> = {};
-      if (fail.closest_matches) details.closest_matches = fail.closest_matches;
-      if (fail.element_errors) details.element_errors = fail.element_errors;
+      let details: unknown;
+      if (code === 'ENUM_MISMATCH') {
+        const fieldDef = effectiveFields.get(fieldName) ?? conflictedFields.get(fieldName);
+        details = {
+          provided: value,
+          allowed_values: fieldDef?.global_field.enum_values ?? [],
+          closest_match: fail.closest_matches?.[0] ?? null,
+        };
+      } else if (code === 'TYPE_MISMATCH') {
+        const fieldDef = effectiveFields.get(fieldName) ?? conflictedFields.get(fieldName);
+        details = {
+          expected_type: fieldDef?.global_field.field_type ?? fail.to_type,
+          provided_type: fail.from_type,
+          coercion_failed_reason: fail.reason,
+        };
+      } else if (fail.element_errors) {
+        details = { element_errors: fail.element_errors };
+      }
 
       issues.push({
         field: fieldName,
         severity: 'error',
         code,
         message: fail.reason,
-        details: Object.keys(details).length > 0 ? details : undefined,
+        details,
       });
     }
   }

@@ -3,7 +3,7 @@
 import type { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import type Database from 'better-sqlite3';
 import { z } from 'zod';
-import { toolResult, toolErrorResult } from './errors.js';
+import { toolResult, toolErrorResult, toolValidationErrorResult } from './errors.js';
 import { resolveNodeIdentity } from './resolve-identity.js';
 import { executeMutation } from '../../pipeline/execute.js';
 import { PipelineError } from '../../pipeline/types.js';
@@ -138,6 +138,9 @@ export function registerAddTypeToNode(
           already_present: false,
         });
       } catch (err) {
+        if (err instanceof PipelineError && err.validation) {
+          return toolValidationErrorResult(err.validation);
+        }
         if (err instanceof PipelineError) {
           return toolErrorResult('VALIDATION_FAILED', err.message);
         }

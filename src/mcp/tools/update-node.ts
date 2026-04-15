@@ -7,7 +7,7 @@ import { nanoid } from 'nanoid';
 import { dirname, join } from 'node:path';
 import { existsSync, renameSync, mkdirSync } from 'node:fs';
 import { safeVaultPath } from '../../pipeline/safe-path.js';
-import { toolResult, toolErrorResult } from './errors.js';
+import { toolResult, toolErrorResult, toolValidationErrorResult } from './errors.js';
 import { resolveNodeIdentity } from './resolve-identity.js';
 import { executeRename } from './rename-node.js';
 import { checkTitleSafety, type ToolIssue } from './title-warnings.js';
@@ -275,6 +275,9 @@ export function registerUpdateNode(
           orphan_fields: result.validation.orphan_fields,
         });
       } catch (err) {
+        if (err instanceof PipelineError && err.validation) {
+          return toolValidationErrorResult(err.validation);
+        }
         if (err instanceof PipelineError) {
           return toolErrorResult('VALIDATION_FAILED', err.message);
         }

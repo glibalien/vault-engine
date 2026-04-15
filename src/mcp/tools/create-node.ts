@@ -6,7 +6,7 @@ import { z } from 'zod';
 import { existsSync } from 'node:fs';
 import { join } from 'node:path';
 import { safeVaultPath } from '../../pipeline/safe-path.js';
-import { toolResult, toolErrorResult } from './errors.js';
+import { toolResult, toolErrorResult, toolValidationErrorResult } from './errors.js';
 import { checkTitleSafety, checkBodyFrontmatter } from './title-warnings.js';
 import { executeMutation } from '../../pipeline/execute.js';
 import { PipelineError } from '../../pipeline/types.js';
@@ -145,6 +145,9 @@ export function registerCreateNode(
           orphan_fields: result.validation.orphan_fields,
         });
       } catch (err) {
+        if (err instanceof PipelineError && err.validation) {
+          return toolValidationErrorResult(err.validation);
+        }
         if (err instanceof PipelineError) {
           return toolErrorResult('VALIDATION_FAILED', err.message);
         }

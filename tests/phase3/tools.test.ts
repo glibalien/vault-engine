@@ -206,7 +206,7 @@ describe('remove-type-from-node behavior', () => {
 describe('schema propagation', () => {
   it('update-schema add claim populates defaults on existing nodes', () => {
     createGlobalField(db, { name: 'status', field_type: 'string', default_value: 'open' });
-    createGlobalField(db, { name: 'priority', field_type: 'string', default_value: 'normal' });
+    createGlobalField(db, { name: 'priority', field_type: 'string', default_value: 'normal', required: true });
     createSchemaDefinition(db, { name: 'task', field_claims: [{ field: 'status' }] });
 
     // Create a task node

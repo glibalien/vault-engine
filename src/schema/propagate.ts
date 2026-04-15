@@ -142,7 +142,7 @@ export function propagateSchemaChange(
       for (const addedField of diff.added) {
         if (addedField in currentFields) continue; // re-adoption, value already exists
         const ef = effectiveFields.get(addedField);
-        if (ef?.resolved_default_value !== null && ef?.resolved_default_value !== undefined) {
+        if (ef?.resolved_required && ef?.resolved_default_value !== null && ef?.resolved_default_value !== undefined) {
           currentFields[addedField] = ef.resolved_default_value;
           result.defaults_populated++;
 

@@ -25,7 +25,11 @@ import { renderNode } from '../src/renderer/render.js';
 import { sha256 } from '../src/indexer/hash.js';
 import type { FieldOrderEntry } from '../src/renderer/types.js';
 
-const VAULT_PATH = process.env.VAULT_PATH ?? '/home/barry/Documents/archbrain';
+const VAULT_PATH = process.env.VAULT_PATH;
+if (!VAULT_PATH) {
+  console.error('VAULT_PATH environment variable is required');
+  process.exit(1);
+}
 const DB_PATH = join(VAULT_PATH, '.vault-engine/vault-new.db');
 const DRY_RUN = process.argv.includes('--dry-run');
 

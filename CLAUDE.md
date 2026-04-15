@@ -32,11 +32,10 @@ npm run start:http   # node dist/index.js --transport http
 
 ## Deployment
 
-- Runs on archalien under systemd as `vault-engine-new.service`
-- Port **3334** (old service on 3333)
-- Cloudflare tunnel: `vault-new.archalien.me` → localhost:3334
-- Config: `/etc/cloudflared/config.yml`
-- Env vars loaded via systemd `EnvironmentFile=/home/barry/projects/vault-engine/.env`
+- Runs under systemd — see `vault-engine-new.service.example`
+- Default port **3334** (configurable via `--port`)
+- Designed to sit behind a reverse proxy or Cloudflare tunnel for TLS termination
+- Env vars loaded via systemd `EnvironmentFile` or `.env`
 - Required env: `OAUTH_OWNER_PASSWORD`, `OAUTH_ISSUER_URL`
 - Optional env: `VAULT_EXCLUDE_DIRS` (comma-separated folder prefixes to exclude from indexing entirely, e.g. `Templates`)
 

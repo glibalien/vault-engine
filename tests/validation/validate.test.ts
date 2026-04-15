@@ -3,6 +3,9 @@ import { validateProposedState } from '../../src/validation/validate.js';
 import type {
   GlobalFieldDefinition,
   FieldClaim,
+  EnumMismatchDetails,
+  RequiredMissingDetails,
+  TypeMismatchDetails,
 } from '../../src/validation/types.js';
 import type { FileContext } from '../../src/validation/resolve-default.js';
 
@@ -182,7 +185,10 @@ describe('validateProposedState', () => {
     expect(result.issues).toHaveLength(1);
     expect(result.issues[0].code).toBe('ENUM_MISMATCH');
     expect(result.issues[0].field).toBe('status');
-    expect((result.issues[0].details as { closest_matches: string[] }).closest_matches).toContain('open');
+    const details = result.issues[0].details as EnumMismatchDetails;
+    expect(details.provided).toBe('opne');
+    expect(details.allowed_values).toEqual(['open', 'closed', 'in-progress']);
+    expect(details.closest_match).toBe('open');
   });
 
   it('orphan pass-through — unknown field in coerced_state with source="orphan"', () => {
@@ -599,5 +605,182 @@ describe('validateProposedState', () => {
     const today = new Date();
     const expected = `${today.getFullYear()}-${String(today.getMonth() + 1).padStart(2, '0')}-${String(today.getDate()).padStart(2, '0')}`;
     expect(result.coerced_state.date.value).toBe(expected);
+  });
+
+  // ── Structured error detail tests ────────────────────────────────────
+
+  it('ENUM_MISMATCH — details include provided, allowed_values, and closest_match', () => {
+    const globals = new Map([
+      ['priority', gf({ name: 'priority', field_type: 'enum', enum_values: ['low', 'normal', 'high', 'critical'] })],
+    ]);
+    const claims = new Map([
+      ['task', [claim({ schema_name: 'task', field: 'priority' })]],
+    ]);
+
+    const result = validateProposedState(
+      { priority: 'medium' },
+      ['task'],
+      claims,
+      globals,
+    );
+
+    expect(result.valid).toBe(false);
+    const issue = result.issues.find(i => i.code === 'ENUM_MISMATCH')!;
+    const details = issue.details as EnumMismatchDetails;
+    expect(details.provided).toBe('medium');
+    expect(details.allowed_values).toEqual(['low', 'normal', 'high', 'critical']);
+    expect(details.closest_match).toBe('high');
+  });
+
+  it('ENUM_MISMATCH on conflicted field — same enriched details', () => {
+    const globals = new Map([
+      ['status', gf({ name: 'status', field_type: 'enum', enum_values: ['open', 'closed'], per_type_overrides_allowed: true })],
+    ]);
+    const claims = new Map([
+      ['task', [claim({ schema_name: 'task', field: 'status', required: true })]],
+      ['project', [claim({ schema_name: 'project', field: 'status', required: false })]],
+    ]);
+
+    const result = validateProposedState(
+      { status: 'pending' },
+      ['task', 'project'],
+      claims,
+      globals,
+    );
+
+    const enumIssue = result.issues.find(i => i.code === 'ENUM_MISMATCH')!;
+    const details = enumIssue.details as EnumMismatchDetails;
+    expect(details.provided).toBe('pending');
+    expect(details.allowed_values).toEqual(['open', 'closed']);
+    expect(details.closest_match).not.toBeNull();
+  });
+
+  it('REQUIRED_MISSING — details include field_type and allowed_values for enum field', () => {
+    const globals = new Map([
+      ['status', gf({ name: 'status', field_type: 'enum', enum_values: ['open', 'in-progress', 'done'], required: true })],
+    ]);
+    const claims = new Map([
+      ['task', [claim({ schema_name: 'task', field: 'status' })]],
+    ]);
+
+    const result = validateProposedState(
+      {},
+      ['task'],
+      claims,
+      globals,
+    );
+
+    const issue = result.issues.find(i => i.code === 'REQUIRED_MISSING')!;
+    const details = issue.details as RequiredMissingDetails;
+    expect(details.field_type).toBe('enum');
+    expect(details.allowed_values).toEqual(['open', 'in-progress', 'done']);
+    expect(details.default_value).toBeUndefined();
+  });
+
+  it('REQUIRED_MISSING — details include default_value when available', () => {
+    const globals = new Map([
+      ['status', gf({ name: 'status', field_type: 'enum', enum_values: ['open', 'done'], required: true, default_value: 'open' })],
+    ]);
+    const claims = new Map([
+      ['task', [claim({ schema_name: 'task', field: 'status' })]],
+    ]);
+
+    const result = validateProposedState(
+      {},
+      ['task'],
+      claims,
+      globals,
+      { skipDefaults: true },
+    );
+
+    const issue = result.issues.find(i => i.code === 'REQUIRED_MISSING')!;
+    const details = issue.details as RequiredMissingDetails;
+    expect(details.field_type).toBe('enum');
+    expect(details.default_value).toBe('open');
+  });
+
+  it('REQUIRED_MISSING — details include reference_target for reference field', () => {
+    const globals = new Map([
+      ['project', gf({ name: 'project', field_type: 'reference', reference_target: 'project', required: true })],
+    ]);
+    const claims = new Map([
+      ['task', [claim({ schema_name: 'task', field: 'project' })]],
+    ]);
+
+    const result = validateProposedState(
+      {},
+      ['task'],
+      claims,
+      globals,
+    );
+
+    const issue = result.issues.find(i => i.code === 'REQUIRED_MISSING')!;
+    const details = issue.details as RequiredMissingDetails;
+    expect(details.field_type).toBe('reference');
+    expect(details.reference_target).toBe('project');
+  });
+
+  it('REQUIRED_MISSING on null — details include field_type for boolean field', () => {
+    const globals = new Map([
+      ['active', gf({ name: 'active', field_type: 'boolean', required: true })],
+    ]);
+    const claims = new Map([
+      ['task', [claim({ schema_name: 'task', field: 'active' })]],
+    ]);
+
+    const result = validateProposedState(
+      { active: null },
+      ['task'],
+      claims,
+      globals,
+    );
+
+    const issue = result.issues.find(i => i.code === 'REQUIRED_MISSING')!;
+    const details = issue.details as RequiredMissingDetails;
+    expect(details.field_type).toBe('boolean');
+  });
+
+  it('TYPE_MISMATCH — details include expected_type, provided_type, coercion_failed_reason', () => {
+    const globals = new Map([
+      ['priority', gf({ name: 'priority', field_type: 'number' })],
+    ]);
+    const claims = new Map([
+      ['task', [claim({ schema_name: 'task', field: 'priority' })]],
+    ]);
+
+    const result = validateProposedState(
+      { priority: 'not-a-number' },
+      ['task'],
+      claims,
+      globals,
+    );
+
+    expect(result.valid).toBe(false);
+    const issue = result.issues.find(i => i.code === 'TYPE_MISMATCH')!;
+    const details = issue.details as TypeMismatchDetails;
+    expect(details.expected_type).toBe('number');
+    expect(details.provided_type).toBe('string');
+    expect(details.coercion_failed_reason).toContain('Cannot convert');
+  });
+
+  it('TYPE_MISMATCH on boolean field — correct types in details', () => {
+    const globals = new Map([
+      ['active', gf({ name: 'active', field_type: 'boolean' })],
+    ]);
+    const claims = new Map([
+      ['task', [claim({ schema_name: 'task', field: 'active' })]],
+    ]);
+
+    const result = validateProposedState(
+      { active: 'maybe' },
+      ['task'],
+      claims,
+      globals,
+    );
+
+    const issue = result.issues.find(i => i.code === 'TYPE_MISMATCH')!;
+    const details = issue.details as TypeMismatchDetails;
+    expect(details.expected_type).toBe('boolean');
+    expect(details.provided_type).toBe('string');
   });
 });

@@ -167,6 +167,38 @@ export function createEmbeddingIndexer(
     return createHash('sha256').update(content).digest('hex');
   }
 
+  // Delete extraction rows whose extraction_ref is NOT in the current body's
+  // non-markdown ref list. Used to reconcile when a node's embeds change.
+  // sqlite doesn't support NOT IN (?) with variable-length params from prepared
+  // stmts, so we build the query at call time.
+  function pruneStaleExtractions(nodeId: string, currentRefs: string[]): void {
+    if (currentRefs.length === 0) {
+      db.prepare(
+        `DELETE FROM embedding_vec WHERE id IN (
+           SELECT id FROM embedding_meta
+           WHERE node_id = ? AND source_type = 'extraction'
+         )`
+      ).run(nodeId);
+      db.prepare(
+        `DELETE FROM embedding_meta WHERE node_id = ? AND source_type = 'extraction'`
+      ).run(nodeId);
+      return;
+    }
+    const placeholders = currentRefs.map(() => '?').join(',');
+    db.prepare(
+      `DELETE FROM embedding_vec WHERE id IN (
+         SELECT id FROM embedding_meta
+         WHERE node_id = ? AND source_type = 'extraction'
+           AND extraction_ref NOT IN (${placeholders})
+       )`
+    ).run(nodeId, ...currentRefs);
+    db.prepare(
+      `DELETE FROM embedding_meta
+       WHERE node_id = ? AND source_type = 'extraction'
+         AND extraction_ref NOT IN (${placeholders})`
+    ).run(nodeId, ...currentRefs);
+  }
+
   function enqueue(item: EmbeddingQueueItem): void {
     const key = itemKey(item);
     if (!queue.some(q => itemKey(q) === key)) {
@@ -177,8 +209,12 @@ export function createEmbeddingIndexer(
       const row = stmtGetNode.get(item.node_id);
       if (row && row.body) {
         const refs = parseEmbedReferences(row.body);
-        for (const ref of refs) {
-          if (isLikelyMarkdownRef(ref)) continue;
+        const currentNonMdRefs = refs.filter(r => !isLikelyMarkdownRef(r));
+
+        // Reconcile: drop extraction rows for refs that are no longer in the body.
+        pruneStaleExtractions(item.node_id, currentNonMdRefs);
+
+        for (const ref of currentNonMdRefs) {
           const extractionItem: EmbeddingQueueItem = {
             node_id: item.node_id,
             source_type: 'extraction',
@@ -189,6 +225,9 @@ export function createEmbeddingIndexer(
             queue.push(extractionItem);
           }
         }
+      } else if (row) {
+        // Body was emptied entirely — drop all extraction rows for this node.
+        pruneStaleExtractions(item.node_id, []);
       }
     }
   }
@@ -219,11 +258,19 @@ export function createEmbeddingIndexer(
 
         // resolveEmbedRef may throw on path traversal (safeVaultPath guard). Treat
         // traversal attempts the same as unresolvable refs — silently no-op.
+        // Any other error (e.g. locked DB) is a real failure — rethrow so the
+        // outer catch retries up to 3×.
         let resolved: Awaited<ReturnType<typeof resolveEmbedRef>> = null;
         try {
           resolved = await resolveEmbedRef(db, deps.vaultPath, item.extraction_ref);
-        } catch {
-          return true;
+        } catch (err) {
+          // safeVaultPath throws "Path traversal blocked" for `../` escape attempts.
+          // Treat as unresolvable (no retry). Anything else is a real error — rethrow
+          // so the outer catch retries up to 3x.
+          if (err instanceof Error && err.message.includes('Path traversal')) {
+            return true;
+          }
+          throw err;
         }
         if (!resolved || resolved.isMarkdown) return true;
 

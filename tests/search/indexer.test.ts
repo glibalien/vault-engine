@@ -560,6 +560,35 @@ describe('extraction embedding', () => {
     expect(idx.queueSize()).toBe(1);
   });
 
+  it('removes orphaned extraction rows when an embed is removed from a node body', async () => {
+    writeFileSync(join(vaultDir, 'a.m4a'), 'fake');
+    writeFileSync(join(vaultDir, 'b.m4a'), 'fake');
+    const cache = createFakeCache({
+      [join(vaultDir, 'a.m4a')]: 'text a',
+      [join(vaultDir, 'b.m4a')]: 'text b',
+    });
+    const idx = createEmbeddingIndexer(db, fakeEmbedder, { extractionCache: cache as any, vaultPath: vaultDir });
+
+    insertNode(db, 'n1', 'Node', 'body ![[a.m4a]] ![[b.m4a]]');
+    idx.enqueue({ node_id: 'n1', source_type: 'node' });
+    await idx.processAll();
+
+    let refs = db.prepare(
+      "SELECT extraction_ref FROM embedding_meta WHERE node_id = 'n1' AND source_type = 'extraction' ORDER BY extraction_ref"
+    ).all() as { extraction_ref: string }[];
+    expect(refs.map(r => r.extraction_ref)).toEqual(['a.m4a', 'b.m4a']);
+
+    // Edit body: drop b.m4a
+    db.prepare('UPDATE nodes SET body = ? WHERE id = ?').run('body ![[a.m4a]]', 'n1');
+    idx.enqueue({ node_id: 'n1', source_type: 'node' });
+    await idx.processAll();
+
+    refs = db.prepare(
+      "SELECT extraction_ref FROM embedding_meta WHERE node_id = 'n1' AND source_type = 'extraction' ORDER BY extraction_ref"
+    ).all() as { extraction_ref: string }[];
+    expect(refs.map(r => r.extraction_ref)).toEqual(['a.m4a']);
+  });
+
   it('extraction item is skipped on second run when text hash unchanged', async () => {
     writeFileSync(join(vaultDir, 'audio.m4a'), 'x');
     const cache = createFakeCache({ [join(vaultDir, 'audio.m4a')]: 'stable text' });

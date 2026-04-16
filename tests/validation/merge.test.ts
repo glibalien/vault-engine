@@ -3,7 +3,6 @@ import { mergeFieldClaims } from '../../src/validation/merge.js';
 import type {
   GlobalFieldDefinition,
   FieldClaim,
-  MergeConflict,
   EffectiveField,
 } from '../../src/validation/types.js';
 
@@ -17,7 +16,7 @@ function makeGlobal(overrides: Partial<GlobalFieldDefinition> & { name: string }
     description: null,
     default_value: null,
     required: false,
-    per_type_overrides_allowed: false,
+    overrides_allowed: { required: false, default_value: false, enum_values: false },
     list_item_type: null,
     ...overrides,
   };
@@ -28,8 +27,9 @@ function makeClaim(overrides: Partial<FieldClaim> & { schema_name: string; field
     label: null,
     description: null,
     sort_order: 1000,
-    required: null,
-    default_value: null,
+    required_override: null,
+    default_value_override: { kind: 'inherit' },
+    enum_values_override: null,
     ...overrides,
   };
 }
@@ -117,46 +117,76 @@ describe('mergeFieldClaims', () => {
     expect(ef.resolved_order).toBe(5);
   });
 
-  it('semantic conflict — two types disagree on required → error', () => {
+  it('required disagreement — cancels to global value', () => {
     const globals = new Map([
-      ['status', makeGlobal({ name: 'status', per_type_overrides_allowed: true })],
+      ['status', makeGlobal({ name: 'status', required: false, overrides_allowed: { required: true, default_value: false, enum_values: false } })],
     ]);
     const claims = new Map([
-      ['task', [makeClaim({ schema_name: 'task', field: 'status', required: true })]],
-      ['project', [makeClaim({ schema_name: 'project', field: 'status', required: false })]],
+      ['task', [makeClaim({ schema_name: 'task', field: 'status', required_override: true })]],
+      ['project', [makeClaim({ schema_name: 'project', field: 'status', required_override: false })]],
     ]);
 
     const result = mergeFieldClaims(['task', 'project'], claims, globals);
 
-    expect(result.ok).toBe(false);
-    if (result.ok) return;
-    expect(result.conflicts).toHaveLength(1);
-    expect(result.conflicts[0].field).toBe('status');
-    expect(result.conflicts[0].property).toBe('required');
-    expect(result.conflicts[0].conflicting_claims).toEqual([
-      { type: 'task', value: true },
-      { type: 'project', value: false },
-    ]);
-    // Conflicting field removed from partial_fields
-    expect(result.partial_fields.has('status')).toBe(false);
+    expect(result.ok).toBe(true);
+    if (!result.ok) return;
+    const ef = result.effective_fields.get('status')!;
+    // Disagreement: cancels to global required (false)
+    expect(ef.resolved_required).toBe(false);
   });
 
-  it('collects ALL conflicts — disagreement on both required AND default_value', () => {
+  it('required disagreement with global=true — cancels to true', () => {
     const globals = new Map([
-      ['status', makeGlobal({ name: 'status', per_type_overrides_allowed: true })],
+      ['status', makeGlobal({ name: 'status', required: true, overrides_allowed: { required: true, default_value: false, enum_values: false } })],
     ]);
     const claims = new Map([
-      ['task', [makeClaim({ schema_name: 'task', field: 'status', required: true, default_value: 'open' })]],
-      ['project', [makeClaim({ schema_name: 'project', field: 'status', required: false, default_value: 'active' })]],
+      ['task', [makeClaim({ schema_name: 'task', field: 'status', required_override: true })]],
+      ['project', [makeClaim({ schema_name: 'project', field: 'status', required_override: false })]],
     ]);
 
     const result = mergeFieldClaims(['task', 'project'], claims, globals);
 
-    expect(result.ok).toBe(false);
-    if (result.ok) return;
-    expect(result.conflicts).toHaveLength(2);
-    const props = result.conflicts.map(c => c.property).sort();
-    expect(props).toEqual(['default_value', 'required']);
+    expect(result.ok).toBe(true);
+    if (!result.ok) return;
+    const ef = result.effective_fields.get('status')!;
+    // Disagreement: cancels to global required (true)
+    expect(ef.resolved_required).toBe(true);
+  });
+
+  it('default_value disagreement — cancels to global value', () => {
+    const globals = new Map([
+      ['status', makeGlobal({ name: 'status', default_value: 'draft', overrides_allowed: { required: false, default_value: true, enum_values: false } })],
+    ]);
+    const claims = new Map([
+      ['task', [makeClaim({ schema_name: 'task', field: 'status', default_value_override: { kind: 'override', value: 'open' } })]],
+      ['project', [makeClaim({ schema_name: 'project', field: 'status', default_value_override: { kind: 'override', value: 'active' } })]],
+    ]);
+
+    const result = mergeFieldClaims(['task', 'project'], claims, globals);
+
+    expect(result.ok).toBe(true);
+    if (!result.ok) return;
+    const ef = result.effective_fields.get('status')!;
+    // Disagreement: cancels to global default_value ('draft')
+    expect(ef.resolved_default_value).toBe('draft');
+  });
+
+  it('both required and default_value disagreements — both cancel to global', () => {
+    const globals = new Map([
+      ['status', makeGlobal({ name: 'status', required: false, default_value: 'draft', overrides_allowed: { required: true, default_value: true, enum_values: false } })],
+    ]);
+    const claims = new Map([
+      ['task', [makeClaim({ schema_name: 'task', field: 'status', required_override: true, default_value_override: { kind: 'override', value: 'open' } })]],
+      ['project', [makeClaim({ schema_name: 'project', field: 'status', required_override: false, default_value_override: { kind: 'override', value: 'active' } })]],
+    ]);
+
+    const result = mergeFieldClaims(['task', 'project'], claims, globals);
+
+    expect(result.ok).toBe(true);
+    if (!result.ok) return;
+    const ef = result.effective_fields.get('status')!;
+    expect(ef.resolved_required).toBe(false);
+    expect(ef.resolved_default_value).toBe('draft');
   });
 
   it('all-schemaless types — empty effective set, ok: true', () => {
@@ -172,26 +202,9 @@ describe('mergeFieldClaims', () => {
     expect(result.effective_fields.size).toBe(0);
   });
 
-  it('internal consistency error — claim has required on field with per_type_overrides_allowed=false', () => {
-    const globals = new Map([
-      ['status', makeGlobal({ name: 'status', per_type_overrides_allowed: false })],
-    ]);
-    const claims = new Map([
-      ['task', [makeClaim({ schema_name: 'task', field: 'status', required: true })]],
-    ]);
-
-    const result = mergeFieldClaims(['task'], claims, globals);
-
-    expect(result.ok).toBe(false);
-    if (result.ok) return;
-    expect(result.conflicts).toHaveLength(1);
-    expect(result.conflicts[0].field).toBe('status');
-    expect(result.conflicts[0].property).toBe('required');
-  });
-
   it('global field defaults used — no claim overrides', () => {
     const globals = new Map([
-      ['status', makeGlobal({ name: 'status', required: true, default_value: 'open', per_type_overrides_allowed: true })],
+      ['status', makeGlobal({ name: 'status', required: true, default_value: 'open', overrides_allowed: { required: true, default_value: true, enum_values: false } })],
     ]);
     const claims = new Map([
       ['task', [makeClaim({ schema_name: 'task', field: 'status' })]],
@@ -206,13 +219,13 @@ describe('mergeFieldClaims', () => {
     expect(ef.resolved_default_value).toBe('open');
   });
 
-  it('agreeing overrides — both types set required=true → no conflict', () => {
+  it('agreeing overrides — both types set required_override=true → no conflict', () => {
     const globals = new Map([
-      ['status', makeGlobal({ name: 'status', required: false, per_type_overrides_allowed: true })],
+      ['status', makeGlobal({ name: 'status', required: false, overrides_allowed: { required: true, default_value: false, enum_values: false } })],
     ]);
     const claims = new Map([
-      ['task', [makeClaim({ schema_name: 'task', field: 'status', required: true })]],
-      ['project', [makeClaim({ schema_name: 'project', field: 'status', required: true })]],
+      ['task', [makeClaim({ schema_name: 'task', field: 'status', required_override: true })]],
+      ['project', [makeClaim({ schema_name: 'project', field: 'status', required_override: true })]],
     ]);
 
     const result = mergeFieldClaims(['task', 'project'], claims, globals);
@@ -221,44 +234,6 @@ describe('mergeFieldClaims', () => {
     if (!result.ok) return;
     const ef = result.effective_fields.get('status')!;
     expect(ef.resolved_required).toBe(true);
-  });
-
-  it('conflicted fields appear in conflicted_fields map with global definition', () => {
-    const globals = new Map([
-      ['status', makeGlobal({ name: 'status', field_type: 'enum', enum_values: ['open', 'closed'], per_type_overrides_allowed: true })],
-    ]);
-    const claims = new Map([
-      ['task', [makeClaim({ schema_name: 'task', field: 'status', required: true })]],
-      ['project', [makeClaim({ schema_name: 'project', field: 'status', required: false })]],
-    ]);
-
-    const result = mergeFieldClaims(['task', 'project'], claims, globals);
-
-    expect(result.ok).toBe(false);
-    if (result.ok) return;
-    expect(result.conflicted_fields.size).toBe(1);
-    const cf = result.conflicted_fields.get('status')!;
-    expect(cf.field).toBe('status');
-    expect(cf.global_field).toBe(globals.get('status'));
-    expect(cf.claiming_types).toEqual(['task', 'project']);
-  });
-
-  it('conflicted_fields preserves presentation metadata', () => {
-    const globals = new Map([
-      ['status', makeGlobal({ name: 'status', per_type_overrides_allowed: true })],
-    ]);
-    const claims = new Map([
-      ['task', [makeClaim({ schema_name: 'task', field: 'status', required: true, label: 'Status', sort_order: 100 })]],
-      ['project', [makeClaim({ schema_name: 'project', field: 'status', required: false })]],
-    ]);
-
-    const result = mergeFieldClaims(['task', 'project'], claims, globals);
-
-    expect(result.ok).toBe(false);
-    if (result.ok) return;
-    const cf = result.conflicted_fields.get('status')!;
-    expect(cf.resolved_label).toBe('Status');
-    expect(cf.resolved_order).toBe(100);
   });
 
   it('skips claims referencing unknown global fields', () => {
@@ -272,5 +247,99 @@ describe('mergeFieldClaims', () => {
     expect(result.ok).toBe(true);
     if (!result.ok) return;
     expect(result.effective_fields.size).toBe(0);
+  });
+
+  // ── default_value_override: null (override to nothing) ──
+
+  it('default_value_override: null — overrides global default to nothing', () => {
+    const globals = new Map([
+      ['status', makeGlobal({ name: 'status', default_value: 'open', overrides_allowed: { required: false, default_value: true, enum_values: false } })],
+    ]);
+    const claims = new Map([
+      ['note', [makeClaim({ schema_name: 'note', field: 'status', default_value_override: { kind: 'override', value: null } })]],
+    ]);
+
+    const result = mergeFieldClaims(['note'], claims, globals);
+
+    expect(result.ok).toBe(true);
+    if (!result.ok) return;
+    expect(result.effective_fields.get('status')!.resolved_default_value).toBeNull();
+  });
+
+  // ── Enum override tests ──
+
+  it('single type with enum_values_override — per_type_enum_values populated', () => {
+    const globals = new Map([
+      ['status', makeGlobal({ name: 'status', field_type: 'enum', enum_values: ['open', 'closed'], overrides_allowed: { required: false, default_value: false, enum_values: true } })],
+    ]);
+    const claims = new Map([
+      ['task', [makeClaim({ schema_name: 'task', field: 'status', enum_values_override: ['open', 'in_progress', 'closed'] })]],
+    ]);
+
+    const result = mergeFieldClaims(['task'], claims, globals);
+
+    expect(result.ok).toBe(true);
+    if (!result.ok) return;
+    const ef = result.effective_fields.get('status')!;
+    expect(ef.per_type_enum_values).toEqual([
+      { type: 'task', values: ['open', 'in_progress', 'closed'] },
+    ]);
+  });
+
+  it('multi-type with different enum overrides — each type gets its values', () => {
+    const globals = new Map([
+      ['status', makeGlobal({ name: 'status', field_type: 'enum', enum_values: ['open', 'closed'], overrides_allowed: { required: false, default_value: false, enum_values: true } })],
+    ]);
+    const claims = new Map([
+      ['task', [makeClaim({ schema_name: 'task', field: 'status', enum_values_override: ['open', 'in_progress', 'closed'] })]],
+      ['project', [makeClaim({ schema_name: 'project', field: 'status', enum_values_override: ['active', 'archived'] })]],
+    ]);
+
+    const result = mergeFieldClaims(['task', 'project'], claims, globals);
+
+    expect(result.ok).toBe(true);
+    if (!result.ok) return;
+    const ef = result.effective_fields.get('status')!;
+    expect(ef.per_type_enum_values).toEqual([
+      { type: 'task', values: ['open', 'in_progress', 'closed'] },
+      { type: 'project', values: ['active', 'archived'] },
+    ]);
+  });
+
+  it('mixed enum overrides — one type overrides, one inherits global', () => {
+    const globals = new Map([
+      ['status', makeGlobal({ name: 'status', field_type: 'enum', enum_values: ['open', 'closed'], overrides_allowed: { required: false, default_value: false, enum_values: true } })],
+    ]);
+    const claims = new Map([
+      ['task', [makeClaim({ schema_name: 'task', field: 'status', enum_values_override: ['open', 'in_progress', 'closed'] })]],
+      ['note', [makeClaim({ schema_name: 'note', field: 'status' })]],  // inherits global
+    ]);
+
+    const result = mergeFieldClaims(['task', 'note'], claims, globals);
+
+    expect(result.ok).toBe(true);
+    if (!result.ok) return;
+    const ef = result.effective_fields.get('status')!;
+    expect(ef.per_type_enum_values).toEqual([
+      { type: 'task', values: ['open', 'in_progress', 'closed'] },
+      { type: 'note', values: ['open', 'closed'] },  // inherits global enum_values
+    ]);
+  });
+
+  it('no enum overrides — per_type_enum_values is undefined', () => {
+    const globals = new Map([
+      ['status', makeGlobal({ name: 'status', field_type: 'enum', enum_values: ['open', 'closed'] })],
+    ]);
+    const claims = new Map([
+      ['task', [makeClaim({ schema_name: 'task', field: 'status' })]],
+      ['project', [makeClaim({ schema_name: 'project', field: 'status' })]],
+    ]);
+
+    const result = mergeFieldClaims(['task', 'project'], claims, globals);
+
+    expect(result.ok).toBe(true);
+    if (!result.ok) return;
+    const ef = result.effective_fields.get('status')!;
+    expect(ef.per_type_enum_values).toBeUndefined();
   });
 });

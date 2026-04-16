@@ -138,6 +138,9 @@ export function createSubprocessEmbedder(options: SubprocessEmbedderOptions): Em
     },
     async embedQuery(text: string): Promise<Float32Array> {
       const vectors = await sendRequest('search_query', text);
+      if (vectors.length === 0) {
+        throw new Error('Embedder worker returned zero vectors for query');
+      }
       return vectors[0];
     },
     isReady(): boolean {

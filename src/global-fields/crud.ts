@@ -15,7 +15,7 @@ export interface CreateGlobalFieldInput {
   default_value?: unknown;
   required?: boolean;
   list_item_type?: FieldType;
-  per_type_overrides_allowed?: boolean;
+  overrides_allowed?: { required?: boolean; default_value?: boolean; enum_values?: boolean };
 }
 
 export interface UpdateGlobalFieldInput {
@@ -26,7 +26,7 @@ export interface UpdateGlobalFieldInput {
   default_value?: unknown;
   required?: boolean;
   list_item_type?: FieldType;
-  per_type_overrides_allowed?: boolean;
+  overrides_allowed?: { required?: boolean; default_value?: boolean; enum_values?: boolean };
   confirm?: boolean;
 }
 
@@ -86,7 +86,9 @@ interface GlobalFieldRow {
   description: string | null;
   default_value: string | null;
   required: number;
-  per_type_overrides_allowed: number;
+  overrides_allowed_required: number;
+  overrides_allowed_default_value: number;
+  overrides_allowed_enum_values: number;
   list_item_type: string | null;
 }
 
@@ -99,7 +101,11 @@ function rowToDefinition(row: GlobalFieldRow): GlobalFieldDefinition {
     description: row.description,
     default_value: row.default_value !== null ? JSON.parse(row.default_value) : null,
     required: row.required === 1,
-    per_type_overrides_allowed: row.per_type_overrides_allowed === 1,
+    overrides_allowed: {
+      required: row.overrides_allowed_required === 1,
+      default_value: row.overrides_allowed_default_value === 1,
+      enum_values: row.overrides_allowed_enum_values === 1,
+    },
     list_item_type: row.list_item_type as FieldType | null,
   };
 }
@@ -151,8 +157,8 @@ export function createGlobalField(
 
   try {
     db.prepare(`
-      INSERT INTO global_fields (name, field_type, enum_values, reference_target, description, default_value, required, per_type_overrides_allowed, list_item_type)
-      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+      INSERT INTO global_fields (name, field_type, enum_values, reference_target, description, default_value, required, overrides_allowed_required, overrides_allowed_default_value, overrides_allowed_enum_values, list_item_type)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
     `).run(
       input.name,
       input.field_type,
@@ -161,7 +167,9 @@ export function createGlobalField(
       input.description ?? null,
       defaultValue,
       input.required ? 1 : 0,
-      input.per_type_overrides_allowed ? 1 : 0,
+      input.overrides_allowed?.required ? 1 : 0,
+      input.overrides_allowed?.default_value ? 1 : 0,
+      input.overrides_allowed?.enum_values ? 1 : 0,
       input.list_item_type ?? null,
     );
   } catch (err: unknown) {
@@ -232,9 +240,19 @@ export function updateGlobalField(
       updates.push('list_item_type = ?');
       params.push(input.list_item_type);
     }
-    if (input.per_type_overrides_allowed !== undefined) {
-      updates.push('per_type_overrides_allowed = ?');
-      params.push(input.per_type_overrides_allowed ? 1 : 0);
+    if (input.overrides_allowed !== undefined) {
+      if (input.overrides_allowed.required !== undefined) {
+        updates.push('overrides_allowed_required = ?');
+        params.push(input.overrides_allowed.required ? 1 : 0);
+      }
+      if (input.overrides_allowed.default_value !== undefined) {
+        updates.push('overrides_allowed_default_value = ?');
+        params.push(input.overrides_allowed.default_value ? 1 : 0);
+      }
+      if (input.overrides_allowed.enum_values !== undefined) {
+        updates.push('overrides_allowed_enum_values = ?');
+        params.push(input.overrides_allowed.enum_values ? 1 : 0);
+      }
     }
 
     if (updates.length > 0) {
@@ -373,8 +391,8 @@ export function renameGlobalField(
   const renameTx = db.transaction(() => {
     // 1. Insert new global_fields row first (so FK references can point to it)
     db.prepare(`
-      INSERT INTO global_fields (name, field_type, enum_values, reference_target, description, default_value, required, per_type_overrides_allowed, list_item_type)
-      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+      INSERT INTO global_fields (name, field_type, enum_values, reference_target, description, default_value, required, overrides_allowed_required, overrides_allowed_default_value, overrides_allowed_enum_values, list_item_type)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
     `).run(
       newName,
       current.field_type,
@@ -383,7 +401,9 @@ export function renameGlobalField(
       current.description,
       current.default_value !== null ? JSON.stringify(current.default_value) : null,
       current.required ? 1 : 0,
-      current.per_type_overrides_allowed ? 1 : 0,
+      current.overrides_allowed.required ? 1 : 0,
+      current.overrides_allowed.default_value ? 1 : 0,
+      current.overrides_allowed.enum_values ? 1 : 0,
       current.list_item_type,
     );
 

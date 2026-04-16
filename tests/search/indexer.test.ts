@@ -1,4 +1,7 @@
-import { describe, it, expect, beforeEach, vi } from 'vitest';
+import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
+import { mkdtempSync, writeFileSync, rmSync } from 'node:fs';
+import { join } from 'node:path';
+import { tmpdir } from 'node:os';
 import { createTestDb } from '../helpers/db.js';
 import { createEmbeddingIndexer, type EmbeddingIndexer } from '../../src/search/indexer.js';
 import type { Embedder } from '../../src/search/embedder.js';
@@ -500,5 +503,75 @@ describe('EmbeddingIndexer', () => {
 
       expect(indexer.queueSize()).toBe(0);
     });
+  });
+});
+
+function createFakeCache(byPath: Record<string, string>) {
+  return {
+    async getExtraction(filePath: string) {
+      const text = byPath[filePath];
+      if (!text) throw new Error(`no fake extraction for ${filePath}`);
+      return { text, mediaType: 'audio' as const };
+    },
+  };
+}
+
+describe('extraction embedding', () => {
+  let db: Database.Database;
+  let fakeEmbedder: ReturnType<typeof createFakeEmbedder>;
+  let vaultDir: string;
+
+  beforeEach(() => {
+    db = createTestDb();
+    fakeEmbedder = createFakeEmbedder();
+    vaultDir = mkdtempSync(join(tmpdir(), 'vault-idx-ext-'));
+  });
+
+  afterEach(() => {
+    rmSync(vaultDir, { recursive: true, force: true });
+  });
+
+  it('enqueuing a node discovers non-markdown embeds and enqueues extractions', async () => {
+    writeFileSync(join(vaultDir, 'audio.m4a'), 'fake audio bytes');
+    const cache = createFakeCache({ [join(vaultDir, 'audio.m4a')]: 'transcript here' });
+    const idx = createEmbeddingIndexer(db, fakeEmbedder, { extractionCache: cache as any, vaultPath: vaultDir });
+
+    insertNode(db, 'n1', 'With Audio', 'See transcript: ![[audio.m4a]]');
+    idx.enqueue({ node_id: 'n1', source_type: 'node' });
+
+    expect(idx.queueSize()).toBe(2);
+    await idx.processAll();
+
+    const extRows = db.prepare(
+      "SELECT extraction_ref FROM embedding_meta WHERE node_id = 'n1' AND source_type = 'extraction'"
+    ).all() as { extraction_ref: string }[];
+    expect(extRows.length).toBe(1);
+    expect(extRows[0].extraction_ref).toBe('audio.m4a');
+  });
+
+  it('does NOT enqueue extraction items for markdown embeds', async () => {
+    insertNode(db, 'n2', 'Other Note', 'stuff');
+    const cache = createFakeCache({});
+    const idx = createEmbeddingIndexer(db, fakeEmbedder, { extractionCache: cache as any, vaultPath: vaultDir });
+
+    insertNode(db, 'n1', 'Parent', 'See: ![[Other Note]]');
+    idx.enqueue({ node_id: 'n1', source_type: 'node' });
+
+    expect(idx.queueSize()).toBe(1);
+  });
+
+  it('extraction item is skipped on second run when text hash unchanged', async () => {
+    writeFileSync(join(vaultDir, 'audio.m4a'), 'x');
+    const cache = createFakeCache({ [join(vaultDir, 'audio.m4a')]: 'stable text' });
+    const idx = createEmbeddingIndexer(db, fakeEmbedder, { extractionCache: cache as any, vaultPath: vaultDir });
+    insertNode(db, 'n1', 'With Audio', '![[audio.m4a]]');
+
+    idx.enqueue({ node_id: 'n1', source_type: 'node' });
+    await idx.processAll();
+    const firstCalls = fakeEmbedder.callCount;
+
+    idx.enqueue({ node_id: 'n1', source_type: 'node' });
+    await idx.processAll();
+    expect(fakeEmbedder.callCount).toBe(firstCalls);
   });
 });

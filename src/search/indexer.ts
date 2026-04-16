@@ -3,6 +3,9 @@ import type Database from 'better-sqlite3';
 import type { Statement } from 'better-sqlite3';
 import type { EmbeddingQueueItem, SearchIndexStatus } from './types.js';
 import type { Embedder } from './embedder.js';
+import { resolveEmbedRef } from '../extraction/resolve.js';
+import type { ExtractionCache } from '../extraction/cache.js';
+import { parseEmbedReferences } from '../extraction/assembler.js';
 
 export interface EmbeddingIndexer {
   enqueue(item: EmbeddingQueueItem): void;
@@ -30,9 +33,15 @@ interface CountRow {
   cnt: number;
 }
 
+export interface EmbeddingIndexerDeps {
+  extractionCache?: ExtractionCache;
+  vaultPath?: string;
+}
+
 export function createEmbeddingIndexer(
   db: Database.Database,
-  embedder: Embedder
+  embedder: Embedder,
+  deps?: EmbeddingIndexerDeps
 ): EmbeddingIndexer {
   // Prepared statements created once in closure
   const stmtGetNode = db.prepare<[string], NodeRow>(
@@ -131,6 +140,12 @@ export function createEmbeddingIndexer(
     return `${item.node_id}::${item.source_type}::${item.extraction_ref ?? ''}`;
   }
 
+  function isLikelyMarkdownRef(ref: string): boolean {
+    const dot = ref.lastIndexOf('.');
+    if (dot === -1) return true; // no extension → treat as md
+    return ref.slice(dot).toLowerCase() === '.md';
+  }
+
   function assembleContent(nodeId: string): string {
     const node = stmtGetNode.get(nodeId);
     if (!node) return '';
@@ -154,9 +169,27 @@ export function createEmbeddingIndexer(
 
   function enqueue(item: EmbeddingQueueItem): void {
     const key = itemKey(item);
-    const alreadyQueued = queue.some(q => itemKey(q) === key);
-    if (!alreadyQueued) {
+    if (!queue.some(q => itemKey(q) === key)) {
       queue.push(item);
+    }
+
+    if (item.source_type === 'node' && deps?.extractionCache && deps?.vaultPath) {
+      const row = stmtGetNode.get(item.node_id);
+      if (row && row.body) {
+        const refs = parseEmbedReferences(row.body);
+        for (const ref of refs) {
+          if (isLikelyMarkdownRef(ref)) continue;
+          const extractionItem: EmbeddingQueueItem = {
+            node_id: item.node_id,
+            source_type: 'extraction',
+            extraction_ref: ref,
+          };
+          const extKey = itemKey(extractionItem);
+          if (!queue.some(q => itemKey(q) === extKey)) {
+            queue.push(extractionItem);
+          }
+        }
+      }
     }
   }
 
@@ -177,6 +210,35 @@ export function createEmbeddingIndexer(
         const now = new Date().toISOString();
 
         writeGroup(item.node_id, item.source_type, extractionRef, hash, vectors, now);
+      }
+
+      if (item.source_type === 'extraction') {
+        if (!deps?.extractionCache || !deps?.vaultPath || !item.extraction_ref) {
+          return true;
+        }
+
+        // resolveEmbedRef may throw on path traversal (safeVaultPath guard). Treat
+        // traversal attempts the same as unresolvable refs — silently no-op.
+        let resolved: Awaited<ReturnType<typeof resolveEmbedRef>> = null;
+        try {
+          resolved = await resolveEmbedRef(db, deps.vaultPath, item.extraction_ref);
+        } catch {
+          return true;
+        }
+        if (!resolved || resolved.isMarkdown) return true;
+
+        const extraction = await deps.extractionCache.getExtraction(resolved.filePath);
+        const text = extraction.text ?? '';
+        if (text.length === 0) return true;
+
+        const hash = createHash('sha256').update(text).digest('hex');
+        const extractionRef = item.extraction_ref;
+        const existing = stmtGetAnyHashForGroup.get(item.node_id, 'extraction', extractionRef);
+        if (existing && existing.source_hash === hash) return true;
+
+        const vectors = await embedder.embedDocument(text);
+        const now = new Date().toISOString();
+        writeGroup(item.node_id, 'extraction', extractionRef, hash, vectors, now);
       }
 
       return true;

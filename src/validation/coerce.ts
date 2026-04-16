@@ -171,7 +171,7 @@ function levenshtein(a: string, b: string): number {
   return dp[m][n];
 }
 
-function closestMatches(value: string, candidates: string[], max = 3): string[] {
+export function closestMatches(value: string, candidates: string[], max = 3): string[] {
   const lower = value.toLowerCase();
   const maxInputDist = Math.max(2, Math.ceil(0.4 * lower.length));
   return candidates

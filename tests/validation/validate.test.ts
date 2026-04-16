@@ -19,7 +19,7 @@ function gf(overrides: Partial<GlobalFieldDefinition> & { name: string }): Globa
     description: null,
     default_value: null,
     required: false,
-    per_type_overrides_allowed: false,
+    overrides_allowed: { required: false, default_value: false, enum_values: false },
     list_item_type: null,
     ...overrides,
   };
@@ -30,8 +30,9 @@ function claim(overrides: Partial<FieldClaim> & { schema_name: string; field: st
     label: null,
     description: null,
     sort_order: 1000,
-    required: null,
-    default_value: null,
+    required_override: null,
+    default_value_override: { kind: 'inherit' },
+    enum_values_override: null,
     ...overrides,
   };
 }
@@ -236,18 +237,18 @@ describe('validateProposedState', () => {
     expect(result.orphan_fields).toContain('custom_tag');
   });
 
-  it('no bail on merge conflicts — merge conflict + missing required field both reported', () => {
+  it('required cancellation — disagreeing required overrides cancel to global default', () => {
     const globals = new Map([
-      ['status', gf({ name: 'status', per_type_overrides_allowed: true })],
+      ['status', gf({ name: 'status', overrides_allowed: { required: true, default_value: true, enum_values: true } })],
       ['title', gf({ name: 'title', required: true })],
     ]);
     const claims = new Map([
       ['task', [
-        claim({ schema_name: 'task', field: 'status', required: true }),
+        claim({ schema_name: 'task', field: 'status', required_override: true }),
         claim({ schema_name: 'task', field: 'title' }),
       ]],
       ['note', [
-        claim({ schema_name: 'note', field: 'status', required: false }),
+        claim({ schema_name: 'note', field: 'status', required_override: false }),
         claim({ schema_name: 'note', field: 'title' }),
       ]],
     ]);
@@ -259,11 +260,13 @@ describe('validateProposedState', () => {
       globals,
     );
 
+    // status: required overrides disagree, cancels to global required=false, so missing is fine
+    // title: globally required, no value → REQUIRED_MISSING
     expect(result.valid).toBe(false);
     const codes = result.issues.map(i => i.code);
-    expect(codes).toContain('MERGE_CONFLICT');
     expect(codes).toContain('REQUIRED_MISSING');
-    expect(result.issues.length).toBeGreaterThanOrEqual(2);
+    expect(result.issues).toHaveLength(1);
+    expect(result.issues[0].field).toBe('title');
   });
 
   it('all-schemaless — unknown types, all fields become orphans', () => {
@@ -284,15 +287,15 @@ describe('validateProposedState', () => {
     expect(result.coerced_state.count.source).toBe('orphan');
   });
 
-  // ── Merge-conflict recovery (Phase 3) ────────────────────────────────
+  // ── Cancellation semantics (required/default override conflicts) ──────
 
-  it('merge conflict with provided value — value validated against global field and included in coerced_state', () => {
+  it('cancellation — disagreeing required overrides cancel to global, provided value still coerced', () => {
     const globals = new Map([
-      ['status', gf({ name: 'status', field_type: 'enum', enum_values: ['open', 'closed'], per_type_overrides_allowed: true })],
+      ['status', gf({ name: 'status', field_type: 'enum', enum_values: ['open', 'closed'], overrides_allowed: { required: true, default_value: true, enum_values: true } })],
     ]);
     const claims = new Map([
-      ['task', [claim({ schema_name: 'task', field: 'status', required: true })]],
-      ['project', [claim({ schema_name: 'project', field: 'status', required: false })]],
+      ['task', [claim({ schema_name: 'task', field: 'status', required_override: true })]],
+      ['project', [claim({ schema_name: 'project', field: 'status', required_override: false })]],
     ]);
 
     const result = validateProposedState(
@@ -302,22 +305,21 @@ describe('validateProposedState', () => {
       globals,
     );
 
-    // Still not valid (MERGE_CONFLICT is error-severity), but value is in coerced_state
-    expect(result.valid).toBe(false);
+    // Cancellation: required disagrees, falls back to global required=false. Value is valid.
+    expect(result.valid).toBe(true);
     expect(result.coerced_state.status).toBeDefined();
     expect(result.coerced_state.status.value).toBe('open');
     expect(result.coerced_state.status.source).toBe('provided');
     expect(result.coerced_state.status.changed).toBe(false);
-    expect(result.issues.some(i => i.code === 'MERGE_CONFLICT')).toBe(true);
   });
 
-  it('merge conflict with provided value that needs coercion — coerced value in coerced_state', () => {
+  it('cancellation — coercion applied on field with cancelled required overrides', () => {
     const globals = new Map([
-      ['status', gf({ name: 'status', field_type: 'enum', enum_values: ['open', 'closed'], per_type_overrides_allowed: true })],
+      ['status', gf({ name: 'status', field_type: 'enum', enum_values: ['open', 'closed'], overrides_allowed: { required: true, default_value: true, enum_values: true } })],
     ]);
     const claims = new Map([
-      ['task', [claim({ schema_name: 'task', field: 'status', required: true })]],
-      ['project', [claim({ schema_name: 'project', field: 'status', required: false })]],
+      ['task', [claim({ schema_name: 'task', field: 'status', required_override: true })]],
+      ['project', [claim({ schema_name: 'project', field: 'status', required_override: false })]],
     ]);
 
     const result = validateProposedState(
@@ -333,13 +335,13 @@ describe('validateProposedState', () => {
     expect(result.coerced_state.status.original).toBe('OPEN');
   });
 
-  it('merge conflict with invalid provided value — TYPE_MISMATCH alongside MERGE_CONFLICT', () => {
+  it('cancellation — invalid value on cancelled-required field reports TYPE_MISMATCH', () => {
     const globals = new Map([
-      ['priority', gf({ name: 'priority', field_type: 'number', per_type_overrides_allowed: true })],
+      ['priority', gf({ name: 'priority', field_type: 'number', overrides_allowed: { required: true, default_value: true, enum_values: true } })],
     ]);
     const claims = new Map([
-      ['task', [claim({ schema_name: 'task', field: 'priority', required: true })]],
-      ['project', [claim({ schema_name: 'project', field: 'priority', required: false })]],
+      ['task', [claim({ schema_name: 'task', field: 'priority', required_override: true })]],
+      ['project', [claim({ schema_name: 'project', field: 'priority', required_override: false })]],
     ]);
 
     const result = validateProposedState(
@@ -351,18 +353,17 @@ describe('validateProposedState', () => {
 
     expect(result.valid).toBe(false);
     const codes = result.issues.map(i => i.code);
-    expect(codes).toContain('MERGE_CONFLICT');
     expect(codes).toContain('TYPE_MISMATCH');
     expect(result.coerced_state.priority).toBeUndefined();
   });
 
-  it('merge conflict without provided value — field omitted from coerced_state', () => {
+  it('cancellation — missing field with cancelled required is fine (global required=false)', () => {
     const globals = new Map([
-      ['status', gf({ name: 'status', per_type_overrides_allowed: true })],
+      ['status', gf({ name: 'status', overrides_allowed: { required: true, default_value: true, enum_values: true } })],
     ]);
     const claims = new Map([
-      ['task', [claim({ schema_name: 'task', field: 'status', required: true })]],
-      ['project', [claim({ schema_name: 'project', field: 'status', required: false })]],
+      ['task', [claim({ schema_name: 'task', field: 'status', required_override: true })]],
+      ['project', [claim({ schema_name: 'project', field: 'status', required_override: false })]],
     ]);
 
     const result = validateProposedState(
@@ -372,18 +373,18 @@ describe('validateProposedState', () => {
       globals,
     );
 
-    expect(result.valid).toBe(false);
+    // global required=false, overrides cancel → not required → valid
+    expect(result.valid).toBe(true);
     expect(result.coerced_state.status).toBeUndefined();
-    expect(result.issues.some(i => i.code === 'MERGE_CONFLICT')).toBe(true);
   });
 
-  it('Case 4: required agrees, default conflicts, no value — both REQUIRED_MISSING and MERGE_CONFLICT', () => {
+  it('cancellation — default conflicts cancel to global, required+no-default → REQUIRED_MISSING', () => {
     const globals = new Map([
-      ['status', gf({ name: 'status', required: true, per_type_overrides_allowed: true })],
+      ['status', gf({ name: 'status', required: true, overrides_allowed: { required: true, default_value: true, enum_values: true } })],
     ]);
     const claims = new Map([
-      ['task', [claim({ schema_name: 'task', field: 'status', default_value: 'open' })]],
-      ['project', [claim({ schema_name: 'project', field: 'status', default_value: 'active' })]],
+      ['task', [claim({ schema_name: 'task', field: 'status', default_value_override: { kind: 'override', value: 'open' } })]],
+      ['project', [claim({ schema_name: 'project', field: 'status', default_value_override: { kind: 'override', value: 'active' } })]],
     ]);
 
     const result = validateProposedState(
@@ -393,20 +394,20 @@ describe('validateProposedState', () => {
       globals,
     );
 
+    // Defaults cancel to global default (null). Required=true + no default → REQUIRED_MISSING
     expect(result.valid).toBe(false);
     const codes = result.issues.map(i => i.code);
-    expect(codes).toContain('MERGE_CONFLICT');
     expect(codes).toContain('REQUIRED_MISSING');
     expect(result.coerced_state.status).toBeUndefined();
   });
 
-  it('merge conflict with null value — field omitted, no error', () => {
+  it('cancellation — null on cancelled-required field is deletion intent, no error', () => {
     const globals = new Map([
-      ['status', gf({ name: 'status', per_type_overrides_allowed: true })],
+      ['status', gf({ name: 'status', overrides_allowed: { required: true, default_value: true, enum_values: true } })],
     ]);
     const claims = new Map([
-      ['task', [claim({ schema_name: 'task', field: 'status', required: true })]],
-      ['project', [claim({ schema_name: 'project', field: 'status', required: false })]],
+      ['task', [claim({ schema_name: 'task', field: 'status', required_override: true })]],
+      ['project', [claim({ schema_name: 'project', field: 'status', required_override: false })]],
     ]);
 
     const result = validateProposedState(
@@ -416,19 +417,19 @@ describe('validateProposedState', () => {
       globals,
     );
 
-    // null is deletion intent — field excluded
+    // null is deletion intent — field excluded, not required after cancellation
+    expect(result.valid).toBe(true);
     expect(result.coerced_state.status).toBeUndefined();
-    // MERGE_CONFLICT still reported
-    expect(result.issues.some(i => i.code === 'MERGE_CONFLICT')).toBe(true);
+    expect(result.issues).toHaveLength(0);
   });
 
-  it('conflicted field is not classified as orphan', () => {
+  it('multi-type claimed field is not classified as orphan', () => {
     const globals = new Map([
-      ['status', gf({ name: 'status', per_type_overrides_allowed: true })],
+      ['status', gf({ name: 'status', overrides_allowed: { required: true, default_value: true, enum_values: true } })],
     ]);
     const claims = new Map([
-      ['task', [claim({ schema_name: 'task', field: 'status', required: true })]],
-      ['project', [claim({ schema_name: 'project', field: 'status', required: false })]],
+      ['task', [claim({ schema_name: 'task', field: 'status', required_override: true })]],
+      ['project', [claim({ schema_name: 'project', field: 'status', required_override: false })]],
     ]);
 
     const result = validateProposedState(
@@ -654,13 +655,13 @@ describe('validateProposedState', () => {
     expect(details.closest_match).toBe('normal');
   });
 
-  it('ENUM_MISMATCH on conflicted field — same enriched details', () => {
+  it('ENUM_MISMATCH on multi-type field — enriched details', () => {
     const globals = new Map([
-      ['status', gf({ name: 'status', field_type: 'enum', enum_values: ['open', 'closed'], per_type_overrides_allowed: true })],
+      ['status', gf({ name: 'status', field_type: 'enum', enum_values: ['open', 'closed'], overrides_allowed: { required: true, default_value: true, enum_values: true } })],
     ]);
     const claims = new Map([
-      ['task', [claim({ schema_name: 'task', field: 'status', required: true })]],
-      ['project', [claim({ schema_name: 'project', field: 'status', required: false })]],
+      ['task', [claim({ schema_name: 'task', field: 'status', required_override: true })]],
+      ['project', [claim({ schema_name: 'project', field: 'status', required_override: false })]],
     ]);
 
     const result = validateProposedState(

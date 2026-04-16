@@ -170,4 +170,35 @@ describe('hybridSearch', () => {
       expect(hit.match_sources).toContain('semantic');
     }
   });
+
+  it('annotates matched_chunk_index with the highest-scoring chunk per node', async () => {
+    const localDb = createTestDb();
+    // Seed node n1 with two chunk vectors.
+    localDb.prepare("INSERT INTO nodes (id, file_path, title, body) VALUES ('n1', 'n1.md', 'N1', 'b')").run();
+    localDb.prepare("INSERT INTO nodes_fts (rowid, title, body) VALUES ((SELECT rowid FROM nodes WHERE id = 'n1'), 'N1', 'b')").run();
+
+    // chunk 0 far from query (negative direction); chunk 1 close to query.
+    const vFar = new Float32Array(256); vFar[0] = -1;
+    const vClose = new Float32Array(256); vClose[0] = 1;
+    const insertMeta = localDb.prepare(
+      "INSERT INTO embedding_meta (node_id, source_type, source_hash, chunk_index, extraction_ref, embedded_at) VALUES (?, 'node', 'h', ?, NULL, ?)"
+    );
+    const insertVec = localDb.prepare('INSERT INTO embedding_vec (id, vector) VALUES (?, ?)');
+
+    const m0 = insertMeta.run('n1', 0, new Date().toISOString());
+    insertVec.run(BigInt(m0.lastInsertRowid), new Uint8Array(vFar.buffer, vFar.byteOffset, vFar.byteLength));
+    const m1 = insertMeta.run('n1', 1, new Date().toISOString());
+    insertVec.run(BigInt(m1.lastInsertRowid), new Uint8Array(vClose.buffer, vClose.byteOffset, vClose.byteLength));
+
+    const queryEmbedder: Embedder = {
+      async embedDocument() { return [new Float32Array(256)]; },
+      async embedQuery() { const v = new Float32Array(256); v[0] = 1; return v; },
+      isReady: () => true,
+    };
+
+    const results = await hybridSearch(localDb, queryEmbedder, 'b', {});
+    const n1 = results.find(h => h.node_id === 'n1');
+    expect(n1).toBeDefined();
+    expect(n1!.matched_chunk_index).toBe(1);
+  });
 });

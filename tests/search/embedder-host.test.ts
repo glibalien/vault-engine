@@ -94,7 +94,7 @@ describeIfModel('SubprocessEmbedder (integration)', () => {
 
   it('chunks long documents into multiple vectors', async () => {
     embedder = createSubprocessEmbedder({ modelsDir, workerPath, idleTimeoutMs: 60_000 });
-    // ~45K chars ≈ ~11K tokens → must chunk (Nomic limit 8192).
+    // ~45K chars ≈ ~11K tokens → must chunk (worker caps at MAX_TOKENS=2048).
     const longText = Array.from({ length: 300 }, (_, i) =>
       `## Section ${i}\nThis is paragraph ${i}. ` + 'word '.repeat(30)
     ).join('\n\n');

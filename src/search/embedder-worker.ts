@@ -11,7 +11,12 @@ import type { WorkerRequest, WorkerMessage } from './embedder-protocol.js';
 
 const MODEL_ID = 'nomic-ai/nomic-embed-text-v1.5';
 const DIMENSIONS = 256;
-const MAX_TOKENS = 8192;
+// Nomic supports 8192 but ONNX Runtime's memory arena sizes to the largest
+// tensor shape it's seen and doesn't shrink — one 8k-token embed alone bloated
+// RSS by ~6GB. Cap well below the model window so peak arena stays bounded.
+// Also better retrieval quality: mean-pooled long-context vectors blur topical
+// specificity vs. smaller chunks.
+const MAX_TOKENS = 2048;
 const OVERLAP_TOKENS = 128;
 // Headroom for the "search_document: " / "search_query: " prefix (~4 BPE tokens)
 // plus the [CLS]/[SEP] specials re-added on re-tokenization. 32 tokens is
@@ -57,6 +62,9 @@ async function main(): Promise<void> {
 
   send({ type: 'ready' });
 
+  let lastRss = process.memoryUsage().rss;
+  let embedsServed = 0;
+
   process.on('message', async (msg: WorkerRequest) => {
     if (msg.type === 'shutdown') {
       process.exit(0);
@@ -65,9 +73,10 @@ async function main(): Promise<void> {
     if (msg.type === 'embed') {
       try {
         const prefixed = `${msg.prefix}: ${msg.text}`;
+        const totalTokens = tokenCount(prefixed);
         const vectors: number[][] = [];
 
-        if (tokenCount(prefixed) <= MAX_TOKENS) {
+        if (totalTokens <= MAX_TOKENS) {
           vectors.push(await embedOne(prefixed));
         } else {
           // Chunk unprefixed text, then re-apply the prefix per chunk.
@@ -81,6 +90,15 @@ async function main(): Promise<void> {
             vectors.push(await embedOne(`${msg.prefix}: ${chunk}`));
           }
         }
+
+        embedsServed++;
+        const currentRss = process.memoryUsage().rss;
+        const rssMb = (currentRss / 1024 / 1024).toFixed(0);
+        const deltaMb = ((currentRss - lastRss) / 1024 / 1024).toFixed(1);
+        lastRss = currentRss;
+        console.log(
+          `[embedder-worker] #${embedsServed} chars=${msg.text.length} tokens=${totalTokens} chunks=${vectors.length} rss=${rssMb}MB Δ=${deltaMb}MB`
+        );
 
         send({ type: 'embed-result', requestId: msg.requestId, vectors });
       } catch (err) {

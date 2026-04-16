@@ -13,6 +13,10 @@ const MODEL_ID = 'nomic-ai/nomic-embed-text-v1.5';
 const DIMENSIONS = 256;
 const MAX_TOKENS = 8192;
 const OVERLAP_TOKENS = 128;
+// Headroom for the "search_document: " / "search_query: " prefix (~4 BPE tokens)
+// plus the [CLS]/[SEP] specials re-added on re-tokenization. 32 tokens is
+// comfortable for any prefix + pathological BPE splits.
+const PREFIX_HEADROOM_TOKENS = 32;
 
 async function main(): Promise<void> {
   const modelsDir = process.argv[2];
@@ -32,8 +36,12 @@ async function main(): Promise<void> {
   env.allowRemoteModels = false;
 
   function tokenCount(text: string): number {
-    const dims = extractor.tokenizer(text).input_ids.dims as number[];
-    return dims[1] ?? 0;
+    const ids = extractor.tokenizer(text).input_ids as { dims?: number[] };
+    const dims = ids.dims;
+    if (!dims || dims.length < 2) {
+      throw new Error(`Unexpected tokenizer output shape: ${JSON.stringify(dims)}`);
+    }
+    return dims[1];
   }
 
   async function embedOne(text: string): Promise<number[]> {
@@ -67,7 +75,7 @@ async function main(): Promise<void> {
           const chunks = chunkForEmbedding(
             msg.text,
             tokenCount,
-            { maxTokens: MAX_TOKENS - 16, overlapTokens: OVERLAP_TOKENS },
+            { maxTokens: MAX_TOKENS - PREFIX_HEADROOM_TOKENS, overlapTokens: OVERLAP_TOKENS },
           );
           for (const chunk of chunks) {
             vectors.push(await embedOne(`${msg.prefix}: ${chunk}`));

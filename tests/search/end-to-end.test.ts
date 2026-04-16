@@ -7,7 +7,7 @@ import type Database from 'better-sqlite3';
 
 function makeFakeEmbedder(): Embedder {
   return {
-    async embedDocument(text: string): Promise<Float32Array> {
+    async embedDocument(text: string): Promise<Float32Array[]> {
       const vec = new Float32Array(256).fill(0);
       const words = text.toLowerCase().split(/\s+/);
       for (let i = 0; i < Math.min(words.length, 256); i++) {
@@ -17,10 +17,11 @@ function makeFakeEmbedder(): Embedder {
       for (let i = 0; i < 256; i++) norm += vec[i] * vec[i];
       norm = Math.sqrt(norm);
       if (norm > 0) for (let i = 0; i < 256; i++) vec[i] /= norm;
-      return vec;
+      return [vec];
     },
     async embedQuery(text: string): Promise<Float32Array> {
-      return this.embedDocument(text);
+      const [vec] = await this.embedDocument(text);
+      return vec;
     },
     isReady(): boolean { return true; },
   };

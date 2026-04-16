@@ -20,11 +20,11 @@ export interface ReadyMessage {
   type: 'ready';
 }
 
-/** Child → parent: embedding result */
+/** Child → parent: embedding result. Returns one vector per chunk. */
 export interface EmbedResponse {
   type: 'embed-result';
   requestId: string;
-  vector: number[]; // Float32 values serialized as JSON array
+  vectors: number[][]; // Float32 values serialized as JSON arrays, one per chunk
 }
 
 /** Child → parent: embedding error */

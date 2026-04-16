@@ -34,10 +34,12 @@ describeIfModel('SubprocessEmbedder (integration)', () => {
 
   it('embeds a document via subprocess', async () => {
     embedder = createSubprocessEmbedder({ modelsDir, workerPath, idleTimeoutMs: 60_000 });
-    const vec = await embedder.embedDocument('Hello world');
+    const vectors = await embedder.embedDocument('Hello world');
+    expect(Array.isArray(vectors)).toBe(true);
+    expect(vectors.length).toBe(1);
+    const [vec] = vectors;
     expect(vec).toBeInstanceOf(Float32Array);
     expect(vec.length).toBe(256);
-    // Vector should have a positive magnitude (nonzero)
     const magnitude = Math.sqrt(vec.reduce((sum, v) => sum + v * v, 0));
     expect(magnitude).toBeGreaterThan(0);
   }, 30_000);
@@ -56,21 +58,21 @@ describeIfModel('SubprocessEmbedder (integration)', () => {
       embedder.embedDocument('second'),
       embedder.embedQuery('third'),
     ]);
-    expect(a.length).toBe(256);
-    expect(b.length).toBe(256);
-    expect(c.length).toBe(256);
+    expect(a[0].length).toBe(256);
+    expect(b[0].length).toBe(256);
+    expect(c.length).toBe(256); // embedQuery still returns a single Float32Array
   }, 30_000);
 
   it('respawns after shutdown', async () => {
     embedder = createSubprocessEmbedder({ modelsDir, workerPath, idleTimeoutMs: 60_000 });
     const v1 = await embedder.embedDocument('before shutdown');
-    expect(v1.length).toBe(256);
+    expect(v1[0].length).toBe(256);
 
     await embedder.shutdown();
 
     // Should respawn transparently on next request
     const v2 = await embedder.embedDocument('after shutdown');
-    expect(v2.length).toBe(256);
+    expect(v2[0].length).toBe(256);
   }, 60_000);
 
   it('isReady() returns true before and after spawning', () => {
@@ -86,7 +88,7 @@ describeIfModel('SubprocessEmbedder (integration)', () => {
     await new Promise(r => setTimeout(r, 2_000));
 
     // Next request should still work (respawns)
-    const vec = await embedder.embedDocument('after idle');
-    expect(vec.length).toBe(256);
+    const vectors = await embedder.embedDocument('after idle');
+    expect(vectors[0].length).toBe(256);
   }, 60_000);
 });

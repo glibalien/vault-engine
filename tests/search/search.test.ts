@@ -8,14 +8,14 @@ import type Database from 'better-sqlite3';
 // Fake embedder with deterministic vectors based on node ID seed
 function createFakeEmbedder(seedMap: Record<string, number> = {}): Embedder {
   return {
-    async embedDocument(text: string): Promise<Float32Array> {
+    async embedDocument(text: string): Promise<Float32Array[]> {
       const arr = new Float32Array(256);
       // Use text length as seed for deterministic but unique vectors
       const seed = seedMap[text] ?? text.length;
       for (let i = 0; i < 256; i++) {
         arr[i] = (seed % 100) / 100 + i * 0.001;
       }
-      return arr;
+      return [arr];
     },
     async embedQuery(text: string): Promise<Float32Array> {
       // Return a vector that matches what "node1" content would produce

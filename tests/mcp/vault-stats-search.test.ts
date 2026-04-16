@@ -7,8 +7,8 @@ import { registerVaultStats } from '../../src/mcp/tools/vault-stats.js';
 
 function makeFakeEmbedder(): Embedder {
   return {
-    async embedDocument(): Promise<Float32Array> {
-      return new Float32Array(256).fill(0.1);
+    async embedDocument(): Promise<Float32Array[]> {
+      return [new Float32Array(256).fill(0.1)];
     },
     async embedQuery(): Promise<Float32Array> {
       return new Float32Array(256).fill(0.1);

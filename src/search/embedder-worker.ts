@@ -48,7 +48,7 @@ async function main(): Promise<void> {
         send({
           type: 'embed-result',
           requestId: msg.requestId,
-          vector: Array.from(slice),
+          vectors: [Array.from(slice)],
         });
       } catch (err) {
         send({

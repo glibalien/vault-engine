@@ -157,7 +157,7 @@ export function createEmbeddingIndexer(
 
         // Embed the content
         const content = assembleContent(item.node_id);
-        const vector = await embedder.embedDocument(content);
+        const [vector] = await embedder.embedDocument(content);
         const vectorBytes = new Uint8Array(vector.buffer, vector.byteOffset, vector.byteLength);
         const now = new Date().toISOString();
 

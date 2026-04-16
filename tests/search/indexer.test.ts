@@ -12,7 +12,7 @@ function createFakeEmbedder(): Embedder & { callCount: number; lastText: string 
   return {
     get callCount() { return callCount; },
     get lastText() { return lastText; },
-    async embedDocument(text: string): Promise<Float32Array> {
+    async embedDocument(text: string): Promise<Float32Array[]> {
       callCount++;
       lastText = text;
       // Return deterministic vector based on text length
@@ -20,7 +20,7 @@ function createFakeEmbedder(): Embedder & { callCount: number; lastText: string 
       for (let i = 0; i < 256; i++) {
         arr[i] = (text.length % 100) / 100 + i * 0.001;
       }
-      return arr;
+      return [arr];
     },
     async embedQuery(text: string): Promise<Float32Array> {
       return new Float32Array(256).fill(0.5);
@@ -323,7 +323,7 @@ describe('EmbeddingIndexer', () => {
 
       return {
         get callCount() { return callCount; },
-        async embedDocument(text: string): Promise<Float32Array> {
+        async embedDocument(text: string): Promise<Float32Array[]> {
           callCount++;
           if (callCount <= failCount) {
             throw new Error(`Simulated embedding failure (call ${callCount})`);
@@ -332,7 +332,7 @@ describe('EmbeddingIndexer', () => {
           for (let i = 0; i < 256; i++) {
             arr[i] = (text.length % 100) / 100 + i * 0.001;
           }
-          return arr;
+          return [arr];
         },
         async embedQuery(_text: string): Promise<Float32Array> {
           return new Float32Array(256).fill(0.5);

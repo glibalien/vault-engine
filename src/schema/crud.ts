@@ -18,8 +18,10 @@ export interface ClaimInput {
   label?: string;
   description?: string;
   sort_order?: number;
-  required?: boolean;
-  default_value?: unknown;
+  required?: boolean;                        // maps to required_override column
+  default_value?: unknown;                   // maps to default_value_override column
+  default_value_overridden?: boolean;        // true when default_value key is present (even if null)
+  enum_values_override?: string[];           // maps to enum_values_override column
 }
 
 export interface CreateSchemaInput {
@@ -67,13 +69,17 @@ function rowToDefinition(row: SchemaRow): SchemaDefinition {
 
 interface GlobalFieldRow {
   name: string;
-  per_type_overrides_allowed: number;
+  field_type: string;
+  list_item_type: string | null;
+  overrides_allowed_required: number;
+  overrides_allowed_default_value: number;
+  overrides_allowed_enum_values: number;
 }
 
 function validateClaims(db: Database.Database, claims: ClaimInput[]): void {
   for (const claim of claims) {
     const gf = db
-      .prepare(`SELECT name, per_type_overrides_allowed FROM global_fields WHERE name = ?`)
+      .prepare(`SELECT name, field_type, list_item_type, overrides_allowed_required, overrides_allowed_default_value, overrides_allowed_enum_values FROM global_fields WHERE name = ?`)
       .get(claim.field) as GlobalFieldRow | undefined;
 
     if (!gf) {
@@ -82,12 +88,33 @@ function validateClaims(db: Database.Database, claims: ClaimInput[]): void {
       );
     }
 
-    const hasSemanticOverride = claim.required !== undefined || claim.default_value !== undefined;
-    if (hasSemanticOverride && gf.per_type_overrides_allowed !== 1) {
+    // Per-property override gating
+    if (claim.required !== undefined && gf.overrides_allowed_required !== 1) {
       throw new Error(
-        `Field '${claim.field}' does not allow per-type overrides. ` +
-          `Set per_type_overrides_allowed = true on the global field to use required or default_value on a claim.`,
+        `Field '${claim.field}' does not allow required overrides. Set overrides_allowed.required = true on the global field.`,
       );
+    }
+    if ((claim.default_value !== undefined || claim.default_value_overridden) && gf.overrides_allowed_default_value !== 1) {
+      throw new Error(
+        `Field '${claim.field}' does not allow default_value overrides. Set overrides_allowed.default_value = true on the global field.`,
+      );
+    }
+    if (claim.enum_values_override !== undefined && gf.overrides_allowed_enum_values !== 1) {
+      throw new Error(
+        `Field '${claim.field}' does not allow enum_values overrides. Set overrides_allowed.enum_values = true on the global field.`,
+      );
+    }
+
+    // Structural compatibility check for enum_values_override
+    if (claim.enum_values_override !== undefined) {
+      const isEnumCompatible =
+        gf.field_type === 'enum' ||
+        (gf.field_type === 'list' && gf.list_item_type === 'enum');
+      if (!isEnumCompatible) {
+        throw new Error(
+          `Field '${claim.field}' (${gf.field_type}${gf.list_item_type ? '<' + gf.list_item_type + '>' : ''}) is structurally incompatible with enum_values_override. Only enum and list<enum> fields support enum overrides.`,
+        );
+      }
     }
   }
 }
@@ -96,15 +123,23 @@ function validateClaims(db: Database.Database, claims: ClaimInput[]): void {
 
 function insertClaims(db: Database.Database, schemaName: string, claims: ClaimInput[]): void {
   const stmt = db.prepare(`
-    INSERT INTO schema_field_claims (schema_name, field, label, description, sort_order, required, default_value)
-    VALUES (?, ?, ?, ?, ?, ?, ?)
+    INSERT INTO schema_field_claims (schema_name, field, label, description, sort_order, required_override, default_value_override, default_value_overridden, enum_values_override)
+    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
   `);
 
   for (const claim of claims) {
     const requiredInt =
       claim.required === undefined ? null : claim.required ? 1 : 0;
-    const defaultValueJson =
-      claim.default_value !== undefined ? JSON.stringify(claim.default_value) : null;
+
+    // Discriminated union: default_value_overridden distinguishes inherit from override-to-null
+    const overridden = claim.default_value_overridden ?? (claim.default_value !== undefined);
+    const defaultValueJson = overridden
+      ? (claim.default_value !== undefined && claim.default_value !== null ? JSON.stringify(claim.default_value) : null)
+      : null;
+
+    const enumOverrideJson = claim.enum_values_override
+      ? JSON.stringify(claim.enum_values_override)
+      : null;
 
     stmt.run(
       schemaName,
@@ -114,6 +149,8 @@ function insertClaims(db: Database.Database, schemaName: string, claims: ClaimIn
       claim.sort_order ?? null,
       requiredInt,
       defaultValueJson,
+      overridden ? 1 : 0,
+      enumOverrideJson,
     );
   }
 }

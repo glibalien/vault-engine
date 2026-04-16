@@ -480,6 +480,29 @@ describe('EmbeddingIndexer', () => {
     });
   });
 
+  describe('removeNode (multi-chunk)', () => {
+    it('drops vec rows for all chunks of a deleted node', async () => {
+      db = createTestDb();
+      const multi = createMultiChunkEmbedder(3);
+      const idx = createEmbeddingIndexer(db, multi);
+      insertNode(db, 'n1', 'Title', 'body');
+      idx.enqueue({ node_id: 'n1', source_type: 'node' });
+      await idx.processAll();
+
+      // Before: 3 meta rows + 3 vec rows
+      expect((db.prepare("SELECT COUNT(*) as cnt FROM embedding_meta WHERE node_id = 'n1'").get() as any).cnt).toBe(3);
+
+      idx.removeNode('n1');
+
+      // After: 0 meta rows + 0 vec rows
+      expect((db.prepare("SELECT COUNT(*) as cnt FROM embedding_meta WHERE node_id = 'n1'").get() as any).cnt).toBe(0);
+      const vecCnt = (db.prepare(
+        "SELECT COUNT(*) as cnt FROM embedding_vec WHERE id IN (SELECT id FROM embedding_meta WHERE node_id = 'n1')"
+      ).get() as any).cnt;
+      expect(vecCnt).toBe(0);
+    });
+  });
+
   describe('clearAll', () => {
     it('clears all embedding data and queue', async () => {
       insertNode(db, 'n1', 'Node 1');

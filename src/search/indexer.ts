@@ -1,6 +1,5 @@
 import { createHash } from 'node:crypto';
 import type Database from 'better-sqlite3';
-import type { Statement } from 'better-sqlite3';
 import type { EmbeddingQueueItem, SearchIndexStatus } from './types.js';
 import type { Embedder } from './embedder.js';
 import { resolveEmbedRef } from '../extraction/resolve.js';
@@ -93,6 +92,25 @@ export function createEmbeddingIndexer(
   const stmtClearVec = db.prepare<[], void>('DELETE FROM embedding_vec');
   const stmtClearMeta = db.prepare<[], void>('DELETE FROM embedding_meta');
 
+  // Prepared statements for the "delete all extraction rows for a node" fast path
+  // used by pruneStaleExtractions when currentRefs is empty.
+  const stmtDeleteVecExtractionsByNode = db.prepare<[string], void>(
+    `DELETE FROM embedding_vec WHERE id IN (
+       SELECT id FROM embedding_meta
+       WHERE node_id = ? AND source_type = 'extraction'
+     )`
+  );
+
+  const stmtDeleteMetaExtractionsByNode = db.prepare<[string], void>(
+    `DELETE FROM embedding_meta WHERE node_id = ? AND source_type = 'extraction'`
+  );
+
+  // Atomic transaction for the empty-refs fast path.
+  const pruneAllExtractions = db.transaction((nodeId: string) => {
+    stmtDeleteVecExtractionsByNode.run(nodeId);
+    stmtDeleteMetaExtractionsByNode.run(nodeId);
+  });
+
   // Atomic delete-then-insert of an entire chunk group. Wrapping this in a
   // transaction prevents partial state (e.g. mid-loop insert failure) that
   // would otherwise be indistinguishable from a fully-indexed group on retry,
@@ -169,34 +187,33 @@ export function createEmbeddingIndexer(
 
   // Delete extraction rows whose extraction_ref is NOT in the current body's
   // non-markdown ref list. Used to reconcile when a node's embeds change.
-  // sqlite doesn't support NOT IN (?) with variable-length params from prepared
-  // stmts, so we build the query at call time.
+  // Wrapped in a transaction to prevent orphan vec rows if a delete fails
+  // mid-sequence. The "no refs" fast path uses cached prepared statements;
+  // the variadic path builds SQL at call time (necessary for variable-length
+  // NOT IN clauses) but still runs atomically.
   function pruneStaleExtractions(nodeId: string, currentRefs: string[]): void {
     if (currentRefs.length === 0) {
-      db.prepare(
-        `DELETE FROM embedding_vec WHERE id IN (
-           SELECT id FROM embedding_meta
-           WHERE node_id = ? AND source_type = 'extraction'
-         )`
-      ).run(nodeId);
-      db.prepare(
-        `DELETE FROM embedding_meta WHERE node_id = ? AND source_type = 'extraction'`
-      ).run(nodeId);
+      pruneAllExtractions(nodeId);
       return;
     }
     const placeholders = currentRefs.map(() => '?').join(',');
-    db.prepare(
+    const vecStmt = db.prepare(
       `DELETE FROM embedding_vec WHERE id IN (
          SELECT id FROM embedding_meta
          WHERE node_id = ? AND source_type = 'extraction'
            AND extraction_ref NOT IN (${placeholders})
        )`
-    ).run(nodeId, ...currentRefs);
-    db.prepare(
+    );
+    const metaStmt = db.prepare(
       `DELETE FROM embedding_meta
        WHERE node_id = ? AND source_type = 'extraction'
          AND extraction_ref NOT IN (${placeholders})`
-    ).run(nodeId, ...currentRefs);
+    );
+    const pruneSome = db.transaction(() => {
+      vecStmt.run(nodeId, ...currentRefs);
+      metaStmt.run(nodeId, ...currentRefs);
+    });
+    pruneSome();
   }
 
   function enqueue(item: EmbeddingQueueItem): void {

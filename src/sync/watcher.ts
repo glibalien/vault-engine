@@ -46,7 +46,7 @@ export function startWatcher(
   mutex.processEvent = async (event) => {
     if (event.type === 'unlink') {
       const relPath = relative(vaultPath, join(vaultPath, event.path));
-      deleteNodeByPath(relPath, db);
+      deleteNodeByPath(relPath, db, embeddingIndexer);
     } else {
       const absPath = join(vaultPath, event.path);
       processFileChange(absPath, relative(vaultPath, absPath), db, writeLock, vaultPath, syncLogger, embeddingIndexer);
@@ -145,7 +145,7 @@ export function startWatcher(
       mutex.enqueue({ type: 'unlink', path: relPath });
     } else {
       mutex.run(async () => {
-        deleteNodeByPath(relPath, db);
+        deleteNodeByPath(relPath, db, embeddingIndexer);
       });
     }
   }

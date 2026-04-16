@@ -16,6 +16,7 @@ import { checkTypesHaveSchemas } from '../../pipeline/check-types.js';
 import { buildFixable } from '../../validation/fixable.js';
 import type { WriteLockManager } from '../../sync/write-lock.js';
 import type { SyncLogger } from '../../sync/sync-logger.js';
+import type { EmbeddingIndexer } from '../../search/indexer.js';
 
 const createParamsSchema = z.object({
   title: z.string(),
@@ -60,6 +61,7 @@ export function registerBatchMutate(
   writeLock: WriteLockManager,
   vaultPath: string,
   syncLogger?: SyncLogger,
+  embeddingIndexer?: EmbeddingIndexer,
 ): void {
   server.tool(
     'batch-mutate',
@@ -73,6 +75,8 @@ export function registerBatchMutate(
       // and files that were created new (to be deleted on rollback)
       const backups: Array<{ filePath: string; backupPath: string }> = [];
       const createdFiles: string[] = [];
+      // Track node IDs deleted in this batch so we can clean up vec rows after commit.
+      const deletedNodeIds: string[] = [];
 
       let batchError: { failed_at: number; error: Record<string, unknown> } | null = null as { failed_at: number; error: Record<string, unknown> } | null;
 
@@ -214,6 +218,7 @@ export function registerBatchMutate(
                 node.node_id, Date.now(), 'file-deleted', node.file_path,
               );
               db.prepare('DELETE FROM nodes WHERE id = ?').run(node.node_id);
+              deletedNodeIds.push(node.node_id);
 
               try { unlinkSync(absPath); } catch {}
               results.push({ op: 'delete', node_id: node.node_id, file_path: node.file_path });
@@ -240,8 +245,11 @@ export function registerBatchMutate(
 
       try {
         const applied = txn();
-        // Success: clean up backups
+        // Success: clean up backups and orphaned vec rows for deleted nodes.
         cleanupBackups(backups.map(b => b.backupPath));
+        for (const nodeId of deletedNodeIds) {
+          embeddingIndexer?.removeNode(nodeId);
+        }
         return toolResult({ applied: true, results: applied });
       } catch {
         // DB transaction rolled back. Now revert file writes.

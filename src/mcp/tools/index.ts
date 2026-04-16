@@ -58,10 +58,10 @@ export function registerAllTools(server: McpServer, db: Database.Database, ctx?:
   if (ctx?.writeLock && ctx?.vaultPath) {
     registerCreateNode(server, db, ctx.writeLock, ctx.vaultPath, ctx.syncLogger);
     registerUpdateNode(server, db, ctx.writeLock, ctx.vaultPath, ctx.syncLogger);
-    registerDeleteNode(server, db, ctx.writeLock, ctx.vaultPath, ctx.syncLogger);
+    registerDeleteNode(server, db, ctx.writeLock, ctx.vaultPath, ctx.syncLogger, ctx.embeddingIndexer);
     registerAddTypeToNode(server, db, ctx.writeLock, ctx.vaultPath, ctx.syncLogger);
     registerRemoveTypeFromNode(server, db, ctx.writeLock, ctx.vaultPath, ctx.syncLogger);
     registerRenameNode(server, db, ctx.writeLock, ctx.vaultPath, ctx.syncLogger);
-    registerBatchMutate(server, db, ctx.writeLock, ctx.vaultPath, ctx.syncLogger);
+    registerBatchMutate(server, db, ctx.writeLock, ctx.vaultPath, ctx.syncLogger, ctx.embeddingIndexer);
   }
 }

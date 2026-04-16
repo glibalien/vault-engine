@@ -33,8 +33,8 @@ interface ClaimDiff {
  * Diff old claims against new claims to determine what changed.
  */
 export function diffClaims(
-  oldClaims: Array<{ field: string; sort_order?: number; label?: string; description?: string; required?: boolean | null; default_value?: unknown }>,
-  newClaims: Array<{ field: string; sort_order?: number; label?: string; description?: string; required?: boolean | null; default_value?: unknown }>,
+  oldClaims: Array<{ field: string; sort_order?: number; label?: string; description?: string; required?: boolean | null; default_value?: unknown; enum_values_override?: string[] | null }>,
+  newClaims: Array<{ field: string; sort_order?: number; label?: string; description?: string; required?: boolean | null; default_value?: unknown; enum_values_override?: string[] | null }>,
 ): ClaimDiff {
   const oldSet = new Map(oldClaims.map(c => [c.field, c]));
   const newSet = new Map(newClaims.map(c => [c.field, c]));
@@ -53,7 +53,8 @@ export function diffClaims(
         o.label !== n.label ||
         o.description !== n.description ||
         o.required !== n.required ||
-        JSON.stringify(o.default_value) !== JSON.stringify(n.default_value)
+        JSON.stringify(o.default_value) !== JSON.stringify(n.default_value) ||
+        JSON.stringify(o.enum_values_override) !== JSON.stringify(n.enum_values_override)
       ) {
         changed.push(field);
       }
@@ -151,7 +152,7 @@ export function propagateSchemaChange(
           const ctx = loadSchemaContext(db, types);
           for (const claims of ctx.claimsByType.values()) {
             for (const c of claims) {
-              if (c.field === addedField && c.default_value !== null) { source = 'claim'; break; }
+              if (c.field === addedField && c.default_value_override.kind === 'override') { source = 'claim'; break; }
             }
             if (source === 'claim') break;
           }

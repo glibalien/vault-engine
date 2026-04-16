@@ -104,7 +104,7 @@ export function executeMutation(
           let source: 'global' | 'claim' = 'global';
           for (const claims of claimsByType.values()) {
             for (const c of claims) {
-              if (c.field === cv.field && c.default_value !== null) {
+              if (c.field === cv.field && c.default_value_override.kind === 'override') {
                 source = 'claim';
                 break;
               }
@@ -170,7 +170,7 @@ export function executeMutation(
           let source: 'global' | 'claim' = 'global';
           for (const claims of claimsByType.values()) {
             for (const c of claims) {
-              if (c.field === cv.field && c.default_value !== null) {
+              if (c.field === cv.field && c.default_value_override.kind === 'override') {
                 source = 'claim';
                 break;
               }

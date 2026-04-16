@@ -20,7 +20,11 @@ export function registerCreateGlobalField(server: McpServer, db: Database.Databa
       default_value: z.unknown().optional().describe('Default value for this field'),
       required: z.boolean().optional().describe('Whether this field is required by default'),
       list_item_type: fieldTypeEnum.optional().describe('Item type for list fields'),
-      per_type_overrides_allowed: z.boolean().optional().describe('Whether schemas can override required/default_value'),
+      overrides_allowed: z.object({
+        required: z.boolean().optional(),
+        default_value: z.boolean().optional(),
+        enum_values: z.boolean().optional(),
+      }).optional().describe('Per-property override permissions for schema claims'),
     },
     async (params) => {
       try {

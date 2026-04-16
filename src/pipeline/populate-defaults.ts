@@ -44,11 +44,11 @@ export function populateDefaults(
       const resolved = resolveDefaultValue(ef.resolved_default_value, fileCtx ?? null);
       defaults[fieldName] = resolved;
 
-      // Determine source: if any claim has a non-null default, it's from a claim
+      // Determine source: if any claim has an override default, it's from a claim
       let source: 'global' | 'claim' = 'global';
       for (const claims of claimsByType.values()) {
         for (const c of claims) {
-          if (c.field === fieldName && c.default_value !== null) {
+          if (c.field === fieldName && c.default_value_override.kind === 'override') {
             source = 'claim';
             break;
           }

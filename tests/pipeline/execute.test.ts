@@ -118,19 +118,20 @@ describe('executeMutation — tool path create', () => {
     expect(field.value_number).toBe(42);
   });
 
-  it('allows merge conflict when value is provided', () => {
-    createGlobalField(db, { name: 'status', field_type: 'string', per_type_overrides_allowed: true });
+  it('resolves conflicting required overrides via cancellation', () => {
+    createGlobalField(db, { name: 'status', field_type: 'string', overrides_allowed: { required: true } });
     createSchemaDefinition(db, { name: 'task', field_claims: [{ field: 'status', required: true }] });
     createSchemaDefinition(db, { name: 'project', field_claims: [{ field: 'status', required: false }] });
 
-    // Should NOT throw despite MERGE_CONFLICT — value is provided
+    // Conflicting required overrides cancel out — global default wins (required: false)
+    // No MERGE_CONFLICT issue is raised; the value is accepted normally
     const result = executeMutation(db, writeLock, vaultPath, makeMutation({
       types: ['task', 'project'],
       fields: { status: 'open' },
     }));
 
     expect(result.file_written).toBe(true);
-    expect(result.validation.issues.some(i => i.code === 'MERGE_CONFLICT')).toBe(true);
+    expect(result.validation.issues.some(i => i.code === 'MERGE_CONFLICT')).toBe(false);
     expect(result.validation.coerced_state.status.value).toBe('open');
   });
 

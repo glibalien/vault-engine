@@ -41,17 +41,20 @@ export function renderSchemaFile(
   const claims = db.prepare(`
     SELECT sfc.*, gf.field_type, gf.enum_values, gf.reference_target, gf.description as gf_description,
            gf.default_value as gf_default_value, gf.required as gf_required,
-           gf.per_type_overrides_allowed, gf.list_item_type
+           gf.overrides_allowed_required, gf.overrides_allowed_default_value,
+           gf.overrides_allowed_enum_values, gf.list_item_type
     FROM schema_field_claims sfc
     JOIN global_fields gf ON gf.name = sfc.field
     WHERE sfc.schema_name = ?
     ORDER BY sfc.sort_order, sfc.field
   `).all(schemaName) as Array<{
     field: string; sort_order: number; label: string | null; description: string | null;
-    required: number | null; default_value: string | null;
+    required_override: number | null; default_value_override: string | null;
+    default_value_overridden: number; enum_values_override: string | null;
     field_type: string; enum_values: string | null; reference_target: string | null;
     gf_description: string | null; gf_default_value: string | null; gf_required: number;
-    per_type_overrides_allowed: number; list_item_type: string | null;
+    overrides_allowed_required: number; overrides_allowed_default_value: number;
+    overrides_allowed_enum_values: number; list_item_type: string | null;
   }>;
 
   // Build YAML structure
@@ -64,8 +67,11 @@ export function renderSchemaFile(
   data.field_claims = claims.map(c => {
     const claim: Record<string, unknown> = { field: c.field };
     if (c.sort_order !== 1000) claim.sort_order = c.sort_order;
-    if (c.required !== null) claim.required = c.required === 1;
-    if (c.default_value !== null) claim.default_value = JSON.parse(c.default_value);
+    if (c.required_override !== null) claim.required_override = c.required_override === 1;
+    if (c.default_value_overridden === 1) {
+      claim.default_value_override = c.default_value_override !== null ? JSON.parse(c.default_value_override) : null;
+    }
+    if (c.enum_values_override !== null) claim.enum_values_override = JSON.parse(c.enum_values_override);
 
     const gf: Record<string, unknown> = { field_type: c.field_type };
     if (c.enum_values) gf.enum_values = JSON.parse(c.enum_values);
@@ -92,7 +98,8 @@ export function renderFieldsFile(db: Database.Database, vaultPath: string): bool
   const fields = db.prepare('SELECT * FROM global_fields ORDER BY name').all() as Array<{
     name: string; field_type: string; enum_values: string | null; reference_target: string | null;
     description: string | null; default_value: string | null; required: number;
-    per_type_overrides_allowed: number; list_item_type: string | null;
+    overrides_allowed_required: number; overrides_allowed_default_value: number;
+    overrides_allowed_enum_values: number; list_item_type: string | null;
   }>;
 
   const data = {
@@ -104,7 +111,13 @@ export function renderFieldsFile(db: Database.Database, vaultPath: string): bool
       if (f.description) entry.description = f.description;
       if (f.default_value) entry.default_value = JSON.parse(f.default_value);
       if (f.required) entry.required = false;
-      if (f.per_type_overrides_allowed) entry.per_type_overrides_allowed = true;
+      if (f.overrides_allowed_required || f.overrides_allowed_default_value || f.overrides_allowed_enum_values) {
+        const oa: Record<string, boolean> = {};
+        if (f.overrides_allowed_required) oa.required = true;
+        if (f.overrides_allowed_default_value) oa.default_value = true;
+        if (f.overrides_allowed_enum_values) oa.enum_values = true;
+        entry.overrides_allowed = oa;
+      }
       return entry;
     }),
   };

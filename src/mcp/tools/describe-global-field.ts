@@ -11,7 +11,9 @@ interface GlobalFieldRow {
   description: string | null;
   default_value: string | null;
   required: number;
-  per_type_overrides_allowed: number;
+  overrides_allowed_required: number;
+  overrides_allowed_default_value: number;
+  overrides_allowed_enum_values: number;
   list_item_type: string | null;
 }
 
@@ -57,7 +59,11 @@ export function registerDescribeGlobalField(server: McpServer, db: Database.Data
         description: row.description,
         default_value: row.default_value ? JSON.parse(row.default_value) : null,
         required: Boolean(row.required),
-        per_type_overrides_allowed: Boolean(row.per_type_overrides_allowed),
+        overrides_allowed: {
+          required: Boolean(row.overrides_allowed_required),
+          default_value: Boolean(row.overrides_allowed_default_value),
+          enum_values: Boolean(row.overrides_allowed_enum_values),
+        },
         list_item_type: row.list_item_type,
         claimed_by_types,
         node_count: nodeCountRow.count,

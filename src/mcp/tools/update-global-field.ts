@@ -23,7 +23,11 @@ export function registerUpdateGlobalField(server: McpServer, db: Database.Databa
       default_value: z.unknown().optional().describe('New default value'),
       required: z.boolean().optional().describe('New required flag'),
       list_item_type: fieldTypeEnum.optional().describe('New item type for list fields'),
-      per_type_overrides_allowed: z.boolean().optional().describe('Whether schemas can override required/default_value'),
+      overrides_allowed: z.object({
+        required: z.boolean().optional(),
+        default_value: z.boolean().optional(),
+        enum_values: z.boolean().optional(),
+      }).optional().describe('Per-property override permissions for schema claims'),
       confirm: z.boolean().optional().describe('Set true to apply a type change (otherwise previews impact)'),
     },
     async ({ name, ...rest }) => {

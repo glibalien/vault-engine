@@ -12,6 +12,8 @@ const fieldClaimSchema = z.object({
   sort_order: z.number().optional(),
   required: z.boolean().optional(),
   default_value: z.unknown().optional(),
+  default_value_overridden: z.boolean().optional().describe('Set true when default_value key is present, even if null'),
+  enum_values_override: z.array(z.string()).optional().describe('Per-type enum values (replaces global for this type)'),
 });
 
 export function registerCreateSchema(server: McpServer, db: Database.Database, ctx?: { vaultPath?: string }): void {

@@ -71,7 +71,11 @@ describe('createGlobalField', () => {
       description: 'The title',
       default_value: null,
       required: false,
-      per_type_overrides_allowed: false,
+      overrides_allowed: {
+        required: false,
+        default_value: false,
+        enum_values: false,
+      },
       list_item_type: null,
     });
   });

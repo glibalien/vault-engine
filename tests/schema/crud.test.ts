@@ -76,11 +76,11 @@ describe('createSchemaDefinition', () => {
   });
 
   it('stores required and default_value on claims as integer and JSON', () => {
-    // Need a field with per_type_overrides_allowed to set required/default_value
+    // Need a field with overrides_allowed to set required/default_value
     createGlobalField(db, {
       name: 'flexible_field',
       field_type: 'string',
-      per_type_overrides_allowed: true,
+      overrides_allowed: { required: true, default_value: true },
     });
 
     createSchemaDefinition(db, {
@@ -91,11 +91,12 @@ describe('createSchemaDefinition', () => {
     });
 
     const claim = db
-      .prepare(`SELECT required, default_value FROM schema_field_claims WHERE schema_name = 'Task' AND field = 'flexible_field'`)
-      .get() as { required: number | null; default_value: string | null };
+      .prepare(`SELECT required_override, default_value_override, default_value_overridden FROM schema_field_claims WHERE schema_name = 'Task' AND field = 'flexible_field'`)
+      .get() as { required_override: number | null; default_value_override: string | null; default_value_overridden: number };
 
-    expect(claim.required).toBe(1);
-    expect(claim.default_value).toBe(JSON.stringify('pending'));
+    expect(claim.required_override).toBe(1);
+    expect(claim.default_value_override).toBe(JSON.stringify('pending'));
+    expect(claim.default_value_overridden).toBe(1);
   });
 
   it('rejects claim for nonexistent global field', () => {
@@ -107,29 +108,29 @@ describe('createSchemaDefinition', () => {
     ).toThrow(/Global field 'nonexistent_field' does not exist/);
   });
 
-  it('rejects required override without per_type_overrides_allowed', () => {
+  it('rejects required override without overrides_allowed.required', () => {
     expect(() =>
       createSchemaDefinition(db, {
         name: 'Task',
         field_claims: [{ field: 'due_date', required: true }],
       }),
-    ).toThrow(/per_type_overrides_allowed/);
+    ).toThrow(/overrides_allowed\.required/);
   });
 
-  it('rejects default_value override without per_type_overrides_allowed', () => {
+  it('rejects default_value override without overrides_allowed.default_value', () => {
     expect(() =>
       createSchemaDefinition(db, {
         name: 'Task',
         field_claims: [{ field: 'priority', default_value: 5 }],
       }),
-    ).toThrow(/per_type_overrides_allowed/);
+    ).toThrow(/overrides_allowed\.default_value/);
   });
 
-  it('allows semantic override when per_type_overrides_allowed is true', () => {
+  it('allows semantic override when overrides_allowed is true', () => {
     createGlobalField(db, {
       name: 'overridable',
       field_type: 'string',
-      per_type_overrides_allowed: true,
+      overrides_allowed: { required: true, default_value: true },
     });
 
     expect(() =>
@@ -206,7 +207,7 @@ describe('updateSchemaDefinition', () => {
       updateSchemaDefinition(db, 'Task', {
         field_claims: [{ field: 'due_date', required: true }],
       }),
-    ).toThrow(/per_type_overrides_allowed/);
+    ).toThrow(/overrides_allowed\.required/);
   });
 
   it('throws when schema does not exist', () => {

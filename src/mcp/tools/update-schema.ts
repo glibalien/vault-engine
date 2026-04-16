@@ -15,6 +15,8 @@ const fieldClaimSchema = z.object({
   sort_order: z.number().optional(),
   required: z.boolean().optional(),
   default_value: z.unknown().optional(),
+  default_value_overridden: z.boolean().optional().describe('Set true when default_value key is present, even if null'),
+  enum_values_override: z.array(z.string()).optional().describe('Per-type enum values (replaces global for this type)'),
 });
 
 export function registerUpdateSchema(server: McpServer, db: Database.Database, ctx?: { writeLock?: WriteLockManager; vaultPath?: string; syncLogger?: SyncLogger }): void {
@@ -33,17 +35,20 @@ export function registerUpdateSchema(server: McpServer, db: Database.Database, c
     async ({ name, ...rest }) => {
       try {
         // Snapshot old claims before update (for propagation diff)
-        let oldClaims: Array<{ field: string; sort_order?: number; label?: string; description?: string; required?: boolean | null; default_value?: unknown }> = [];
+        let oldClaims: Array<{ field: string; sort_order?: number; label?: string; description?: string; required?: boolean | null; default_value?: unknown; enum_values_override?: string[] | null }> = [];
         if (rest.field_claims && ctx?.writeLock && ctx?.vaultPath) {
-          const rows = db.prepare('SELECT field, sort_order, label, description, required, default_value FROM schema_field_claims WHERE schema_name = ?')
-            .all(name) as Array<{ field: string; sort_order: number; label: string | null; description: string | null; required: number | null; default_value: string | null }>;
+          const rows = db.prepare('SELECT field, sort_order, label, description, required_override, default_value_override, default_value_overridden, enum_values_override FROM schema_field_claims WHERE schema_name = ?')
+            .all(name) as Array<{ field: string; sort_order: number; label: string | null; description: string | null; required_override: number | null; default_value_override: string | null; default_value_overridden: number; enum_values_override: string | null }>;
           oldClaims = rows.map(r => ({
             field: r.field,
             sort_order: r.sort_order,
             label: r.label ?? undefined,
             description: r.description ?? undefined,
-            required: r.required !== null ? r.required === 1 : null,
-            default_value: r.default_value !== null ? JSON.parse(r.default_value) : null,
+            required: r.required_override !== null ? r.required_override === 1 : null,
+            default_value: r.default_value_overridden === 1
+              ? (r.default_value_override !== null ? JSON.parse(r.default_value_override) : null)
+              : undefined,
+            enum_values_override: r.enum_values_override !== null ? JSON.parse(r.enum_values_override) : null,
           }));
         }
 
@@ -59,6 +64,7 @@ export function registerUpdateSchema(server: McpServer, db: Database.Database, c
             description: c.description,
             required: c.required ?? null,
             default_value: c.default_value ?? null,
+            enum_values_override: c.enum_values_override ?? null,
           }));
           const diff = diffClaims(oldClaims, newClaims);
           propagation = propagateSchemaChange(db, ctx.writeLock, ctx.vaultPath, name, diff, ctx.syncLogger);

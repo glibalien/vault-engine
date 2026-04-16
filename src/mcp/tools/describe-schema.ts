@@ -17,8 +17,10 @@ interface ClaimRow {
   label: string | null;
   description: string | null;
   sort_order: number | null;
-  required: number | null;
-  default_value: string | null;
+  required_override: number | null;
+  default_value_override: string | null;
+  default_value_overridden: number;
+  enum_values_override: string | null;
 }
 
 interface GlobalFieldRow {
@@ -29,7 +31,9 @@ interface GlobalFieldRow {
   description: string | null;
   default_value: string | null;
   required: number;
-  per_type_overrides_allowed: number;
+  overrides_allowed_required: number;
+  overrides_allowed_default_value: number;
+  overrides_allowed_enum_values: number;
   list_item_type: string | null;
 }
 
@@ -57,20 +61,46 @@ export function registerDescribeSchema(server: McpServer, db: Database.Database)
 
       // Read claims from schema_field_claims table
       const claims = db.prepare(
-        'SELECT field, label, description, sort_order, required, default_value FROM schema_field_claims WHERE schema_name = ? ORDER BY sort_order ASC, field ASC'
+        'SELECT field, label, description, sort_order, required_override, default_value_override, default_value_overridden, enum_values_override FROM schema_field_claims WHERE schema_name = ? ORDER BY sort_order ASC, field ASC'
       ).all(name) as ClaimRow[];
 
       // For each claim, inline the global field definition
       const globalFieldStmt = db.prepare('SELECT * FROM global_fields WHERE name = ?');
       const field_claims = claims.map(claim => {
         const gf = globalFieldStmt.get(claim.field) as GlobalFieldRow | undefined;
+        const overridden = claim.default_value_overridden === 1;
+        const defaultValueOverride = overridden
+          ? (claim.default_value_override !== null ? JSON.parse(claim.default_value_override) : null)
+          : undefined;
+        const enumValuesOverride = claim.enum_values_override !== null
+          ? JSON.parse(claim.enum_values_override) : null;
+
+        // Compute resolved effective values
+        const resolvedRequired = claim.required_override !== null
+          ? Boolean(claim.required_override)
+          : (gf ? Boolean(gf.required) : false);
+        const resolvedDefaultValue = overridden
+          ? defaultValueOverride
+          : (gf?.default_value ? JSON.parse(gf.default_value) : null);
+        const resolvedEnumValues = enumValuesOverride !== null
+          ? enumValuesOverride
+          : (gf?.enum_values ? JSON.parse(gf.enum_values) : null);
+
         return {
           field: claim.field,
           label: claim.label,
           description: claim.description,
           sort_order: claim.sort_order,
-          required: claim.required === null ? null : Boolean(claim.required),
-          default_value: claim.default_value ? JSON.parse(claim.default_value) : null,
+          required_override: claim.required_override === null ? null : Boolean(claim.required_override),
+          default_value_override: overridden
+            ? { overridden: true, value: defaultValueOverride }
+            : { overridden: false },
+          enum_values_override: enumValuesOverride,
+          resolved: {
+            required: resolvedRequired,
+            default_value: resolvedDefaultValue,
+            enum_values: resolvedEnumValues,
+          },
           global_field: gf ? {
             field_type: gf.field_type,
             enum_values: gf.enum_values ? JSON.parse(gf.enum_values) : null,
@@ -78,7 +108,11 @@ export function registerDescribeSchema(server: McpServer, db: Database.Database)
             description: gf.description,
             default_value: gf.default_value ? JSON.parse(gf.default_value) : null,
             required: Boolean(gf.required),
-            per_type_overrides_allowed: Boolean(gf.per_type_overrides_allowed),
+            overrides_allowed: {
+              required: Boolean(gf.overrides_allowed_required),
+              default_value: Boolean(gf.overrides_allowed_default_value),
+              enum_values: Boolean(gf.overrides_allowed_enum_values),
+            },
             list_item_type: gf.list_item_type,
           } : null,
         };

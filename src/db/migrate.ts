@@ -285,3 +285,17 @@ export function upgradeToPhase2(db: Database.Database): void {
 
   run();
 }
+
+/**
+ * Migration: ensure `meta` table exists (added 2026-04-16 for search_version).
+ *
+ * Idempotent — safe to run on a database that already has the meta table.
+ */
+export function ensureMetaTable(db: Database.Database): void {
+  db.exec(`
+    CREATE TABLE IF NOT EXISTS meta (
+      key TEXT PRIMARY KEY NOT NULL,
+      value TEXT NOT NULL
+    );
+  `);
+}

@@ -152,5 +152,10 @@ export function createSchema(db: Database.Database): void {
       metadata_json TEXT,
       extracted_at TEXT NOT NULL
     );
+
+    CREATE TABLE IF NOT EXISTS meta (
+      key TEXT PRIMARY KEY NOT NULL,
+      value TEXT NOT NULL
+    );
   `);
 }

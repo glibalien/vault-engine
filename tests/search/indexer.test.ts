@@ -31,6 +31,25 @@ function createFakeEmbedder(): Embedder & { callCount: number; lastText: string 
   };
 }
 
+function createMultiChunkEmbedder(chunkCount: number): Embedder & { callCount: number } {
+  let callCount = 0;
+  return {
+    get callCount() { return callCount; },
+    async embedDocument(text: string): Promise<Float32Array[]> {
+      callCount++;
+      return Array.from({ length: chunkCount }, (_, i) => {
+        const arr = new Float32Array(256);
+        for (let j = 0; j < 256; j++) {
+          arr[j] = (i * 0.01) + j * 0.001;
+        }
+        return arr;
+      });
+    },
+    async embedQuery(): Promise<Float32Array> { return new Float32Array(256).fill(0.5); },
+    isReady(): boolean { return true; },
+  };
+}
+
 function insertNode(
   db: Database.Database,
   id: string,
@@ -374,6 +393,64 @@ describe('EmbeddingIndexer', () => {
 
       expect(failingIndexer.queueSize()).toBe(0);
       expect(alwaysFailingEmbedder.callCount).toBe(3);
+    });
+  });
+
+  describe('multi-chunk storage', () => {
+    it('stores N meta+vec rows when embedder returns N vectors', async () => {
+      db = createTestDb();
+      const multi = createMultiChunkEmbedder(3);
+      const idx = createEmbeddingIndexer(db, multi);
+      insertNode(db, 'n1', 'Title', 'body');
+      idx.enqueue({ node_id: 'n1', source_type: 'node' });
+      await idx.processAll();
+
+      const rows = db.prepare(
+        "SELECT chunk_index FROM embedding_meta WHERE node_id = 'n1' AND source_type = 'node' ORDER BY chunk_index"
+      ).all() as { chunk_index: number }[];
+      expect(rows.map(r => r.chunk_index)).toEqual([0, 1, 2]);
+
+      const vecCount = (db.prepare(
+        "SELECT COUNT(*) as cnt FROM embedding_vec WHERE id IN (SELECT id FROM embedding_meta WHERE node_id = 'n1')"
+      ).get() as { cnt: number }).cnt;
+      expect(vecCount).toBe(3);
+    });
+
+    it('skips re-embedding when hash is unchanged', async () => {
+      db = createTestDb();
+      const multi = createMultiChunkEmbedder(3);
+      const idx = createEmbeddingIndexer(db, multi);
+      insertNode(db, 'n1', 'Title', 'body');
+      idx.enqueue({ node_id: 'n1', source_type: 'node' });
+      await idx.processAll();
+
+      idx.enqueue({ node_id: 'n1', source_type: 'node' });
+      await idx.processAll();
+      expect(multi.callCount).toBe(1);
+    });
+
+    it('replaces old rows when content changes from N=3 chunks to N=1', async () => {
+      db = createTestDb();
+      const three = createMultiChunkEmbedder(3);
+      const idx1 = createEmbeddingIndexer(db, three);
+      insertNode(db, 'n1', 'Title', 'body v1');
+      idx1.enqueue({ node_id: 'n1', source_type: 'node' });
+      await idx1.processAll();
+
+      db.prepare('UPDATE nodes SET body = ? WHERE id = ?').run('body v2', 'n1');
+      const one = createMultiChunkEmbedder(1);
+      const idx2 = createEmbeddingIndexer(db, one);
+      idx2.enqueue({ node_id: 'n1', source_type: 'node' });
+      await idx2.processAll();
+
+      const rows = db.prepare(
+        "SELECT chunk_index FROM embedding_meta WHERE node_id = 'n1' AND source_type = 'node' ORDER BY chunk_index"
+      ).all() as { chunk_index: number }[];
+      expect(rows.map(r => r.chunk_index)).toEqual([0]);
+      const vecCount = (db.prepare(
+        "SELECT COUNT(*) as cnt FROM embedding_vec WHERE id IN (SELECT id FROM embedding_meta WHERE node_id = 'n1')"
+      ).get() as { cnt: number }).cnt;
+      expect(vecCount).toBe(1);
     });
   });
 

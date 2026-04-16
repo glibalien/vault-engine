@@ -26,11 +26,6 @@ interface FieldRow {
   value_text: string;
 }
 
-interface MetaRow {
-  id: number;
-  source_hash: string;
-}
-
 interface CountRow {
   cnt: number;
 }
@@ -49,8 +44,21 @@ export function createEmbeddingIndexer(
   );
 
   // extraction_ref IS ? (not = ?) handles NULL comparison correctly in SQL
-  const stmtGetExistingMeta = db.prepare<[string, string, string | null], MetaRow>(
-    `SELECT id, source_hash FROM embedding_meta
+  const stmtGetAnyHashForGroup = db.prepare<[string, string, string | null], { source_hash: string }>(
+    `SELECT source_hash FROM embedding_meta
+     WHERE node_id = ? AND source_type = ? AND extraction_ref IS ?
+     LIMIT 1`
+  );
+
+  const stmtDeleteVecByGroup = db.prepare<[string, string, string | null], void>(
+    `DELETE FROM embedding_vec WHERE id IN (
+       SELECT id FROM embedding_meta
+       WHERE node_id = ? AND source_type = ? AND extraction_ref IS ?
+     )`
+  );
+
+  const stmtDeleteMetaByGroup = db.prepare<[string, string, string | null], void>(
+    `DELETE FROM embedding_meta
      WHERE node_id = ? AND source_type = ? AND extraction_ref IS ?`
   );
 
@@ -59,16 +67,8 @@ export function createEmbeddingIndexer(
      VALUES (?, ?, ?, ?, ?, ?)`
   );
 
-  const stmtUpdateMeta = db.prepare<[string, string, number], void>(
-    `UPDATE embedding_meta SET source_hash = ?, embedded_at = ? WHERE id = ?`
-  );
-
   const stmtInsertVec = db.prepare<[bigint, Uint8Array], void>(
     'INSERT INTO embedding_vec (id, vector) VALUES (?, ?)'
-  );
-
-  const stmtUpdateVec = db.prepare<[Uint8Array, number], void>(
-    'UPDATE embedding_vec SET vector = ? WHERE id = ?'
   );
 
   const stmtDeleteVecByNode = db.prepare<[string], void>(
@@ -145,31 +145,24 @@ export function createEmbeddingIndexer(
     processing = true;
     try {
       if (item.source_type === 'node') {
-        const hash = contentHash(item.node_id);
         const extractionRef = item.extraction_ref ?? null;
+        const hash = contentHash(item.node_id);
+        const existing = stmtGetAnyHashForGroup.get(item.node_id, item.source_type, extractionRef);
+        if (existing && existing.source_hash === hash) return true;
 
-        const existing = stmtGetExistingMeta.get(item.node_id, item.source_type, extractionRef);
-
-        if (existing && existing.source_hash === hash) {
-          // Content unchanged — skip embedding
-          return true;
-        }
-
-        // Embed the content
         const content = assembleContent(item.node_id);
-        const [vector] = await embedder.embedDocument(content);
-        const vectorBytes = new Uint8Array(vector.buffer, vector.byteOffset, vector.byteLength);
+        const vectors = await embedder.embedDocument(content);
         const now = new Date().toISOString();
 
-        if (existing) {
-          // Update existing rows
-          stmtUpdateMeta.run(hash, now, existing.id);
-          stmtUpdateVec.run(vectorBytes, existing.id);
-        } else {
-          // Insert new rows — use lastInsertRowid for the vec ID
-          const insertResult = stmtInsertMeta.run(item.node_id, item.source_type, hash, 0, extractionRef, now);
-          // sqlite-vec vec0 requires BigInt for explicit primary key values
-          const metaId = BigInt(insertResult.lastInsertRowid);
+        // Delete vec rows first (they reference meta ids via subquery), then meta.
+        stmtDeleteVecByGroup.run(item.node_id, item.source_type, extractionRef);
+        stmtDeleteMetaByGroup.run(item.node_id, item.source_type, extractionRef);
+
+        for (let i = 0; i < vectors.length; i++) {
+          const vector = vectors[i];
+          const vectorBytes = new Uint8Array(vector.buffer, vector.byteOffset, vector.byteLength);
+          const res = stmtInsertMeta.run(item.node_id, item.source_type, hash, i, extractionRef, now);
+          const metaId = BigInt(res.lastInsertRowid);
           stmtInsertVec.run(metaId, vectorBytes);
         }
       }

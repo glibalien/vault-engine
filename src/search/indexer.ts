@@ -84,6 +84,28 @@ export function createEmbeddingIndexer(
   const stmtClearVec = db.prepare<[], void>('DELETE FROM embedding_vec');
   const stmtClearMeta = db.prepare<[], void>('DELETE FROM embedding_meta');
 
+  // Atomic delete-then-insert of an entire chunk group. Wrapping this in a
+  // transaction prevents partial state (e.g. mid-loop insert failure) that
+  // would otherwise be indistinguishable from a fully-indexed group on retry,
+  // because the hash check succeeds once any row for the group exists.
+  const writeGroup = db.transaction((
+    nodeId: string,
+    sourceType: string,
+    extractionRef: string | null,
+    hash: string,
+    vectors: Float32Array[],
+    now: string,
+  ) => {
+    stmtDeleteVecByGroup.run(nodeId, sourceType, extractionRef);
+    stmtDeleteMetaByGroup.run(nodeId, sourceType, extractionRef);
+    for (let i = 0; i < vectors.length; i++) {
+      const v = vectors[i];
+      const bytes = new Uint8Array(v.buffer, v.byteOffset, v.byteLength);
+      const res = stmtInsertMeta.run(nodeId, sourceType, hash, i, extractionRef, now);
+      stmtInsertVec.run(BigInt(res.lastInsertRowid), bytes);
+    }
+  });
+
   const stmtCountNodes = db.prepare<[], CountRow>('SELECT COUNT(*) as cnt FROM nodes');
   const stmtCountIndexed = db.prepare<[], CountRow>(
     "SELECT COUNT(DISTINCT node_id) as cnt FROM embedding_meta WHERE source_type = 'node'"
@@ -146,25 +168,15 @@ export function createEmbeddingIndexer(
     try {
       if (item.source_type === 'node') {
         const extractionRef = item.extraction_ref ?? null;
-        const hash = contentHash(item.node_id);
+        const content = assembleContent(item.node_id);
+        const hash = createHash('sha256').update(content).digest('hex');
         const existing = stmtGetAnyHashForGroup.get(item.node_id, item.source_type, extractionRef);
         if (existing && existing.source_hash === hash) return true;
 
-        const content = assembleContent(item.node_id);
         const vectors = await embedder.embedDocument(content);
         const now = new Date().toISOString();
 
-        // Delete vec rows first (they reference meta ids via subquery), then meta.
-        stmtDeleteVecByGroup.run(item.node_id, item.source_type, extractionRef);
-        stmtDeleteMetaByGroup.run(item.node_id, item.source_type, extractionRef);
-
-        for (let i = 0; i < vectors.length; i++) {
-          const vector = vectors[i];
-          const vectorBytes = new Uint8Array(vector.buffer, vector.byteOffset, vector.byteLength);
-          const res = stmtInsertMeta.run(item.node_id, item.source_type, hash, i, extractionRef, now);
-          const metaId = BigInt(res.lastInsertRowid);
-          stmtInsertVec.run(metaId, vectorBytes);
-        }
+        writeGroup(item.node_id, item.source_type, extractionRef, hash, vectors, now);
       }
 
       return true;

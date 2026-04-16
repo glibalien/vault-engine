@@ -429,6 +429,29 @@ describe('EmbeddingIndexer', () => {
       expect(multi.callCount).toBe(1);
     });
 
+    it('rolls back partial writes when embedder returns malformed vectors', async () => {
+      db = createTestDb();
+      // Embedder where the 2nd "vector" is null — will throw inside the insert loop
+      const faulty: Embedder = {
+        async embedDocument() {
+          const good = new Float32Array(256).fill(0.1);
+          return [good, null as unknown as Float32Array, good];
+        },
+        async embedQuery() { return new Float32Array(256); },
+        isReady: () => true,
+      };
+      const idx = createEmbeddingIndexer(db, faulty);
+      insertNode(db, 'n1', 'Title', 'body');
+      idx.enqueue({ node_id: 'n1', source_type: 'node' });
+      await idx.processAll();
+
+      // After the failure the entire group should be absent (transaction rolled back)
+      const cnt = (db.prepare(
+        "SELECT COUNT(*) as cnt FROM embedding_meta WHERE node_id = 'n1'"
+      ).get() as { cnt: number }).cnt;
+      expect(cnt).toBe(0);
+    });
+
     it('replaces old rows when content changes from N=3 chunks to N=1', async () => {
       db = createTestDb();
       const three = createMultiChunkEmbedder(3);

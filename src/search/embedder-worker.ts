@@ -1,14 +1,18 @@
 // src/search/embedder-worker.ts
 //
-// Child process entry point. Loads the ONNX embedding model and serves
-// embed requests over Node IPC. Exits on 'shutdown' message or when
-// the IPC channel disconnects (parent died).
+// Forked subprocess entry point. Loads the ONNX embedding model and serves
+// embed requests over Node IPC. Tokenizes input; if longer than the model's
+// context window, splits semantically via src/search/chunker.ts and embeds
+// each chunk, returning vectors: number[][].
 
 import { pipeline, env } from '@huggingface/transformers';
+import { chunkForEmbedding } from './chunker.js';
 import type { WorkerRequest, WorkerMessage } from './embedder-protocol.js';
 
 const MODEL_ID = 'nomic-ai/nomic-embed-text-v1.5';
 const DIMENSIONS = 256;
+const MAX_TOKENS = 8192;
+const OVERLAP_TOKENS = 128;
 
 async function main(): Promise<void> {
   const modelsDir = process.argv[2];
@@ -25,8 +29,19 @@ async function main(): Promise<void> {
     revision: 'main',
   });
 
-  // Model loaded — prevent further network calls
   env.allowRemoteModels = false;
+
+  function tokenCount(text: string): number {
+    const dims = extractor.tokenizer(text).input_ids.dims as number[];
+    return dims[1] ?? 0;
+  }
+
+  async function embedOne(text: string): Promise<number[]> {
+    const output = await extractor(text, { pooling: 'mean', normalize: true });
+    const full = output.data as Float32Array;
+    const slice = full.length === DIMENSIONS ? full : full.slice(0, DIMENSIONS);
+    return Array.from(slice);
+  }
 
   function send(msg: WorkerMessage): void {
     if (process.send) process.send(msg);
@@ -42,14 +57,24 @@ async function main(): Promise<void> {
     if (msg.type === 'embed') {
       try {
         const prefixed = `${msg.prefix}: ${msg.text}`;
-        const output = await extractor(prefixed, { pooling: 'mean', normalize: true });
-        const full = output.data as Float32Array;
-        const slice = full.length === DIMENSIONS ? full : full.slice(0, DIMENSIONS);
-        send({
-          type: 'embed-result',
-          requestId: msg.requestId,
-          vectors: [Array.from(slice)],
-        });
+        const vectors: number[][] = [];
+
+        if (tokenCount(prefixed) <= MAX_TOKENS) {
+          vectors.push(await embedOne(prefixed));
+        } else {
+          // Chunk unprefixed text, then re-apply the prefix per chunk.
+          // Leave headroom for the prefix tokens.
+          const chunks = chunkForEmbedding(
+            msg.text,
+            tokenCount,
+            { maxTokens: MAX_TOKENS - 16, overlapTokens: OVERLAP_TOKENS },
+          );
+          for (const chunk of chunks) {
+            vectors.push(await embedOne(`${msg.prefix}: ${chunk}`));
+          }
+        }
+
+        send({ type: 'embed-result', requestId: msg.requestId, vectors });
       } catch (err) {
         send({
           type: 'embed-error',
@@ -60,7 +85,6 @@ async function main(): Promise<void> {
     }
   });
 
-  // If parent disconnects IPC, exit cleanly
   process.on('disconnect', () => process.exit(0));
 }
 

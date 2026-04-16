@@ -91,4 +91,20 @@ describeIfModel('SubprocessEmbedder (integration)', () => {
     const vectors = await embedder.embedDocument('after idle');
     expect(vectors[0].length).toBe(256);
   }, 60_000);
+
+  it('chunks long documents into multiple vectors', async () => {
+    embedder = createSubprocessEmbedder({ modelsDir, workerPath, idleTimeoutMs: 60_000 });
+    // ~45K chars ≈ ~11K tokens → must chunk (Nomic limit 8192).
+    const longText = Array.from({ length: 300 }, (_, i) =>
+      `## Section ${i}\nThis is paragraph ${i}. ` + 'word '.repeat(30)
+    ).join('\n\n');
+    const vectors = await embedder.embedDocument(longText);
+    expect(vectors.length).toBeGreaterThan(1);
+    for (const v of vectors) {
+      expect(v).toBeInstanceOf(Float32Array);
+      expect(v.length).toBe(256);
+      const magnitude = Math.sqrt(v.reduce((sum, x) => sum + x * x, 0));
+      expect(magnitude).toBeGreaterThan(0);
+    }
+  }, 60_000);
 });

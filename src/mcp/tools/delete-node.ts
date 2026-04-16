@@ -10,6 +10,7 @@ import { toolResult, toolErrorResult } from './errors.js';
 import { resolveNodeIdentity } from './resolve-identity.js';
 import type { WriteLockManager } from '../../sync/write-lock.js';
 import type { SyncLogger } from '../../sync/sync-logger.js';
+import type { EmbeddingIndexer } from '../../search/indexer.js';
 
 const paramsShape = {
   node_id: z.string().optional(),
@@ -25,6 +26,7 @@ export function registerDeleteNode(
   writeLock: WriteLockManager,
   vaultPath: string,
   syncLogger?: SyncLogger,
+  embeddingIndexer?: EmbeddingIndexer,
 ): void {
   server.tool(
     'delete-node',
@@ -101,6 +103,10 @@ export function registerDeleteNode(
           db.prepare('DELETE FROM nodes WHERE id = ?').run(node.node_id);
         });
         txn();
+
+        // Clean up embedding rows after node is confirmed deleted.
+        // embedding_vec is a vec0 virtual table with no FK cascade.
+        embeddingIndexer?.removeNode(node.node_id);
 
         // Delete file from disk
         try {

@@ -1,10 +1,9 @@
 import { stat, readdir } from 'node:fs/promises';
-import { join, extname, basename } from 'node:path';
-import { safeVaultPath } from '../pipeline/safe-path.js';
+import { join, basename } from 'node:path';
 import type Database from 'better-sqlite3';
 import type { ExtractionCache } from './cache.js';
 import type { AssembledNode, EmbedEntry, EmbedError } from './types.js';
-import { resolveTarget } from '../resolver/resolve.js';
+import { resolveEmbedRef } from './resolve.js';
 
 /**
  * Search the vault recursively for a file by basename.
@@ -12,7 +11,7 @@ import { resolveTarget } from '../resolver/resolve.js';
  * the vault root. Binary files (audio, images, etc.) aren't in the nodes
  * table, so we need a filesystem search.
  */
-async function findFileInVault(vaultPath: string, filename: string): Promise<string | null> {
+export async function findFileInVault(vaultPath: string, filename: string): Promise<string | null> {
   const target = basename(filename);
   async function search(dir: string): Promise<string | null> {
     let entries;
@@ -167,50 +166,13 @@ async function processEmbeds(
     }
 
     // Resolve to file path
-    const ext = extname(ref).toLowerCase();
-    let filePath: string;
-    let resolvedNodeId: string | null = null;
-
-    if (ext !== '' && ext !== '.md') {
-      // Non-markdown with extension: try relative path first, then search vault
-      const directPath = safeVaultPath(vaultPath, ref);
-      try {
-        await stat(directPath);
-        filePath = directPath;
-      } catch {
-        // File not at vault root — search vault by basename (Obsidian behavior)
-        const found = await findFileInVault(vaultPath, ref);
-        if (found) {
-          filePath = found;
-        } else {
-          errors.push({ reference: ref, error: `File not found in vault: ${ref}` });
-          continue;
-        }
-      }
-    } else {
-      // Markdown or no extension: use resolver
-      const resolved = resolveTarget(db, ref);
-      if (!resolved) {
-        // Try with .md stripped if it has .md
-        const stripped = ref.endsWith('.md') ? ref.slice(0, -3) : ref + '.md';
-        const resolved2 = resolveTarget(db, stripped);
-        if (!resolved2) {
-          errors.push({ reference: ref, error: `Could not resolve reference: ${ref}` });
-          continue;
-        }
-        resolvedNodeId = resolved2.id;
-        const nodeRow = db
-          .prepare('SELECT file_path FROM nodes WHERE id = ?')
-          .get(resolved2.id) as { file_path: string } | undefined;
-        filePath = nodeRow ? join(vaultPath, nodeRow.file_path) : join(vaultPath, ref);
-      } else {
-        resolvedNodeId = resolved.id;
-        const nodeRow = db
-          .prepare('SELECT file_path FROM nodes WHERE id = ?')
-          .get(resolved.id) as { file_path: string } | undefined;
-        filePath = nodeRow ? join(vaultPath, nodeRow.file_path) : join(vaultPath, ref);
-      }
+    const resolved = await resolveEmbedRef(db, vaultPath, ref);
+    if (!resolved) {
+      errors.push({ reference: ref, error: `Could not resolve reference: ${ref}` });
+      continue;
     }
+    const filePath = resolved.filePath;
+    const resolvedNodeId = resolved.nodeId;
 
     // Check file size
     try {

@@ -8,7 +8,7 @@ export { createSubprocessEmbedder } from './embedder-host.js';
 export type { SubprocessEmbedderOptions } from './embedder-host.js';
 
 export interface Embedder {
-  embedDocument(text: string): Promise<Float32Array>;
+  embedDocument(text: string): Promise<Float32Array[]>;
   embedQuery(text: string): Promise<Float32Array>;
   isReady(): boolean;
 }

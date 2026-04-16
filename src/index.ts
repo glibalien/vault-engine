@@ -6,7 +6,7 @@ import { StdioServerTransport } from '@modelcontextprotocol/sdk/server/stdio.js'
 loadDotenv({ path: resolve(import.meta.dirname ?? '.', '..', '.env') });
 import { openDatabase } from './db/connection.js';
 import { createSchema } from './db/schema.js';
-import { upgradeToPhase2, upgradeToPhase3, upgradeToPhase4, upgradeToPhase6, addCreatedAt, upgradeForOverrides } from './db/migrate.js';
+import { upgradeToPhase2, upgradeToPhase3, upgradeToPhase4, upgradeToPhase6, addCreatedAt, upgradeForOverrides, ensureMetaTable } from './db/migrate.js';
 import { createServer } from './mcp/server.js';
 import { parseArgs } from './transport/args.js';
 import { startHttpTransport } from './transport/http.js';
@@ -26,6 +26,7 @@ import { ExtractionCache } from './extraction/cache.js';
 import { ClaudeVisionPdfExtractor } from './extraction/extractors/claude-vision.js';
 import { createSubprocessEmbedder, type Embedder } from './search/embedder.js';
 import { createEmbeddingIndexer, type EmbeddingIndexer } from './search/indexer.js';
+import { CURRENT_SEARCH_VERSION, getSearchVersion, setSearchVersion } from './db/search-version.js';
 
 const args = parseArgs(process.argv.slice(2));
 
@@ -44,6 +45,7 @@ upgradeToPhase4(db);
 upgradeToPhase6(db);
 addCreatedAt(db);
 upgradeForOverrides(db);
+ensureMetaTable(db);
 
 const excludeDirs = (process.env.VAULT_EXCLUDE_DIRS ?? '').split(',').map(s => s.trim()).filter(Boolean);
 if (excludeDirs.length > 0) {
@@ -69,6 +71,12 @@ if (args.normalize) {
   process.exit(stats.errored > 0 ? 1 : 0);
 }
 
+const extractorRegistry = buildExtractorRegistry(process.env as Record<string, string | undefined>);
+const extractionCache = new ExtractionCache(db, extractorRegistry);
+if (process.env.ANTHROPIC_API_KEY) {
+  extractionCache.setPdfFallback(new ClaudeVisionPdfExtractor(process.env.ANTHROPIC_API_KEY));
+}
+
 // --- Phase 4: Embedding indexer (subprocess-isolated) ---
 let embeddingIndexer: EmbeddingIndexer | undefined;
 let embedderRef: (Embedder & { shutdown(): Promise<void> }) | undefined;
@@ -78,7 +86,19 @@ console.log('Initializing embedder subprocess...');
 try {
   const embedder = createSubprocessEmbedder({ modelsDir });
   embedderRef = embedder;
-  embeddingIndexer = createEmbeddingIndexer(db, embedder);
+  embeddingIndexer = createEmbeddingIndexer(db, embedder, {
+    extractionCache,
+    vaultPath,
+  });
+
+  // Detect a search pipeline version bump — if so, clear the old embeddings
+  // so everything re-embeds under the new semantics (chunking + extractions).
+  const storedVersion = getSearchVersion(db);
+  if (storedVersion < CURRENT_SEARCH_VERSION) {
+    console.log(`Search index version ${storedVersion} → ${CURRENT_SEARCH_VERSION}: clearing and re-embedding...`);
+    embeddingIndexer.clearAll();
+    setSearchVersion(db, CURRENT_SEARCH_VERSION);
+  }
 
   if (args.reindexSearch) {
     console.log('Reindex requested — clearing search index...');
@@ -112,12 +132,6 @@ const normalizer = startNormalizer(vaultPath, db, writeLock, syncLogger, {
   cronExpression: process.env.NORMALIZE_CRON ?? '',
   quiescenceMinutes: parseInt(process.env.NORMALIZE_QUIESCENCE_MINUTES ?? '60', 10) || 60,
 });
-
-const extractorRegistry = buildExtractorRegistry(process.env as Record<string, string | undefined>);
-const extractionCache = new ExtractionCache(db, extractorRegistry);
-if (process.env.ANTHROPIC_API_KEY) {
-  extractionCache.setPdfFallback(new ClaudeVisionPdfExtractor(process.env.ANTHROPIC_API_KEY));
-}
 
 const serverFactory = () => createServer(db, { writeLock, syncLogger, vaultPath, extractorRegistry, extractionCache, embeddingIndexer, embedder: embedderRef });
 

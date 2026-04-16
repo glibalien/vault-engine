@@ -20,7 +20,7 @@ export interface SubprocessEmbedderOptions {
 }
 
 interface PendingRequest {
-  resolve: (vector: Float32Array) => void;
+  resolve: (vectors: Float32Array[]) => void;
   reject: (err: Error) => void;
 }
 
@@ -75,7 +75,8 @@ export function createSubprocessEmbedder(options: SubprocessEmbedderOptions): Em
           const req = pending.get(msg.requestId);
           if (req) {
             pending.delete(msg.requestId);
-            req.resolve(new Float32Array(msg.vector));
+            const vectors = msg.vectors.map(v => new Float32Array(v));
+            req.resolve(vectors);
             resetIdleTimer();
           }
           return;
@@ -116,8 +117,8 @@ export function createSubprocessEmbedder(options: SubprocessEmbedderOptions): Em
     return readyPromise;
   }
 
-  function sendRequest(prefix: 'search_document' | 'search_query', text: string): Promise<Float32Array> {
-    return new Promise<Float32Array>((resolveEmbed, rejectEmbed) => {
+  function sendRequest(prefix: 'search_document' | 'search_query', text: string): Promise<Float32Array[]> {
+    return new Promise<Float32Array[]>((resolveEmbed, rejectEmbed) => {
       const requestId = randomUUID();
       pending.set(requestId, { resolve: resolveEmbed, reject: rejectEmbed });
 
@@ -132,11 +133,15 @@ export function createSubprocessEmbedder(options: SubprocessEmbedderOptions): Em
   }
 
   return {
-    async embedDocument(text: string): Promise<Float32Array> {
+    async embedDocument(text: string): Promise<Float32Array[]> {
       return sendRequest('search_document', text);
     },
     async embedQuery(text: string): Promise<Float32Array> {
-      return sendRequest('search_query', text);
+      const vectors = await sendRequest('search_query', text);
+      if (vectors.length === 0) {
+        throw new Error('Embedder worker returned zero vectors for query');
+      }
+      return vectors[0];
     },
     isReady(): boolean {
       return true;

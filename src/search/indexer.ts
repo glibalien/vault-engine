@@ -1,8 +1,10 @@
 import { createHash } from 'node:crypto';
 import type Database from 'better-sqlite3';
-import type { Statement } from 'better-sqlite3';
 import type { EmbeddingQueueItem, SearchIndexStatus } from './types.js';
 import type { Embedder } from './embedder.js';
+import { resolveEmbedRef } from '../extraction/resolve.js';
+import type { ExtractionCache } from '../extraction/cache.js';
+import { parseEmbedReferences } from '../extraction/assembler.js';
 
 export interface EmbeddingIndexer {
   enqueue(item: EmbeddingQueueItem): void;
@@ -26,18 +28,19 @@ interface FieldRow {
   value_text: string;
 }
 
-interface MetaRow {
-  id: number;
-  source_hash: string;
-}
-
 interface CountRow {
   cnt: number;
 }
 
+export interface EmbeddingIndexerDeps {
+  extractionCache?: ExtractionCache;
+  vaultPath?: string;
+}
+
 export function createEmbeddingIndexer(
   db: Database.Database,
-  embedder: Embedder
+  embedder: Embedder,
+  deps?: EmbeddingIndexerDeps
 ): EmbeddingIndexer {
   // Prepared statements created once in closure
   const stmtGetNode = db.prepare<[string], NodeRow>(
@@ -49,8 +52,21 @@ export function createEmbeddingIndexer(
   );
 
   // extraction_ref IS ? (not = ?) handles NULL comparison correctly in SQL
-  const stmtGetExistingMeta = db.prepare<[string, string, string | null], MetaRow>(
-    `SELECT id, source_hash FROM embedding_meta
+  const stmtGetAnyHashForGroup = db.prepare<[string, string, string | null], { source_hash: string }>(
+    `SELECT source_hash FROM embedding_meta
+     WHERE node_id = ? AND source_type = ? AND extraction_ref IS ?
+     LIMIT 1`
+  );
+
+  const stmtDeleteVecByGroup = db.prepare<[string, string, string | null], void>(
+    `DELETE FROM embedding_vec WHERE id IN (
+       SELECT id FROM embedding_meta
+       WHERE node_id = ? AND source_type = ? AND extraction_ref IS ?
+     )`
+  );
+
+  const stmtDeleteMetaByGroup = db.prepare<[string, string, string | null], void>(
+    `DELETE FROM embedding_meta
      WHERE node_id = ? AND source_type = ? AND extraction_ref IS ?`
   );
 
@@ -59,16 +75,8 @@ export function createEmbeddingIndexer(
      VALUES (?, ?, ?, ?, ?, ?)`
   );
 
-  const stmtUpdateMeta = db.prepare<[string, string, number], void>(
-    `UPDATE embedding_meta SET source_hash = ?, embedded_at = ? WHERE id = ?`
-  );
-
   const stmtInsertVec = db.prepare<[bigint, Uint8Array], void>(
     'INSERT INTO embedding_vec (id, vector) VALUES (?, ?)'
-  );
-
-  const stmtUpdateVec = db.prepare<[Uint8Array, number], void>(
-    'UPDATE embedding_vec SET vector = ? WHERE id = ?'
   );
 
   const stmtDeleteVecByNode = db.prepare<[string], void>(
@@ -83,6 +91,47 @@ export function createEmbeddingIndexer(
 
   const stmtClearVec = db.prepare<[], void>('DELETE FROM embedding_vec');
   const stmtClearMeta = db.prepare<[], void>('DELETE FROM embedding_meta');
+
+  // Prepared statements for the "delete all extraction rows for a node" fast path
+  // used by pruneStaleExtractions when currentRefs is empty.
+  const stmtDeleteVecExtractionsByNode = db.prepare<[string], void>(
+    `DELETE FROM embedding_vec WHERE id IN (
+       SELECT id FROM embedding_meta
+       WHERE node_id = ? AND source_type = 'extraction'
+     )`
+  );
+
+  const stmtDeleteMetaExtractionsByNode = db.prepare<[string], void>(
+    `DELETE FROM embedding_meta WHERE node_id = ? AND source_type = 'extraction'`
+  );
+
+  // Atomic transaction for the empty-refs fast path.
+  const pruneAllExtractions = db.transaction((nodeId: string) => {
+    stmtDeleteVecExtractionsByNode.run(nodeId);
+    stmtDeleteMetaExtractionsByNode.run(nodeId);
+  });
+
+  // Atomic delete-then-insert of an entire chunk group. Wrapping this in a
+  // transaction prevents partial state (e.g. mid-loop insert failure) that
+  // would otherwise be indistinguishable from a fully-indexed group on retry,
+  // because the hash check succeeds once any row for the group exists.
+  const writeGroup = db.transaction((
+    nodeId: string,
+    sourceType: string,
+    extractionRef: string | null,
+    hash: string,
+    vectors: Float32Array[],
+    now: string,
+  ) => {
+    stmtDeleteVecByGroup.run(nodeId, sourceType, extractionRef);
+    stmtDeleteMetaByGroup.run(nodeId, sourceType, extractionRef);
+    for (let i = 0; i < vectors.length; i++) {
+      const v = vectors[i];
+      const bytes = new Uint8Array(v.buffer, v.byteOffset, v.byteLength);
+      const res = stmtInsertMeta.run(nodeId, sourceType, hash, i, extractionRef, now);
+      stmtInsertVec.run(BigInt(res.lastInsertRowid), bytes);
+    }
+  });
 
   const stmtCountNodes = db.prepare<[], CountRow>('SELECT COUNT(*) as cnt FROM nodes');
   const stmtCountIndexed = db.prepare<[], CountRow>(
@@ -109,6 +158,12 @@ export function createEmbeddingIndexer(
     return `${item.node_id}::${item.source_type}::${item.extraction_ref ?? ''}`;
   }
 
+  function isLikelyMarkdownRef(ref: string): boolean {
+    const dot = ref.lastIndexOf('.');
+    if (dot === -1) return true; // no extension → treat as md
+    return ref.slice(dot).toLowerCase() === '.md';
+  }
+
   function assembleContent(nodeId: string): string {
     const node = stmtGetNode.get(nodeId);
     if (!node) return '';
@@ -130,11 +185,67 @@ export function createEmbeddingIndexer(
     return createHash('sha256').update(content).digest('hex');
   }
 
+  // Delete extraction rows whose extraction_ref is NOT in the current body's
+  // non-markdown ref list. Used to reconcile when a node's embeds change.
+  // Wrapped in a transaction to prevent orphan vec rows if a delete fails
+  // mid-sequence. The "no refs" fast path uses cached prepared statements;
+  // the variadic path builds SQL at call time (necessary for variable-length
+  // NOT IN clauses) but still runs atomically.
+  function pruneStaleExtractions(nodeId: string, currentRefs: string[]): void {
+    if (currentRefs.length === 0) {
+      pruneAllExtractions(nodeId);
+      return;
+    }
+    const placeholders = currentRefs.map(() => '?').join(',');
+    const vecStmt = db.prepare(
+      `DELETE FROM embedding_vec WHERE id IN (
+         SELECT id FROM embedding_meta
+         WHERE node_id = ? AND source_type = 'extraction'
+           AND extraction_ref NOT IN (${placeholders})
+       )`
+    );
+    const metaStmt = db.prepare(
+      `DELETE FROM embedding_meta
+       WHERE node_id = ? AND source_type = 'extraction'
+         AND extraction_ref NOT IN (${placeholders})`
+    );
+    const pruneSome = db.transaction(() => {
+      vecStmt.run(nodeId, ...currentRefs);
+      metaStmt.run(nodeId, ...currentRefs);
+    });
+    pruneSome();
+  }
+
   function enqueue(item: EmbeddingQueueItem): void {
     const key = itemKey(item);
-    const alreadyQueued = queue.some(q => itemKey(q) === key);
-    if (!alreadyQueued) {
+    if (!queue.some(q => itemKey(q) === key)) {
       queue.push(item);
+    }
+
+    if (item.source_type === 'node' && deps?.extractionCache && deps?.vaultPath) {
+      const row = stmtGetNode.get(item.node_id);
+      if (row && row.body) {
+        const refs = parseEmbedReferences(row.body);
+        const currentNonMdRefs = refs.filter(r => !isLikelyMarkdownRef(r));
+
+        // Reconcile: drop extraction rows for refs that are no longer in the body.
+        pruneStaleExtractions(item.node_id, currentNonMdRefs);
+
+        for (const ref of currentNonMdRefs) {
+          const extractionItem: EmbeddingQueueItem = {
+            node_id: item.node_id,
+            source_type: 'extraction',
+            extraction_ref: ref,
+          };
+          const extKey = itemKey(extractionItem);
+          if (!queue.some(q => itemKey(q) === extKey)) {
+            queue.push(extractionItem);
+          }
+        }
+      } else if (row) {
+        // Body was emptied entirely — drop all extraction rows for this node.
+        pruneStaleExtractions(item.node_id, []);
+      }
     }
   }
 
@@ -145,33 +256,53 @@ export function createEmbeddingIndexer(
     processing = true;
     try {
       if (item.source_type === 'node') {
-        const hash = contentHash(item.node_id);
         const extractionRef = item.extraction_ref ?? null;
+        const content = assembleContent(item.node_id);
+        const hash = createHash('sha256').update(content).digest('hex');
+        const existing = stmtGetAnyHashForGroup.get(item.node_id, item.source_type, extractionRef);
+        if (existing && existing.source_hash === hash) return true;
 
-        const existing = stmtGetExistingMeta.get(item.node_id, item.source_type, extractionRef);
+        const vectors = await embedder.embedDocument(content);
+        const now = new Date().toISOString();
 
-        if (existing && existing.source_hash === hash) {
-          // Content unchanged — skip embedding
+        writeGroup(item.node_id, item.source_type, extractionRef, hash, vectors, now);
+      }
+
+      if (item.source_type === 'extraction') {
+        if (!deps?.extractionCache || !deps?.vaultPath || !item.extraction_ref) {
           return true;
         }
 
-        // Embed the content
-        const content = assembleContent(item.node_id);
-        const vector = await embedder.embedDocument(content);
-        const vectorBytes = new Uint8Array(vector.buffer, vector.byteOffset, vector.byteLength);
-        const now = new Date().toISOString();
-
-        if (existing) {
-          // Update existing rows
-          stmtUpdateMeta.run(hash, now, existing.id);
-          stmtUpdateVec.run(vectorBytes, existing.id);
-        } else {
-          // Insert new rows — use lastInsertRowid for the vec ID
-          const insertResult = stmtInsertMeta.run(item.node_id, item.source_type, hash, 0, extractionRef, now);
-          // sqlite-vec vec0 requires BigInt for explicit primary key values
-          const metaId = BigInt(insertResult.lastInsertRowid);
-          stmtInsertVec.run(metaId, vectorBytes);
+        // resolveEmbedRef may throw on path traversal (safeVaultPath guard). Treat
+        // traversal attempts the same as unresolvable refs — silently no-op.
+        // Any other error (e.g. locked DB) is a real failure — rethrow so the
+        // outer catch retries up to 3×.
+        let resolved: Awaited<ReturnType<typeof resolveEmbedRef>> = null;
+        try {
+          resolved = await resolveEmbedRef(db, deps.vaultPath, item.extraction_ref);
+        } catch (err) {
+          // safeVaultPath throws "Path traversal blocked" for `../` escape attempts.
+          // Treat as unresolvable (no retry). Anything else is a real error — rethrow
+          // so the outer catch retries up to 3x.
+          if (err instanceof Error && err.message.includes('Path traversal')) {
+            return true;
+          }
+          throw err;
         }
+        if (!resolved || resolved.isMarkdown) return true;
+
+        const extraction = await deps.extractionCache.getExtraction(resolved.filePath);
+        const text = extraction.text ?? '';
+        if (text.length === 0) return true;
+
+        const hash = createHash('sha256').update(text).digest('hex');
+        const extractionRef = item.extraction_ref;
+        const existing = stmtGetAnyHashForGroup.get(item.node_id, 'extraction', extractionRef);
+        if (existing && existing.source_hash === hash) return true;
+
+        const vectors = await embedder.embedDocument(text);
+        const now = new Date().toISOString();
+        writeGroup(item.node_id, 'extraction', extractionRef, hash, vectors, now);
       }
 
       return true;

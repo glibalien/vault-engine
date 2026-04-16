@@ -10,13 +10,13 @@ import type { Embedder } from '../../src/search/embedder.js';
 // Fake embedder with deterministic vectors
 function createFakeEmbedder(): Embedder {
   return {
-    async embedDocument(text: string): Promise<Float32Array> {
+    async embedDocument(text: string): Promise<Float32Array[]> {
       const arr = new Float32Array(256);
       const seed = text.length;
       for (let i = 0; i < 256; i++) {
         arr[i] = (seed % 100) / 100 + i * 0.001;
       }
-      return arr;
+      return [arr];
     },
     async embedQuery(text: string): Promise<Float32Array> {
       const arr = new Float32Array(256);

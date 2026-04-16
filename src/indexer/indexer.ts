@@ -8,6 +8,7 @@ import { splitFrontmatter } from '../parser/frontmatter.js';
 import type { WikiLink, YamlValue } from '../parser/types.js';
 import { sha256 } from './hash.js';
 import { shouldIgnore } from './ignore.js';
+import type { EmbeddingIndexer } from '../search/indexer.js';
 
 const WIKILINK_RE = /\[\[([^\]|]+)(?:\|([^\]]+))?\]\]/;
 
@@ -366,7 +367,7 @@ export function indexFile(absolutePath: string, vaultPath: string, db: Database.
 /**
  * Remove a node by its vault-relative file path.
  */
-export function deleteNodeByPath(filePath: string, db: Database.Database): boolean {
+export function deleteNodeByPath(filePath: string, db: Database.Database, embeddingIndexer?: EmbeddingIndexer): boolean {
   const stmts = prepareStatements(db);
 
   const existing = stmts.getNodeByPath.get(filePath) as { id: string } | undefined;
@@ -384,6 +385,10 @@ export function deleteNodeByPath(filePath: string, db: Database.Database): boole
     stmts.deleteNode.run(existing.id);
   });
   txn();
+
+  // Clean up embedding rows after node is confirmed deleted.
+  // embedding_vec is a vec0 virtual table with no FK cascade.
+  embeddingIndexer?.removeNode(existing.id);
 
   return true;
 }

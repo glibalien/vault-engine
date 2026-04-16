@@ -20,6 +20,7 @@ export interface SearchHit {
   score: number;
   match_sources: Array<'fts' | 'semantic'>;
   matched_embed?: string;
+  matched_chunk_index?: number;
   snippet?: string;
 }
 

@@ -6,7 +6,7 @@ describe('Embedder interface', () => {
     // This is a compile-time check — if the interface changes, this test
     // will fail to compile, alerting us to update all implementations.
     const fake: Embedder = {
-      async embedDocument(text: string) { return new Float32Array(256); },
+      async embedDocument(text: string) { return [new Float32Array(256)]; },
       async embedQuery(text: string) { return new Float32Array(256); },
       isReady() { return true; },
     };

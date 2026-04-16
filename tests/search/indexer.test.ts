@@ -1,4 +1,7 @@
-import { describe, it, expect, beforeEach, vi } from 'vitest';
+import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
+import { mkdtempSync, writeFileSync, rmSync } from 'node:fs';
+import { join } from 'node:path';
+import { tmpdir } from 'node:os';
 import { createTestDb } from '../helpers/db.js';
 import { createEmbeddingIndexer, type EmbeddingIndexer } from '../../src/search/indexer.js';
 import type { Embedder } from '../../src/search/embedder.js';
@@ -12,7 +15,7 @@ function createFakeEmbedder(): Embedder & { callCount: number; lastText: string 
   return {
     get callCount() { return callCount; },
     get lastText() { return lastText; },
-    async embedDocument(text: string): Promise<Float32Array> {
+    async embedDocument(text: string): Promise<Float32Array[]> {
       callCount++;
       lastText = text;
       // Return deterministic vector based on text length
@@ -20,7 +23,7 @@ function createFakeEmbedder(): Embedder & { callCount: number; lastText: string 
       for (let i = 0; i < 256; i++) {
         arr[i] = (text.length % 100) / 100 + i * 0.001;
       }
-      return arr;
+      return [arr];
     },
     async embedQuery(text: string): Promise<Float32Array> {
       return new Float32Array(256).fill(0.5);
@@ -28,6 +31,25 @@ function createFakeEmbedder(): Embedder & { callCount: number; lastText: string 
     isReady(): boolean {
       return true;
     },
+  };
+}
+
+function createMultiChunkEmbedder(chunkCount: number): Embedder & { callCount: number } {
+  let callCount = 0;
+  return {
+    get callCount() { return callCount; },
+    async embedDocument(text: string): Promise<Float32Array[]> {
+      callCount++;
+      return Array.from({ length: chunkCount }, (_, i) => {
+        const arr = new Float32Array(256);
+        for (let j = 0; j < 256; j++) {
+          arr[j] = (i * 0.01) + j * 0.001;
+        }
+        return arr;
+      });
+    },
+    async embedQuery(): Promise<Float32Array> { return new Float32Array(256).fill(0.5); },
+    isReady(): boolean { return true; },
   };
 }
 
@@ -323,7 +345,7 @@ describe('EmbeddingIndexer', () => {
 
       return {
         get callCount() { return callCount; },
-        async embedDocument(text: string): Promise<Float32Array> {
+        async embedDocument(text: string): Promise<Float32Array[]> {
           callCount++;
           if (callCount <= failCount) {
             throw new Error(`Simulated embedding failure (call ${callCount})`);
@@ -332,7 +354,7 @@ describe('EmbeddingIndexer', () => {
           for (let i = 0; i < 256; i++) {
             arr[i] = (text.length % 100) / 100 + i * 0.001;
           }
-          return arr;
+          return [arr];
         },
         async embedQuery(_text: string): Promise<Float32Array> {
           return new Float32Array(256).fill(0.5);
@@ -377,6 +399,110 @@ describe('EmbeddingIndexer', () => {
     });
   });
 
+  describe('multi-chunk storage', () => {
+    it('stores N meta+vec rows when embedder returns N vectors', async () => {
+      db = createTestDb();
+      const multi = createMultiChunkEmbedder(3);
+      const idx = createEmbeddingIndexer(db, multi);
+      insertNode(db, 'n1', 'Title', 'body');
+      idx.enqueue({ node_id: 'n1', source_type: 'node' });
+      await idx.processAll();
+
+      const rows = db.prepare(
+        "SELECT chunk_index FROM embedding_meta WHERE node_id = 'n1' AND source_type = 'node' ORDER BY chunk_index"
+      ).all() as { chunk_index: number }[];
+      expect(rows.map(r => r.chunk_index)).toEqual([0, 1, 2]);
+
+      const vecCount = (db.prepare(
+        "SELECT COUNT(*) as cnt FROM embedding_vec WHERE id IN (SELECT id FROM embedding_meta WHERE node_id = 'n1')"
+      ).get() as { cnt: number }).cnt;
+      expect(vecCount).toBe(3);
+    });
+
+    it('skips re-embedding when hash is unchanged', async () => {
+      db = createTestDb();
+      const multi = createMultiChunkEmbedder(3);
+      const idx = createEmbeddingIndexer(db, multi);
+      insertNode(db, 'n1', 'Title', 'body');
+      idx.enqueue({ node_id: 'n1', source_type: 'node' });
+      await idx.processAll();
+
+      idx.enqueue({ node_id: 'n1', source_type: 'node' });
+      await idx.processAll();
+      expect(multi.callCount).toBe(1);
+    });
+
+    it('rolls back partial writes when embedder returns malformed vectors', async () => {
+      db = createTestDb();
+      // Embedder where the 2nd "vector" is null — will throw inside the insert loop
+      const faulty: Embedder = {
+        async embedDocument() {
+          const good = new Float32Array(256).fill(0.1);
+          return [good, null as unknown as Float32Array, good];
+        },
+        async embedQuery() { return new Float32Array(256); },
+        isReady: () => true,
+      };
+      const idx = createEmbeddingIndexer(db, faulty);
+      insertNode(db, 'n1', 'Title', 'body');
+      idx.enqueue({ node_id: 'n1', source_type: 'node' });
+      await idx.processAll();
+
+      // After the failure the entire group should be absent (transaction rolled back)
+      const cnt = (db.prepare(
+        "SELECT COUNT(*) as cnt FROM embedding_meta WHERE node_id = 'n1'"
+      ).get() as { cnt: number }).cnt;
+      expect(cnt).toBe(0);
+    });
+
+    it('replaces old rows when content changes from N=3 chunks to N=1', async () => {
+      db = createTestDb();
+      const three = createMultiChunkEmbedder(3);
+      const idx1 = createEmbeddingIndexer(db, three);
+      insertNode(db, 'n1', 'Title', 'body v1');
+      idx1.enqueue({ node_id: 'n1', source_type: 'node' });
+      await idx1.processAll();
+
+      db.prepare('UPDATE nodes SET body = ? WHERE id = ?').run('body v2', 'n1');
+      const one = createMultiChunkEmbedder(1);
+      const idx2 = createEmbeddingIndexer(db, one);
+      idx2.enqueue({ node_id: 'n1', source_type: 'node' });
+      await idx2.processAll();
+
+      const rows = db.prepare(
+        "SELECT chunk_index FROM embedding_meta WHERE node_id = 'n1' AND source_type = 'node' ORDER BY chunk_index"
+      ).all() as { chunk_index: number }[];
+      expect(rows.map(r => r.chunk_index)).toEqual([0]);
+      const vecCount = (db.prepare(
+        "SELECT COUNT(*) as cnt FROM embedding_vec WHERE id IN (SELECT id FROM embedding_meta WHERE node_id = 'n1')"
+      ).get() as { cnt: number }).cnt;
+      expect(vecCount).toBe(1);
+    });
+  });
+
+  describe('removeNode (multi-chunk)', () => {
+    it('drops vec rows for all chunks of a deleted node', async () => {
+      db = createTestDb();
+      const multi = createMultiChunkEmbedder(3);
+      const idx = createEmbeddingIndexer(db, multi);
+      insertNode(db, 'n1', 'Title', 'body');
+      idx.enqueue({ node_id: 'n1', source_type: 'node' });
+      await idx.processAll();
+
+      // Before: 3 meta rows + 3 vec rows
+      expect((db.prepare("SELECT COUNT(*) as cnt FROM embedding_meta WHERE node_id = 'n1'").get() as any).cnt).toBe(3);
+
+      idx.removeNode('n1');
+
+      // After: 0 meta rows + 0 vec rows
+      expect((db.prepare("SELECT COUNT(*) as cnt FROM embedding_meta WHERE node_id = 'n1'").get() as any).cnt).toBe(0);
+      const vecCnt = (db.prepare(
+        "SELECT COUNT(*) as cnt FROM embedding_vec WHERE id IN (SELECT id FROM embedding_meta WHERE node_id = 'n1')"
+      ).get() as any).cnt;
+      expect(vecCnt).toBe(0);
+    });
+  });
+
   describe('clearAll', () => {
     it('clears all embedding data and queue', async () => {
       insertNode(db, 'n1', 'Node 1');
@@ -400,5 +526,104 @@ describe('EmbeddingIndexer', () => {
 
       expect(indexer.queueSize()).toBe(0);
     });
+  });
+});
+
+function createFakeCache(byPath: Record<string, string>) {
+  return {
+    async getExtraction(filePath: string) {
+      const text = byPath[filePath];
+      if (!text) throw new Error(`no fake extraction for ${filePath}`);
+      return { text, mediaType: 'audio' as const };
+    },
+  };
+}
+
+describe('extraction embedding', () => {
+  let db: Database.Database;
+  let fakeEmbedder: ReturnType<typeof createFakeEmbedder>;
+  let vaultDir: string;
+
+  beforeEach(() => {
+    db = createTestDb();
+    fakeEmbedder = createFakeEmbedder();
+    vaultDir = mkdtempSync(join(tmpdir(), 'vault-idx-ext-'));
+  });
+
+  afterEach(() => {
+    rmSync(vaultDir, { recursive: true, force: true });
+  });
+
+  it('enqueuing a node discovers non-markdown embeds and enqueues extractions', async () => {
+    writeFileSync(join(vaultDir, 'audio.m4a'), 'fake audio bytes');
+    const cache = createFakeCache({ [join(vaultDir, 'audio.m4a')]: 'transcript here' });
+    const idx = createEmbeddingIndexer(db, fakeEmbedder, { extractionCache: cache as any, vaultPath: vaultDir });
+
+    insertNode(db, 'n1', 'With Audio', 'See transcript: ![[audio.m4a]]');
+    idx.enqueue({ node_id: 'n1', source_type: 'node' });
+
+    expect(idx.queueSize()).toBe(2);
+    await idx.processAll();
+
+    const extRows = db.prepare(
+      "SELECT extraction_ref FROM embedding_meta WHERE node_id = 'n1' AND source_type = 'extraction'"
+    ).all() as { extraction_ref: string }[];
+    expect(extRows.length).toBe(1);
+    expect(extRows[0].extraction_ref).toBe('audio.m4a');
+  });
+
+  it('does NOT enqueue extraction items for markdown embeds', async () => {
+    insertNode(db, 'n2', 'Other Note', 'stuff');
+    const cache = createFakeCache({});
+    const idx = createEmbeddingIndexer(db, fakeEmbedder, { extractionCache: cache as any, vaultPath: vaultDir });
+
+    insertNode(db, 'n1', 'Parent', 'See: ![[Other Note]]');
+    idx.enqueue({ node_id: 'n1', source_type: 'node' });
+
+    expect(idx.queueSize()).toBe(1);
+  });
+
+  it('removes orphaned extraction rows when an embed is removed from a node body', async () => {
+    writeFileSync(join(vaultDir, 'a.m4a'), 'fake');
+    writeFileSync(join(vaultDir, 'b.m4a'), 'fake');
+    const cache = createFakeCache({
+      [join(vaultDir, 'a.m4a')]: 'text a',
+      [join(vaultDir, 'b.m4a')]: 'text b',
+    });
+    const idx = createEmbeddingIndexer(db, fakeEmbedder, { extractionCache: cache as any, vaultPath: vaultDir });
+
+    insertNode(db, 'n1', 'Node', 'body ![[a.m4a]] ![[b.m4a]]');
+    idx.enqueue({ node_id: 'n1', source_type: 'node' });
+    await idx.processAll();
+
+    let refs = db.prepare(
+      "SELECT extraction_ref FROM embedding_meta WHERE node_id = 'n1' AND source_type = 'extraction' ORDER BY extraction_ref"
+    ).all() as { extraction_ref: string }[];
+    expect(refs.map(r => r.extraction_ref)).toEqual(['a.m4a', 'b.m4a']);
+
+    // Edit body: drop b.m4a
+    db.prepare('UPDATE nodes SET body = ? WHERE id = ?').run('body ![[a.m4a]]', 'n1');
+    idx.enqueue({ node_id: 'n1', source_type: 'node' });
+    await idx.processAll();
+
+    refs = db.prepare(
+      "SELECT extraction_ref FROM embedding_meta WHERE node_id = 'n1' AND source_type = 'extraction' ORDER BY extraction_ref"
+    ).all() as { extraction_ref: string }[];
+    expect(refs.map(r => r.extraction_ref)).toEqual(['a.m4a']);
+  });
+
+  it('extraction item is skipped on second run when text hash unchanged', async () => {
+    writeFileSync(join(vaultDir, 'audio.m4a'), 'x');
+    const cache = createFakeCache({ [join(vaultDir, 'audio.m4a')]: 'stable text' });
+    const idx = createEmbeddingIndexer(db, fakeEmbedder, { extractionCache: cache as any, vaultPath: vaultDir });
+    insertNode(db, 'n1', 'With Audio', '![[audio.m4a]]');
+
+    idx.enqueue({ node_id: 'n1', source_type: 'node' });
+    await idx.processAll();
+    const firstCalls = fakeEmbedder.callCount;
+
+    idx.enqueue({ node_id: 'n1', source_type: 'node' });
+    await idx.processAll();
+    expect(fakeEmbedder.callCount).toBe(firstCalls);
   });
 });

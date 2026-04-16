@@ -3,7 +3,7 @@ import type { Embedder } from './embedder.js';
 import type { SearchHit } from './types.js';
 
 const RRF_K = 60;
-const VECTOR_LIMIT = 200;
+const VECTOR_LIMIT = 400;
 const SNIPPET_CONTEXT = 40; // characters around match
 
 /**
@@ -56,6 +56,7 @@ interface VecHit {
   node_id: string;
   source_type: 'node' | 'extraction';
   extraction_ref: string | null;
+  chunk_index: number;
   distance: number;
 }
 
@@ -118,7 +119,7 @@ function vectorSearch(
   // sqlite-vec may not support complex WHERE clauses on the virtual table,
   // so we do candidate filtering in JS afterward.
   const sql = `
-    SELECT v.id as meta_id, m.node_id, m.source_type, m.extraction_ref, v.distance
+    SELECT v.id as meta_id, m.node_id, m.source_type, m.extraction_ref, m.chunk_index, v.distance
     FROM embedding_vec v
     INNER JOIN embedding_meta m ON m.id = v.id
     WHERE v.vector MATCH ? AND k = ?
@@ -148,6 +149,8 @@ function fuseResults(
       match_sources: Set<'fts' | 'semantic'>;
       snippet?: string;
       matched_embed?: string;
+      bestChunkScore?: number;
+      matched_chunk_index?: number;
     }
   >();
 
@@ -178,12 +181,18 @@ function fuseResults(
   for (let i = 0; i < vecHits.length; i++) {
     const hit = vecHits[i];
     const rank = i + 1;
+    const rankScore = 1 / (RRF_K + rank);
     const entry = getOrCreate(hit.node_id);
-    entry.score += 1 / (RRF_K + rank);
+    entry.score += rankScore;
     entry.match_sources.add('semantic');
 
     if (hit.source_type === 'extraction' && hit.extraction_ref !== null && !entry.matched_embed) {
       entry.matched_embed = hit.extraction_ref;
+    }
+
+    if (entry.bestChunkScore === undefined || rankScore > entry.bestChunkScore) {
+      entry.bestChunkScore = rankScore;
+      entry.matched_chunk_index = hit.chunk_index;
     }
   }
 
@@ -200,6 +209,9 @@ function fuseResults(
     }
     if (entry.matched_embed !== undefined) {
       hit.matched_embed = entry.matched_embed;
+    }
+    if (entry.matched_chunk_index !== undefined) {
+      hit.matched_chunk_index = entry.matched_chunk_index;
     }
     hits.push(hit);
   }

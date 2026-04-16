@@ -17,10 +17,38 @@ import { buildFixable } from '../../validation/fixable.js';
 import type { WriteLockManager } from '../../sync/write-lock.js';
 import type { SyncLogger } from '../../sync/sync-logger.js';
 
-const operationSchema = z.object({
-  op: z.enum(['create', 'update', 'delete']),
-  params: z.record(z.string(), z.unknown()),
-});
+const createParamsSchema = z.object({
+  title: z.string(),
+  types: z.array(z.string()).optional(),
+  fields: z.record(z.string(), z.unknown()).optional(),
+  body: z.string().optional(),
+  path: z.string().optional(),
+}).strict();
+
+const updateParamsSchema = z.object({
+  node_id: z.string().optional(),
+  file_path: z.string().optional(),
+  title: z.string().optional(),
+  set_title: z.string().optional(),
+  set_types: z.array(z.string()).optional(),
+  add_types: z.array(z.string()).optional(),
+  remove_types: z.array(z.string()).optional(),
+  set_fields: z.record(z.string(), z.unknown()).optional(),
+  set_body: z.string().optional(),
+  append_body: z.string().optional(),
+}).strict();
+
+const deleteParamsSchema = z.object({
+  node_id: z.string().optional(),
+  file_path: z.string().optional(),
+  title: z.string().optional(),
+}).strict();
+
+const operationSchema = z.discriminatedUnion('op', [
+  z.object({ op: z.literal('create'), params: createParamsSchema }),
+  z.object({ op: z.literal('update'), params: updateParamsSchema }),
+  z.object({ op: z.literal('delete'), params: deleteParamsSchema }),
+]);
 
 const paramsShape = {
   operations: z.array(operationSchema),
@@ -54,11 +82,11 @@ export function registerBatchMutate(
 
           try {
             if (op === 'create') {
-              const title = opParams.title as string;
-              const types = (opParams.types as string[]) ?? [];
-              const fields = (opParams.fields as Record<string, unknown>) ?? {};
-              const body = (opParams.body as string) ?? '';
-              const path = opParams.path as string | undefined;
+              const title = opParams.title;
+              const types = opParams.types ?? [];
+              const fields = opParams.fields ?? {};
+              const body = opParams.body ?? '';
+              const path = opParams.path;
 
               // Type-schema check
               const typeCheck = checkTypesHaveSchemas(db, types);
@@ -89,9 +117,9 @@ export function registerBatchMutate(
 
             } else if (op === 'update') {
               const resolved = resolveNodeIdentity(db, {
-                node_id: opParams.node_id as string | undefined,
-                file_path: opParams.file_path as string | undefined,
-                title: opParams.title as string | undefined,
+                node_id: opParams.node_id,
+                file_path: opParams.file_path,
+                title: opParams.title,
               });
               if (!resolved.ok) throw new PipelineError(resolved.code, resolved.message);
 
@@ -110,39 +138,66 @@ export function registerBatchMutate(
               for (const row of fieldRows) currentFields[row.field_name] = reconstructValue(row);
               const currentBody = (db.prepare('SELECT body FROM nodes WHERE id = ?').get(node.node_id) as { body: string }).body;
 
-              const setFields = opParams.set_fields as Record<string, unknown> | undefined;
+              // Fields
               const finalFields = { ...currentFields };
-              if (setFields) {
-                for (const [key, value] of Object.entries(setFields)) {
+              if (opParams.set_fields) {
+                for (const [key, value] of Object.entries(opParams.set_fields)) {
                   finalFields[key] = value; // null passes through as deletion intent
                 }
               }
 
-              const setTypes = opParams.set_types as string[] | undefined;
-              if (setTypes) {
-                const typeCheck = checkTypesHaveSchemas(db, setTypes);
+              // Types: set_types wins outright, otherwise apply add/remove
+              let finalTypes: string[];
+              if (opParams.set_types !== undefined) {
+                finalTypes = opParams.set_types;
+              } else {
+                finalTypes = [...currentTypes];
+                if (opParams.add_types) {
+                  for (const t of opParams.add_types) {
+                    if (!finalTypes.includes(t)) finalTypes.push(t);
+                  }
+                }
+                if (opParams.remove_types) {
+                  finalTypes = finalTypes.filter(t => !opParams.remove_types!.includes(t));
+                }
+              }
+
+              const hasTypeOp = opParams.set_types !== undefined || opParams.add_types !== undefined || opParams.remove_types !== undefined;
+              if (hasTypeOp) {
+                const typeCheck = checkTypesHaveSchemas(db, finalTypes);
                 if (!typeCheck.valid) {
                   throw new PipelineError('UNKNOWN_TYPE',
                     `Cannot set types ${typeCheck.unknown.map(t => `'${t}'`).join(', ')} — no schema exists. Available: ${typeCheck.available.join(', ')}`);
                 }
               }
 
+              // Body: set_body and append_body are mutually exclusive
+              if (opParams.set_body !== undefined && opParams.append_body !== undefined) {
+                throw new PipelineError('INVALID_PARAMS', 'set_body and append_body are mutually exclusive');
+              }
+              let finalBody = currentBody;
+              if (opParams.set_body !== undefined) {
+                finalBody = opParams.set_body;
+              } else if (opParams.append_body !== undefined) {
+                finalBody = currentBody ? `${currentBody}\n\n${opParams.append_body}` : opParams.append_body;
+              }
+
               const result = executeMutation(db, writeLock, vaultPath, {
                 source: 'tool',
                 node_id: node.node_id,
                 file_path: node.file_path,
-                title: (opParams.set_title as string) ?? node.title,
-                types: setTypes ?? currentTypes,
+                title: opParams.set_title ?? node.title,
+                types: finalTypes,
                 fields: finalFields,
-                body: (opParams.set_body as string) ?? currentBody,
+                body: finalBody,
               }, syncLogger);
               results.push({ op: 'update', node_id: result.node_id, file_path: result.file_path });
 
             } else if (op === 'delete') {
               const resolved = resolveNodeIdentity(db, {
-                node_id: opParams.node_id as string | undefined,
-                file_path: opParams.file_path as string | undefined,
-                title: opParams.title as string | undefined,
+                node_id: opParams.node_id,
+                file_path: opParams.file_path,
+                title: opParams.title,
               });
               if (!resolved.ok) throw new PipelineError(resolved.code, resolved.message);
 

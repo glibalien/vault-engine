@@ -347,6 +347,129 @@ describe('batch-mutate type enforcement', () => {
   });
 });
 
+// ── batch-mutate update operations ─────────────────────────────────
+
+describe('batch-mutate update operations', () => {
+  it('append_body appends to existing body', async () => {
+    // Create a node first
+    const createHandler = getToolHandler(registerCreateNode);
+    const created = parseResult(await createHandler({
+      title: 'Append Target',
+      types: ['note'],
+      body: 'Original content',
+    }) as any);
+    expect(created.node_id).toBeDefined();
+
+    // Now batch-mutate with append_body
+    const handler = getToolHandler(registerBatchMutate);
+    const result = parseResult(await handler({
+      operations: [
+        { op: 'update', params: { title: 'Append Target', append_body: 'Appended section' } },
+      ],
+    }) as any);
+    expect(result.applied).toBe(true);
+
+    // Verify the body was appended
+    const row = db.prepare('SELECT body FROM nodes WHERE title = ?').get('Append Target') as { body: string };
+    expect(row.body).toBe('Original content\n\nAppended section');
+  });
+
+  it('append_body on empty body sets body directly', async () => {
+    const createHandler = getToolHandler(registerCreateNode);
+    await createHandler({ title: 'Empty Body', types: ['note'], body: '' });
+
+    const handler = getToolHandler(registerBatchMutate);
+    const result = parseResult(await handler({
+      operations: [
+        { op: 'update', params: { title: 'Empty Body', append_body: 'First content' } },
+      ],
+    }) as any);
+    expect(result.applied).toBe(true);
+
+    const row = db.prepare('SELECT body FROM nodes WHERE title = ?').get('Empty Body') as { body: string };
+    expect(row.body).toBe('First content');
+  });
+
+  it('rejects set_body and append_body together', async () => {
+    const createHandler = getToolHandler(registerCreateNode);
+    await createHandler({ title: 'Both Body', types: ['note'], body: '' });
+
+    const handler = getToolHandler(registerBatchMutate);
+    const result = parseResult(await handler({
+      operations: [
+        { op: 'update', params: { title: 'Both Body', set_body: 'A', append_body: 'B' } },
+      ],
+    }) as any);
+    expect(result.applied).toBe(false);
+    expect(result.error.message).toContain('mutually exclusive');
+  });
+
+  it('add_types appends types without replacing', async () => {
+    const createHandler = getToolHandler(registerCreateNode);
+    await createHandler({ title: 'Type Target', types: ['note'], body: '' });
+
+    const handler = getToolHandler(registerBatchMutate);
+    const result = parseResult(await handler({
+      operations: [
+        { op: 'update', params: { title: 'Type Target', add_types: ['task'] } },
+      ],
+    }) as any);
+    expect(result.applied).toBe(true);
+
+    const types = (db.prepare('SELECT schema_type FROM node_types WHERE node_id = (SELECT id FROM nodes WHERE title = ?)').all('Type Target') as Array<{ schema_type: string }>).map(t => t.schema_type);
+    expect(types).toContain('note');
+    expect(types).toContain('task');
+  });
+
+  it('remove_types removes without replacing', async () => {
+    // Create with two types
+    const createHandler = getToolHandler(registerCreateNode);
+    const created = parseResult(await createHandler({ title: 'Remove Target', types: ['note'], body: '' }) as any);
+
+    // Add task type
+    const handler = getToolHandler(registerBatchMutate);
+    await handler({
+      operations: [
+        { op: 'update', params: { title: 'Remove Target', add_types: ['task'] } },
+      ],
+    });
+
+    // Now remove note
+    const result = parseResult(await handler({
+      operations: [
+        { op: 'update', params: { title: 'Remove Target', remove_types: ['note'] } },
+      ],
+    }) as any);
+    expect(result.applied).toBe(true);
+
+    const types = (db.prepare('SELECT schema_type FROM node_types WHERE node_id = (SELECT id FROM nodes WHERE title = ?)').all('Remove Target') as Array<{ schema_type: string }>).map(t => t.schema_type);
+    expect(types).toEqual(['task']);
+  });
+
+  it('create + append_body update in same batch', async () => {
+    // Create a target node to append to
+    const createHandler = getToolHandler(registerCreateNode);
+    await createHandler({ title: 'Daily Note', types: ['note'], body: '## Morning' });
+
+    const handler = getToolHandler(registerBatchMutate);
+    const result = parseResult(await handler({
+      operations: [
+        { op: 'create', params: { title: 'New Clipping', types: ['note'], body: 'Article text' } },
+        { op: 'update', params: { title: 'Daily Note', append_body: '## Reading\n- [[New Clipping]]' } },
+      ],
+    }) as any);
+    expect(result.applied).toBe(true);
+    expect(result.results).toHaveLength(2);
+
+    const row = db.prepare('SELECT body FROM nodes WHERE title = ?').get('Daily Note') as { body: string };
+    expect(row.body).toBe('## Morning\n\n## Reading\n- [[New Clipping]]');
+  });
+
+  // Note: unrecognized params are rejected by Zod .strict() at the MCP transport
+  // layer, which the test harness (fake server) bypasses. Production calls with
+  // bogus params will get a Zod validation error before reaching the handler.
+});
+
 // ── watcher path stays permissive ────────────────────────────────────
 
 describe('watcher path stays permissive', () => {

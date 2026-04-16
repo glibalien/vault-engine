@@ -26,8 +26,10 @@ export function loadSchemaContext(db: Database.Database, types: string[]): Schem
       label: string | null;
       description: string | null;
       sort_order: number | null;
-      required: number | null;
-      default_value: string | null;
+      required_override: number | null;
+      default_value_override: string | null;
+      default_value_overridden: number;
+      enum_values_override: string | null;
     }>;
 
     if (rows.length > 0) {
@@ -37,8 +39,11 @@ export function loadSchemaContext(db: Database.Database, types: string[]): Schem
         label: r.label,
         description: r.description,
         sort_order: r.sort_order ?? 1000,
-        required: r.required !== null ? r.required === 1 : null,
-        default_value: r.default_value !== null ? JSON.parse(r.default_value) : null,
+        required_override: r.required_override !== null ? r.required_override === 1 : null,
+        default_value_override: r.default_value_overridden === 1
+          ? { kind: 'override' as const, value: r.default_value_override !== null ? JSON.parse(r.default_value_override) : null }
+          : { kind: 'inherit' as const },
+        enum_values_override: r.enum_values_override !== null ? JSON.parse(r.enum_values_override) : null,
       })));
     }
   }

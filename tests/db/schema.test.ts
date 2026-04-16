@@ -2,7 +2,7 @@ import { describe, it, expect } from 'vitest';
 import Database from 'better-sqlite3';
 import { createTestDb } from '../helpers/db.js';
 import { createSchema } from '../../src/db/schema.js';
-import { upgradeToPhase2, upgradeToPhase3, upgradeToPhase6 } from '../../src/db/migrate.js';
+import { upgradeToPhase2, upgradeToPhase3, upgradeToPhase6, upgradeForOverrides } from '../../src/db/migrate.js';
 import { getNodeConformance } from '../../src/validation/conformance.js';
 
 describe('createSchema', () => {
@@ -116,12 +116,15 @@ describe('createSchema', () => {
     expect(tables).toHaveLength(1);
   });
 
-  it('global_fields has required, per_type_overrides_allowed, and list_item_type columns', () => {
+  it('global_fields has required, overrides_allowed_* columns, and list_item_type', () => {
     const db = createTestDb();
     const columns = db.prepare('PRAGMA table_info(global_fields)').all() as { name: string }[];
     const names = columns.map(c => c.name);
     expect(names).toContain('required');
-    expect(names).toContain('per_type_overrides_allowed');
+    expect(names).toContain('overrides_allowed_required');
+    expect(names).toContain('overrides_allowed_default_value');
+    expect(names).toContain('overrides_allowed_enum_values');
+    expect(names).not.toContain('per_type_overrides_allowed');
     expect(names).toContain('list_item_type');
   });
 
@@ -402,6 +405,180 @@ describe('createSchema — sync_log', () => {
     const names = indexes.map(i => i.name);
     expect(names).toContain('idx_sync_log_file_path');
     expect(names).toContain('idx_sync_log_timestamp');
+  });
+});
+
+describe('upgradeForOverrides', () => {
+  it('migrates a pre-overrides DB to the new schema', () => {
+    // Simulate a DB with old per_type_overrides_allowed column and old claim columns
+    const db = new Database(':memory:');
+    db.pragma('journal_mode = WAL');
+    db.pragma('foreign_keys = ON');
+
+    // db.exec is the better-sqlite3 method for running multi-statement SQL,
+    // not child_process.exec — this is safe, no shell involved.
+    const runSql = db.exec.bind(db);
+    runSql(`
+      CREATE TABLE schemas (
+        name TEXT PRIMARY KEY,
+        display_name TEXT,
+        icon TEXT,
+        filename_template TEXT,
+        default_directory TEXT,
+        field_claims TEXT NOT NULL DEFAULT '[]',
+        metadata TEXT
+      );
+      CREATE TABLE global_fields (
+        name TEXT PRIMARY KEY,
+        field_type TEXT NOT NULL,
+        enum_values TEXT,
+        reference_target TEXT,
+        description TEXT,
+        default_value TEXT,
+        required INTEGER NOT NULL DEFAULT 0,
+        per_type_overrides_allowed INTEGER NOT NULL DEFAULT 0,
+        list_item_type TEXT
+      );
+      CREATE TABLE schema_field_claims (
+        schema_name TEXT NOT NULL REFERENCES schemas(name) ON DELETE CASCADE,
+        field TEXT NOT NULL REFERENCES global_fields(name),
+        label TEXT,
+        description TEXT,
+        sort_order INTEGER DEFAULT 1000,
+        required INTEGER,
+        default_value TEXT,
+        PRIMARY KEY (schema_name, field)
+      );
+    `);
+
+    // Insert test data
+    db.prepare("INSERT INTO schemas (name) VALUES (?)").run('note');
+    db.prepare(
+      "INSERT INTO global_fields (name, field_type, per_type_overrides_allowed) VALUES (?, ?, ?)"
+    ).run('status', 'enum', 1);
+    db.prepare(
+      "INSERT INTO schema_field_claims (schema_name, field, required, default_value) VALUES (?, ?, ?, ?)"
+    ).run('note', 'status', 1, '"active"');
+
+    upgradeForOverrides(db);
+
+    // Check global_fields columns
+    const gfCols = (db.prepare('PRAGMA table_info(global_fields)').all() as { name: string }[]).map(c => c.name);
+    expect(gfCols).toContain('overrides_allowed_required');
+    expect(gfCols).toContain('overrides_allowed_default_value');
+    expect(gfCols).toContain('overrides_allowed_enum_values');
+    expect(gfCols).not.toContain('per_type_overrides_allowed');
+
+    // Check data migration: old per_type_overrides_allowed=1 -> required=1, default_value=1, enum_values=0
+    const gf = db.prepare("SELECT * FROM global_fields WHERE name = 'status'").get() as Record<string, unknown>;
+    expect(gf.overrides_allowed_required).toBe(1);
+    expect(gf.overrides_allowed_default_value).toBe(1);
+    expect(gf.overrides_allowed_enum_values).toBe(0);
+
+    // Check schema_field_claims columns
+    const sfcCols = (db.prepare('PRAGMA table_info(schema_field_claims)').all() as { name: string }[]).map(c => c.name);
+    expect(sfcCols).toContain('required_override');
+    expect(sfcCols).toContain('default_value_override');
+    expect(sfcCols).toContain('default_value_overridden');
+    expect(sfcCols).toContain('enum_values_override');
+    expect(sfcCols).not.toContain('required');
+    expect(sfcCols).not.toContain('default_value');
+
+    // Check data migration: existing claim with non-null default_value gets overridden=1
+    const claim = db.prepare("SELECT * FROM schema_field_claims WHERE schema_name = 'note' AND field = 'status'").get() as Record<string, unknown>;
+    expect(claim.required_override).toBe(1);
+    expect(claim.default_value_override).toBe('"active"');
+    expect(claim.default_value_overridden).toBe(1);
+    expect(claim.enum_values_override).toBeNull();
+  });
+
+  it('is idempotent — running twice does not throw', () => {
+    const db = createTestDb();
+    upgradeForOverrides(db);
+    expect(() => upgradeForOverrides(db)).not.toThrow();
+  });
+
+  it('runs without error on a fresh DB (no old columns to migrate)', () => {
+    const db = createTestDb();
+    expect(() => upgradeForOverrides(db)).not.toThrow();
+
+    // Verify the new schema columns are present
+    const gfCols = (db.prepare('PRAGMA table_info(global_fields)').all() as { name: string }[]).map(c => c.name);
+    expect(gfCols).toContain('overrides_allowed_required');
+    expect(gfCols).toContain('overrides_allowed_default_value');
+    expect(gfCols).toContain('overrides_allowed_enum_values');
+
+    const sfcCols = (db.prepare('PRAGMA table_info(schema_field_claims)').all() as { name: string }[]).map(c => c.name);
+    expect(sfcCols).toContain('required_override');
+    expect(sfcCols).toContain('default_value_override');
+    expect(sfcCols).toContain('default_value_overridden');
+    expect(sfcCols).toContain('enum_values_override');
+  });
+
+  it('backfills default_value_overridden correctly for null vs non-null', () => {
+    const db = new Database(':memory:');
+    db.pragma('journal_mode = WAL');
+    db.pragma('foreign_keys = ON');
+
+    // db.exec is the better-sqlite3 method for running multi-statement SQL,
+    // not child_process.exec — this is safe, no shell involved.
+    const runSql = db.exec.bind(db);
+    runSql(`
+      CREATE TABLE schemas (
+        name TEXT PRIMARY KEY,
+        display_name TEXT,
+        icon TEXT,
+        filename_template TEXT,
+        default_directory TEXT,
+        field_claims TEXT NOT NULL DEFAULT '[]',
+        metadata TEXT
+      );
+      CREATE TABLE global_fields (
+        name TEXT PRIMARY KEY,
+        field_type TEXT NOT NULL,
+        enum_values TEXT,
+        reference_target TEXT,
+        description TEXT,
+        default_value TEXT,
+        required INTEGER NOT NULL DEFAULT 0,
+        per_type_overrides_allowed INTEGER NOT NULL DEFAULT 0,
+        list_item_type TEXT
+      );
+      CREATE TABLE schema_field_claims (
+        schema_name TEXT NOT NULL REFERENCES schemas(name) ON DELETE CASCADE,
+        field TEXT NOT NULL REFERENCES global_fields(name),
+        label TEXT,
+        description TEXT,
+        sort_order INTEGER DEFAULT 1000,
+        required INTEGER,
+        default_value TEXT,
+        PRIMARY KEY (schema_name, field)
+      );
+    `);
+
+    db.prepare("INSERT INTO schemas (name) VALUES (?)").run('note');
+    db.prepare("INSERT INTO schemas (name) VALUES (?)").run('task');
+    db.prepare("INSERT INTO global_fields (name, field_type) VALUES (?, ?)").run('status', 'enum');
+    db.prepare("INSERT INTO global_fields (name, field_type) VALUES (?, ?)").run('priority', 'number');
+    // One claim with a default, one without
+    db.prepare(
+      "INSERT INTO schema_field_claims (schema_name, field, default_value) VALUES (?, ?, ?)"
+    ).run('note', 'status', '"draft"');
+    db.prepare(
+      "INSERT INTO schema_field_claims (schema_name, field, default_value) VALUES (?, ?, ?)"
+    ).run('task', 'priority', null);
+
+    upgradeForOverrides(db);
+
+    const withDefault = db.prepare(
+      "SELECT default_value_overridden FROM schema_field_claims WHERE schema_name = 'note' AND field = 'status'"
+    ).get() as { default_value_overridden: number };
+    expect(withDefault.default_value_overridden).toBe(1);
+
+    const withoutDefault = db.prepare(
+      "SELECT default_value_overridden FROM schema_field_claims WHERE schema_name = 'task' AND field = 'priority'"
+    ).get() as { default_value_overridden: number };
+    expect(withoutDefault.default_value_overridden).toBe(0);
   });
 });
 

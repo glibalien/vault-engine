@@ -1,5 +1,11 @@
 // src/validation/types.ts
 
+export interface OverridesAllowed {
+  required: boolean;
+  default_value: boolean;
+  enum_values: boolean;
+}
+
 export interface GlobalFieldDefinition {
   name: string;
   field_type: FieldType;
@@ -8,9 +14,11 @@ export interface GlobalFieldDefinition {
   description: string | null;
   default_value: unknown;
   required: boolean;
-  per_type_overrides_allowed: boolean;
+  overrides_allowed: OverridesAllowed;
   list_item_type: FieldType | null;
 }
+
+export type Override<T> = { kind: 'inherit' } | { kind: 'override'; value: T };
 
 export type FieldType = 'string' | 'number' | 'date' | 'boolean' | 'reference' | 'enum' | 'list';
 
@@ -20,8 +28,14 @@ export interface FieldClaim {
   label: string | null;
   description: string | null;
   sort_order: number;
-  required: boolean | null;       // null = not overridden
-  default_value: unknown;         // null = not overridden
+  required_override: boolean | null;       // null = not overridden
+  default_value_override: Override<unknown>;
+  enum_values_override: string[] | null;
+}
+
+export interface PerTypeEnumValues {
+  type: string;
+  values: string[] | null;
 }
 
 export interface EffectiveField {
@@ -33,6 +47,7 @@ export interface EffectiveField {
   resolved_required: boolean;
   resolved_default_value: unknown;
   claiming_types: string[];
+  per_type_enum_values?: PerTypeEnumValues[];
 }
 
 export type EffectiveFieldSet = Map<string, EffectiveField>;

@@ -128,6 +128,102 @@ export function addCreatedAt(db: Database.Database): void {
   run();
 }
 
+/**
+ * Upgrade an existing database for per-type field overrides.
+ *
+ * global_fields: replaces single `per_type_overrides_allowed` with three
+ * granular `overrides_allowed_*` columns.
+ *
+ * schema_field_claims: renames `required` → `required_override`,
+ * `default_value` → `default_value_override`, adds `default_value_overridden`
+ * and `enum_values_override`.
+ *
+ * Idempotent — safe to run on a database that already has the new schema.
+ */
+export function upgradeForOverrides(db: Database.Database): void {
+  const run = db.transaction(() => {
+    // --- global_fields: add granular override columns ---
+    const gfColumns = (
+      db.prepare('PRAGMA table_info(global_fields)').all() as { name: string }[]
+    ).map(c => c.name);
+
+    if (!gfColumns.includes('overrides_allowed_required')) {
+      db.prepare(
+        'ALTER TABLE global_fields ADD COLUMN overrides_allowed_required INTEGER NOT NULL DEFAULT 0'
+      ).run();
+    }
+    if (!gfColumns.includes('overrides_allowed_default_value')) {
+      db.prepare(
+        'ALTER TABLE global_fields ADD COLUMN overrides_allowed_default_value INTEGER NOT NULL DEFAULT 0'
+      ).run();
+    }
+    if (!gfColumns.includes('overrides_allowed_enum_values')) {
+      db.prepare(
+        'ALTER TABLE global_fields ADD COLUMN overrides_allowed_enum_values INTEGER NOT NULL DEFAULT 0'
+      ).run();
+    }
+
+    // Migrate data from old per_type_overrides_allowed → new columns
+    if (gfColumns.includes('per_type_overrides_allowed')) {
+      db.prepare(`
+        UPDATE global_fields
+        SET overrides_allowed_required = per_type_overrides_allowed,
+            overrides_allowed_default_value = per_type_overrides_allowed
+        WHERE 1=1
+      `).run();
+      // Drop old column (SQLite 3.35.0+)
+      db.prepare('ALTER TABLE global_fields DROP COLUMN per_type_overrides_allowed').run();
+    }
+
+    // --- schema_field_claims: rename + add columns ---
+    const sfcColumns = (
+      db.prepare('PRAGMA table_info(schema_field_claims)').all() as { name: string }[]
+    ).map(c => c.name);
+
+    // Rename required → required_override
+    if (sfcColumns.includes('required') && !sfcColumns.includes('required_override')) {
+      db.prepare(
+        'ALTER TABLE schema_field_claims RENAME COLUMN required TO required_override'
+      ).run();
+    }
+
+    // Rename default_value → default_value_override
+    if (sfcColumns.includes('default_value') && !sfcColumns.includes('default_value_override')) {
+      db.prepare(
+        'ALTER TABLE schema_field_claims RENAME COLUMN default_value TO default_value_override'
+      ).run();
+    }
+
+    // Add default_value_overridden
+    // Re-read columns after renames
+    const sfcColumnsAfter = (
+      db.prepare('PRAGMA table_info(schema_field_claims)').all() as { name: string }[]
+    ).map(c => c.name);
+
+    if (!sfcColumnsAfter.includes('default_value_overridden')) {
+      db.prepare(
+        'ALTER TABLE schema_field_claims ADD COLUMN default_value_overridden INTEGER NOT NULL DEFAULT 0'
+      ).run();
+    }
+
+    // Add enum_values_override
+    if (!sfcColumnsAfter.includes('enum_values_override')) {
+      db.prepare(
+        'ALTER TABLE schema_field_claims ADD COLUMN enum_values_override TEXT'
+      ).run();
+    }
+
+    // Backfill: mark default_value_overridden = 1 where default_value_override IS NOT NULL
+    db.prepare(`
+      UPDATE schema_field_claims
+      SET default_value_overridden = 1
+      WHERE default_value_override IS NOT NULL AND default_value_overridden = 0
+    `).run();
+  });
+
+  run();
+}
+
 export function upgradeToPhase2(db: Database.Database): void {
   const run = db.transaction(() => {
     // --- global_fields: add three new columns if missing ---

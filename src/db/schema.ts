@@ -34,7 +34,9 @@ export function createSchema(db: Database.Database): void {
       description TEXT,
       default_value TEXT,
       required INTEGER NOT NULL DEFAULT 0,
-      per_type_overrides_allowed INTEGER NOT NULL DEFAULT 0,
+      overrides_allowed_required INTEGER NOT NULL DEFAULT 0,
+      overrides_allowed_default_value INTEGER NOT NULL DEFAULT 0,
+      overrides_allowed_enum_values INTEGER NOT NULL DEFAULT 0,
       list_item_type TEXT
     );
 
@@ -54,8 +56,10 @@ export function createSchema(db: Database.Database): void {
       label TEXT,
       description TEXT,
       sort_order INTEGER DEFAULT 1000,
-      required INTEGER,
-      default_value TEXT,
+      required_override INTEGER,
+      default_value_override TEXT,
+      default_value_overridden INTEGER NOT NULL DEFAULT 0,
+      enum_values_override TEXT,
       PRIMARY KEY (schema_name, field)
     );
     CREATE INDEX IF NOT EXISTS idx_sfc_field ON schema_field_claims(field);

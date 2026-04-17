@@ -21,9 +21,8 @@ import { IndexMutex } from './sync/mutex.js';
 import { WriteLockManager } from './sync/write-lock.js';
 import { SyncLogger } from './sync/sync-logger.js';
 import { startupSchemaRender } from './schema/render.js';
-import { buildExtractorRegistry } from './extraction/setup.js';
+import { buildExtractors } from './extraction/setup.js';
 import { ExtractionCache } from './extraction/cache.js';
-import { ClaudeVisionPdfExtractor } from './extraction/extractors/claude-vision.js';
 import { createSubprocessEmbedder, type Embedder } from './search/embedder.js';
 import { createEmbeddingIndexer, type EmbeddingIndexer } from './search/indexer.js';
 import { CURRENT_SEARCH_VERSION, getSearchVersion, setSearchVersion } from './db/search-version.js';
@@ -71,10 +70,12 @@ if (args.normalize) {
   process.exit(stats.errored > 0 ? 1 : 0);
 }
 
-const extractorRegistry = buildExtractorRegistry(process.env as Record<string, string | undefined>);
+const { registry: extractorRegistry, pdfFallback } = buildExtractors(
+  process.env as Record<string, string | undefined>,
+);
 const extractionCache = new ExtractionCache(db, extractorRegistry);
-if (process.env.ANTHROPIC_API_KEY) {
-  extractionCache.setPdfFallback(new ClaudeVisionPdfExtractor(process.env.ANTHROPIC_API_KEY));
+if (pdfFallback !== null) {
+  extractionCache.setPdfFallback(pdfFallback);
 }
 
 // --- Phase 4: Embedding indexer (subprocess-isolated) ---

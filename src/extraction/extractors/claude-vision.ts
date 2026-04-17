@@ -3,6 +3,8 @@ import { extname } from 'node:path';
 import Anthropic from '@anthropic-ai/sdk';
 import type { Extractor, ExtractionResult } from '../types.js';
 
+export const CLAUDE_IMAGE_EXTENSIONS: string[] = ['.png', '.jpg', '.jpeg', '.gif', '.webp'];
+
 const IMAGE_MEDIA_TYPES: Record<string, 'image/png' | 'image/jpeg' | 'image/gif' | 'image/webp'> =
   {
     '.png': 'image/png',
@@ -21,7 +23,7 @@ const PDF_PROMPT =
 export class ClaudeVisionImageExtractor implements Extractor {
   readonly id = 'claude-vision-image';
   readonly mediaType = 'image';
-  readonly supportedExtensions = ['.png', '.jpg', '.jpeg', '.gif', '.webp'];
+  readonly supportedExtensions = CLAUDE_IMAGE_EXTENSIONS;
 
   private readonly client: Anthropic;
 

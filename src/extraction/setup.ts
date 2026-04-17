@@ -7,10 +7,12 @@ import { DeepgramExtractor } from './extractors/deepgram.js';
 import {
   ClaudeVisionImageExtractor,
   ClaudeVisionPdfExtractor,
+  CLAUDE_IMAGE_EXTENSIONS,
 } from './extractors/claude-vision.js';
 import {
   GeminiVisionImageExtractor,
   GeminiVisionPdfExtractor,
+  GEMINI_IMAGE_EXTENSIONS,
 } from './extractors/gemini-vision.js';
 
 export interface BuiltExtractors {
@@ -18,7 +20,6 @@ export interface BuiltExtractors {
   pdfFallback: Extractor | null;
 }
 
-const IMAGE_EXTS = ['.png', '.jpg', '.jpeg', '.gif', '.webp'];
 type VisionProvider = 'gemini' | 'claude';
 
 function resolveVisionProvider(raw: string | undefined): VisionProvider {
@@ -64,7 +65,7 @@ export function buildExtractors(env: Record<string, string | undefined>): BuiltE
       console.warn(
         '[extraction] VISION_PROVIDER=gemini but GEMINI_API_KEY is unset; vision extraction disabled',
       );
-      registry.registerUnavailable('gemini-vision-image', 'image', IMAGE_EXTS, 'GEMINI_API_KEY');
+      registry.registerUnavailable('gemini-vision-image', 'image', GEMINI_IMAGE_EXTENSIONS, 'GEMINI_API_KEY');
       registry.registerUnavailable('gemini-vision-pdf', 'pdf', ['.pdf'], 'GEMINI_API_KEY');
     }
   } else {
@@ -76,7 +77,7 @@ export function buildExtractors(env: Record<string, string | undefined>): BuiltE
       console.warn(
         '[extraction] VISION_PROVIDER=claude but ANTHROPIC_API_KEY is unset; vision extraction disabled',
       );
-      registry.registerUnavailable('claude-vision-image', 'image', IMAGE_EXTS, 'ANTHROPIC_API_KEY');
+      registry.registerUnavailable('claude-vision-image', 'image', CLAUDE_IMAGE_EXTENSIONS, 'ANTHROPIC_API_KEY');
       registry.registerUnavailable('claude-vision-pdf', 'pdf', ['.pdf'], 'ANTHROPIC_API_KEY');
     }
   }

@@ -5,6 +5,8 @@ import type { Extractor, ExtractionResult } from '../types.js';
 
 const MODEL = 'gemini-2.5-flash';
 
+export const GEMINI_IMAGE_EXTENSIONS: string[] = ['.png', '.jpg', '.jpeg', '.gif', '.webp'];
+
 const IMAGE_MIME_TYPES: Record<string, string> = {
   '.png': 'image/png',
   '.jpg': 'image/jpeg',
@@ -19,14 +21,14 @@ const IMAGE_PROMPT =
 const PDF_PROMPT =
   'Extract all text from this scanned PDF document. Transcribe any handwriting. Return only the extracted content, no commentary.';
 
-function extractText(response: { text?: string | null }): string {
+function extractText(response: { text?: string }): string {
   return response.text ?? '';
 }
 
 export class GeminiVisionImageExtractor implements Extractor {
   readonly id = 'gemini-vision-image';
   readonly mediaType = 'image';
-  readonly supportedExtensions = ['.png', '.jpg', '.jpeg', '.gif', '.webp'];
+  readonly supportedExtensions = GEMINI_IMAGE_EXTENSIONS;
 
   private readonly client: GoogleGenAI;
 

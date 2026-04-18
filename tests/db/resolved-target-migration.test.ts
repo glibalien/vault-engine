@@ -16,9 +16,10 @@ function openDb(): Database.Database {
 }
 
 describe('resolved_target_id schema + migration', () => {
-  it('fresh createSchema includes resolved_target_id column and indexes', () => {
+  it('fresh createSchema + migration yields resolved_target_id column and both indexes', () => {
     const db = openDb();
     createSchema(db);
+    upgradeForResolvedTargetId(db);
     const cols = db.prepare("PRAGMA table_info(relationships)").all() as Array<{ name: string }>;
     expect(cols.map(c => c.name)).toContain('resolved_target_id');
     const idx = db.prepare("SELECT name FROM sqlite_master WHERE type='index' AND tbl_name='relationships'").all() as Array<{ name: string }>;
@@ -27,9 +28,11 @@ describe('resolved_target_id schema + migration', () => {
     expect(names).toContain('idx_relationships_source_resolved');
   });
 
-  it('upgradeForResolvedTargetId is idempotent on DB missing the column', () => {
+  it('existing-DB startup path: createSchema over a pre-migration table + migration succeeds', () => {
+    // Regression: production failed here because createSchema's `CREATE INDEX ON
+    // relationships(resolved_target_id)` fired against a table that pre-existed
+    // without the column. Mirrors the real systemd startup order.
     const db = openDb();
-    // Simulate an old DB: create relationships without resolved_target_id.
     db.prepare(
       'CREATE TABLE nodes (id TEXT PRIMARY KEY, file_path TEXT, title TEXT, body TEXT, content_hash TEXT, file_mtime INTEGER, indexed_at INTEGER, created_at INTEGER)'
     ).run();
@@ -39,10 +42,18 @@ describe('resolved_target_id schema + migration', () => {
     db.prepare(
       'CREATE TABLE meta (key TEXT PRIMARY KEY NOT NULL, value TEXT NOT NULL)'
     ).run();
-    upgradeForResolvedTargetId(db);
-    upgradeForResolvedTargetId(db); // second call should be a no-op
+
+    expect(() => createSchema(db)).not.toThrow();
+    expect(() => upgradeForResolvedTargetId(db)).not.toThrow();
+    expect(() => upgradeForResolvedTargetId(db)).not.toThrow(); // idempotent
+
     const cols = db.prepare("PRAGMA table_info(relationships)").all() as Array<{ name: string }>;
     expect(cols.map(c => c.name)).toContain('resolved_target_id');
+    const names = db.prepare("SELECT name FROM sqlite_master WHERE type='index' AND tbl_name='relationships'").all() as Array<{ name: string }>;
+    expect(names.map(i => i.name)).toEqual(expect.arrayContaining([
+      'idx_relationships_resolved_target_id',
+      'idx_relationships_source_resolved',
+    ]));
   });
 
   it('version accessor reads/writes meta.resolved_targets_version', () => {

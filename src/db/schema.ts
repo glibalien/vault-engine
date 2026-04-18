@@ -94,8 +94,8 @@ export function createSchema(db: Database.Database): void {
     CREATE INDEX IF NOT EXISTS idx_relationships_source_id ON relationships(source_id);
     CREATE INDEX IF NOT EXISTS idx_relationships_target ON relationships(target);
     CREATE INDEX IF NOT EXISTS idx_relationships_rel_type ON relationships(rel_type);
-    CREATE INDEX IF NOT EXISTS idx_relationships_resolved_target_id ON relationships(resolved_target_id);
-    CREATE INDEX IF NOT EXISTS idx_relationships_source_resolved ON relationships(source_id, resolved_target_id);
+    -- Indexes on resolved_target_id are created by upgradeForResolvedTargetId in db/migrate.ts:
+    -- on an existing DB the column doesn't exist yet when createSchema runs.
 
     CREATE TABLE IF NOT EXISTS edits_log (
       id INTEGER PRIMARY KEY AUTOINCREMENT,

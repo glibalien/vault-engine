@@ -622,6 +622,18 @@ describe('join_filters compile to EXISTS clauses', () => {
     }, db)).toThrow(/INVALID_PARAMS/);
   });
 
+  it('nested join_filters inside target are rejected (multi-hop deferred)', () => {
+    expect(() => buildNodeQuery({
+      types: ['task'],
+      join_filters: [{
+        rel_type: 'project',
+        target: {
+          join_filters: [{ rel_type: 'parent_project' }],
+        },
+      }],
+    }, db)).toThrow(/INVALID_PARAMS/);
+  });
+
   it('alias uniqueness under nesting', () => {
     // Outer types + nested target types: both would want t0, but scoping keeps them unique.
     const { rows } = runQuery({

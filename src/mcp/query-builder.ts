@@ -308,6 +308,9 @@ function buildJoinExistsClauses(
     // Build target's own clauses (recursive) at targetAlias.
     let innerJoin = '';
     if (filter.target) {
+      if (filter.target.join_filters || filter.target.without_joins) {
+        throw new Error('INVALID_PARAMS: nested join_filters/without_joins inside target are not supported (multi-hop joins deferred)');
+      }
       innerJoin = `INNER JOIN nodes ${targetAlias} ON ${targetAlias}.id = ${relAlias}.${innerJoinCol}`;
       const targetClauses = buildFilterClauses(filter.target, targetAlias, idx, db);
       subJoins.push(...targetClauses.joins);

@@ -1,7 +1,7 @@
 import { describe, it, expect, beforeEach } from 'vitest';
 import Database from 'better-sqlite3';
 import { createSchema } from '../../src/db/schema.js';
-import { refreshOnCreate } from '../../src/resolver/refresh.js';
+import { refreshOnCreate, refreshOnRename } from '../../src/resolver/refresh.js';
 
 let db: Database.Database;
 
@@ -79,5 +79,56 @@ describe('refreshOnCreate', () => {
     insertNode('new1', 'dir/Acme.md', 'Acme');
     refreshOnCreate(db, 'new1');
     expect(resolvedFor('src1', 'UnrelatedName')).toBeNull();
+  });
+});
+
+describe('refreshOnRename', () => {
+  it('nulls edges pointing at the old resolution and re-resolves via resolveTarget', () => {
+    // Start state: nodeA at Foo.md/title Foo. src1 links to "Foo" via wiki-link.
+    insertNode('A', 'Foo.md', 'Foo');
+    insertNode('src1', 'writer.md', 'Writer');
+    db.prepare(
+      'INSERT INTO relationships (source_id, target, rel_type, context, resolved_target_id) VALUES (?, ?, ?, NULL, ?)'
+    ).run('src1', 'Foo', 'wiki-link', 'A');
+
+    // Rename A: Foo.md -> Bar.md, title Foo -> Bar.
+    db.prepare('UPDATE nodes SET file_path = ?, title = ? WHERE id = ?').run('Bar.md', 'Bar', 'A');
+    refreshOnRename(db, 'A');
+
+    // The "Foo" edge no longer matches A's new keys; it becomes NULL (no other node matches).
+    expect(resolvedFor('src1', 'Foo')).toBeNull();
+  });
+
+  it('edges using the new name get resolved after rename', () => {
+    insertNode('A', 'Foo.md', 'Foo');
+    insertNode('src1', 'writer.md', 'Writer');
+    // Pre-rename: src1 links to "Bar" — unresolved.
+    insertRel('src1', 'Bar');
+
+    db.prepare('UPDATE nodes SET file_path = ?, title = ? WHERE id = ?').run('Bar.md', 'Bar', 'A');
+    refreshOnRename(db, 'A');
+
+    expect(resolvedFor('src1', 'Bar')).toBe('A');
+  });
+
+  it('other unique targets in the NULL set re-resolve to a different node if possible', () => {
+    insertNode('A', 'Foo.md', 'Foo');
+    insertNode('B', 'Baz.md', 'Baz');
+    insertNode('src1', 'writer.md', 'Writer');
+    // Pre-rename: src1 links to "Foo" (resolved=A) and "Baz" (resolved=A erroneously, as a stand-in).
+    db.prepare(
+      'INSERT INTO relationships (source_id, target, rel_type, context, resolved_target_id) VALUES (?, ?, ?, NULL, ?)'
+    ).run('src1', 'Foo', 'wiki-link', 'A');
+    db.prepare(
+      'INSERT INTO relationships (source_id, target, rel_type, context, resolved_target_id) VALUES (?, ?, ?, NULL, ?)'
+    ).run('src1', 'Baz', 'wiki-link', 'A');
+
+    db.prepare('UPDATE nodes SET file_path = ?, title = ? WHERE id = ?').run('Qux.md', 'Qux', 'A');
+    refreshOnRename(db, 'A');
+
+    // "Baz" should re-resolve to B via resolveTarget.
+    expect(resolvedFor('src1', 'Baz')).toBe('B');
+    // "Foo" has no matching node; stays NULL.
+    expect(resolvedFor('src1', 'Foo')).toBeNull();
   });
 });

@@ -121,3 +121,58 @@ export function refreshOnRename(db: Database.Database, nodeId: string): void {
   });
   tx();
 }
+
+/**
+ * v1: no-op. FK `ON DELETE SET NULL` handles the row-level nulling.
+ * Exported so callers can wire in advance; future versions may promote
+ * runner-up resolutions for affected rows.
+ */
+export function refreshOnDelete(_db: Database.Database, _nodeId: string): void {
+  // Intentionally empty. See spec: "Re-resolution on delete ... documented v1 limitation."
+}
+
+export interface BackfillStats {
+  scanned: number;
+  uniqueTargets: number;
+  updated: number;
+}
+
+/**
+ * Walks every NULL-resolved relationship, dedupes by raw target, calls
+ * resolveTarget per unique string, and UPDATEs in chunks. Intended for
+ * one-shot use at startup after the migration (version-gated by caller).
+ */
+export function backfillResolvedTargets(db: Database.Database): BackfillStats {
+  const nullRows = db
+    .prepare('SELECT id, target FROM relationships WHERE resolved_target_id IS NULL')
+    .all() as Array<{ id: number; target: string }>;
+
+  const scanned = nullRows.length;
+  if (scanned === 0) {
+    return { scanned: 0, uniqueTargets: 0, updated: 0 };
+  }
+
+  // Dedupe by raw target.
+  const byTarget = new Map<string, number[]>();
+  for (const r of nullRows) {
+    const list = byTarget.get(r.target);
+    if (list) list.push(r.id);
+    else byTarget.set(r.target, [r.id]);
+  }
+
+  let updated = 0;
+  const upd = db.prepare('UPDATE relationships SET resolved_target_id = ? WHERE id = ?');
+  const tx = db.transaction(() => {
+    for (const [target, ids] of byTarget) {
+      const resolved = resolveTarget(db, target);
+      if (!resolved) continue;
+      for (const id of ids) {
+        upd.run(resolved.id, id);
+        updated++;
+      }
+    }
+  });
+  tx();
+
+  return { scanned, uniqueTargets: byTarget.size, updated };
+}

@@ -1,7 +1,7 @@
 import { describe, it, expect, beforeEach } from 'vitest';
 import Database from 'better-sqlite3';
 import { createSchema } from '../../src/db/schema.js';
-import { refreshOnCreate, refreshOnRename } from '../../src/resolver/refresh.js';
+import { refreshOnCreate, refreshOnRename, refreshOnDelete, backfillResolvedTargets } from '../../src/resolver/refresh.js';
 
 let db: Database.Database;
 
@@ -130,5 +130,57 @@ describe('refreshOnRename', () => {
     expect(resolvedFor('src1', 'Baz')).toBe('B');
     // "Foo" has no matching node; stays NULL.
     expect(resolvedFor('src1', 'Foo')).toBeNull();
+  });
+});
+
+describe('refreshOnDelete', () => {
+  it('is a no-op in v1 (FK ON DELETE SET NULL handles nullification)', () => {
+    insertNode('A', 'Foo.md', 'Foo');
+    insertNode('src1', 'writer.md', 'Writer');
+    db.prepare(
+      'INSERT INTO relationships (source_id, target, rel_type, context, resolved_target_id) VALUES (?, ?, ?, NULL, ?)'
+    ).run('src1', 'Foo', 'wiki-link', 'A');
+    expect(() => refreshOnDelete(db, 'A')).not.toThrow();
+    // Row still resolves to A — the actual nulling happens via FK, not via this helper.
+    expect(resolvedFor('src1', 'Foo')).toBe('A');
+  });
+});
+
+describe('backfillResolvedTargets', () => {
+  it('populates resolved_target_id for every NULL row that can resolve', () => {
+    insertNode('A', 'Foo.md', 'Foo');
+    insertNode('B', 'dir/Bar.md', 'Bar');
+    insertNode('src1', 'writer.md', 'Writer');
+    insertRel('src1', 'Foo');
+    insertRel('src1', 'Bar');
+    insertRel('src1', 'UnrelatedName');
+
+    const stats = backfillResolvedTargets(db);
+    expect(stats.updated).toBe(2);
+    expect(stats.scanned).toBe(3);
+    expect(resolvedFor('src1', 'Foo')).toBe('A');
+    expect(resolvedFor('src1', 'Bar')).toBe('B');
+    expect(resolvedFor('src1', 'UnrelatedName')).toBeNull();
+  });
+
+  it('is safe to call twice', () => {
+    insertNode('A', 'Foo.md', 'Foo');
+    insertNode('src1', 'writer.md', 'Writer');
+    insertRel('src1', 'Foo');
+    backfillResolvedTargets(db);
+    const second = backfillResolvedTargets(db);
+    // On second call, no NULLs remain.
+    expect(second.updated).toBe(0);
+  });
+
+  it('dedupes identical targets — resolver called once per unique target', () => {
+    insertNode('A', 'Foo.md', 'Foo');
+    for (let i = 0; i < 5; i++) {
+      insertNode(`src${i}`, `w${i}.md`, `W${i}`);
+      insertRel(`src${i}`, 'Foo');
+    }
+    const stats = backfillResolvedTargets(db);
+    expect(stats.updated).toBe(5);
+    expect(stats.uniqueTargets).toBe(1);
   });
 });

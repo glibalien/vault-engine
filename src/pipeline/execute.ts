@@ -23,6 +23,8 @@ import { atomicWriteFile, readFileOrNull } from './file-writer.js';
 import type { ProposedMutation, PipelineResult } from './types.js';
 import { PipelineError } from './types.js';
 import type { FileContext } from '../validation/resolve-default.js';
+import { resolveTarget } from '../resolver/resolve.js';
+import { refreshOnCreate, refreshOnRename } from '../resolver/refresh.js';
 
 /**
  * Execute a mutation through the full write pipeline.
@@ -257,6 +259,19 @@ export function executeMutation(
       const nodeId = mutation.node_id ?? nanoid();
       const now = Date.now();
 
+      // Capture prior identity BEFORE the UPSERT to detect rename.
+      // (create = no prior row; rename = file_path or title changed.)
+      const isCreate = mutation.node_id === null;
+      const prior = !isCreate
+        ? (db.prepare('SELECT file_path, title FROM nodes WHERE id = ?').get(nodeId) as
+            | { file_path: string; title: string | null }
+            | undefined)
+        : undefined;
+      const isRename =
+        !isCreate &&
+        prior !== undefined &&
+        (prior.file_path !== mutation.file_path || prior.title !== mutation.title);
+
       // When skipping file write, store the source file's hash so the
       // watcher recognizes the unchanged file and doesn't re-trigger.
       const contentHash = shouldWriteFile
@@ -315,11 +330,12 @@ export function executeMutation(
       // Delete and reinsert relationships
       db.prepare('DELETE FROM relationships WHERE source_id = ?').run(nodeId);
       const insertRel = db.prepare(
-        'INSERT OR IGNORE INTO relationships (source_id, target, rel_type, context) VALUES (?, ?, ?, ?)'
+        'INSERT OR IGNORE INTO relationships (source_id, target, rel_type, context, resolved_target_id) VALUES (?, ?, ?, ?, ?)'
       );
       const rels = deriveRelationships(finalFields, mutation.body, globalFields, orphanRawValues);
       for (const rel of rels) {
-        insertRel.run(nodeId, rel.target, rel.rel_type, rel.context);
+        const resolved = resolveTarget(db, rel.target);
+        insertRel.run(nodeId, rel.target, rel.rel_type, rel.context, resolved?.id ?? null);
       }
 
       // Update FTS
@@ -344,6 +360,15 @@ export function executeMutation(
         defaultedFields.length > 0 ? defaultedFields : undefined,
       );
       const editsLogged = writeEditsLogEntries(db, logEntries);
+
+      // Lifecycle-event refresh: keep resolved_target_id consistent across
+      // other nodes. Runs AFTER this node's row is in the DB so other-node
+      // edges resolving to our candidate keys can be picked up.
+      if (isCreate) {
+        refreshOnCreate(db, nodeId);
+      } else if (isRename) {
+        refreshOnRename(db, nodeId);
+      }
 
       return {
         node_id: nodeId,

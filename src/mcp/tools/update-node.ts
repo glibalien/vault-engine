@@ -24,6 +24,34 @@ import type { WriteLockManager } from '../../sync/write-lock.js';
 import type { SyncLogger } from '../../sync/sync-logger.js';
 import { checkTypesHaveSchemas } from '../../pipeline/check-types.js';
 
+const _targetFilterSchema = z.object({
+  types: z.array(z.string()).optional(),
+  without_types: z.array(z.string()).optional(),
+  fields: z.record(z.string(), z.record(z.string(), z.unknown())).optional(),
+  without_fields: z.array(z.string()).optional(),
+  title_eq: z.string().optional(),
+  title_contains: z.string().optional(),
+  references: z.object({
+    target: z.string(),
+    rel_type: z.string().optional(),
+    direction: z.enum(['outgoing', 'incoming', 'both']).default('outgoing'),
+  }).optional(),
+  path_prefix: z.string().optional(),
+  without_path_prefix: z.string().optional(),
+  path_dir: z.string().optional(),
+  modified_since: z.string().optional(),
+  // NOT included: join_filters, without_joins (nested joins deferred)
+});
+
+const _joinFilterSchema = z.object({
+  direction: z.enum(['outgoing', 'incoming']).default('outgoing'),
+  rel_type: z.union([z.string(), z.array(z.string())]).optional(),
+  target: _targetFilterSchema.optional(),
+}).refine(
+  (f) => f.rel_type !== undefined || f.target !== undefined,
+  { message: 'INVALID_PARAMS: JoinFilter requires at least one of rel_type or target' },
+);
+
 const paramsShape = {
   // Single-node identity (exactly one required, mutually exclusive with query)
   node_id: z.string().optional(),
@@ -51,6 +79,8 @@ const paramsShape = {
     without_path_prefix: z.string().optional(),
     path_dir: z.string().optional(),
     modified_since: z.string().optional(),
+    join_filters: z.array(_joinFilterSchema).optional(),
+    without_joins: z.array(_joinFilterSchema).optional(),
   }).optional(),
   // Type operations (query mode)
   add_types: z.array(z.string()).optional(),
@@ -333,8 +363,11 @@ function handleQueryMode(
 
   const batchId = nanoid();
 
+  const hasJoinFilters =
+    (query.join_filters?.length ?? 0) > 0 || (query.without_joins?.length ?? 0) > 0;
+
   if (dryRun) {
-    return handleDryRun(db, vaultPath, matchedNodes, ops, batchId);
+    return handleDryRun(db, vaultPath, matchedNodes, ops, batchId, hasJoinFilters);
   }
 
   return handleExecution(db, writeLock, vaultPath, matchedNodes, ops, batchId, syncLogger);
@@ -437,6 +470,7 @@ function handleDryRun(
   matchedNodes: Array<{ id: string; file_path: string; title: string; body: string }>,
   ops: QueryModeOps,
   batchId: string,
+  hasJoinFilters: boolean = false,
 ) {
   const preview: Array<{
     node_id: string;
@@ -515,7 +549,7 @@ function handleDryRun(
     }
   }
 
-  return toolResult({
+  const response: Record<string, unknown> = {
     dry_run: true,
     batch_id: batchId,
     matched: matchedNodes.length,
@@ -523,7 +557,11 @@ function handleDryRun(
     would_skip: wouldSkip,
     would_fail: wouldFail,
     preview,
-  });
+  };
+  if (hasJoinFilters) {
+    response.notice = 'Bulk mutation via cross-node join filters — review affected set carefully.';
+  }
+  return toolResult(response);
 }
 
 function handleExecution(

@@ -9,6 +9,7 @@ import type { WikiLink, YamlValue } from '../parser/types.js';
 import { sha256 } from './hash.js';
 import { shouldIgnore } from './ignore.js';
 import type { EmbeddingIndexer } from '../search/indexer.js';
+import { resolveTarget } from '../resolver/resolve.js';
 
 const WIKILINK_RE = /\[\[([^\]|]+)(?:\|([^\]]+))?\]\]/;
 
@@ -60,7 +61,7 @@ function prepareStatements(db: Database.Database): Statements {
     `),
     deleteRelationships: db.prepare('DELETE FROM relationships WHERE source_id = ?'),
     insertRelationship: db.prepare(
-      'INSERT OR IGNORE INTO relationships (source_id, target, rel_type, context) VALUES (?, ?, ?, ?)',
+      'INSERT OR IGNORE INTO relationships (source_id, target, rel_type, context, resolved_target_id) VALUES (?, ?, ?, ?, ?)',
     ),
     insertEditLog: db.prepare(
       'INSERT INTO edits_log (node_id, timestamp, event_type, details) VALUES (?, ?, ?, ?)',
@@ -142,6 +143,7 @@ function extractRawFieldTexts(raw: string): Record<string, string> {
 }
 
 function doIndex(
+  db: Database.Database,
   stmts: Statements,
   raw: string,
   filePath: string,
@@ -204,7 +206,8 @@ function doIndex(
   // Insert relationships from wiki-links
   for (const link of parsed.wikiLinks) {
     const relType = fieldNames.has(link.context) ? link.context : 'wiki-link';
-    stmts.insertRelationship.run(nodeId, link.target, relType, link.context);
+    const resolved = resolveTarget(db, link.target);
+    stmts.insertRelationship.run(nodeId, link.target, relType, link.context, resolved?.id ?? null);
   }
 
   // Log
@@ -324,7 +327,7 @@ export function fullIndex(vaultPath: string, db: Database.Database, options?: In
           }
 
           // Full re-index
-          const nodeId = doIndex(stmts, raw, relPath, absPath, mtime, hash, existing?.id ?? null);
+          const nodeId = doIndex(db, stmts, raw, relPath, absPath, mtime, hash, existing?.id ?? null);
           options?.onNodeIndexed?.(nodeId);
           stats.indexed++;
         } catch (err) {
@@ -356,7 +359,7 @@ export function indexFile(absolutePath: string, vaultPath: string, db: Database.
   const existing = stmts.getNodeByPath.get(relPath) as { id: string } | undefined;
 
   const txn = db.transaction(() => {
-    return doIndex(stmts, raw, relPath, absolutePath, mtime, hash, existing?.id ?? null);
+    return doIndex(db, stmts, raw, relPath, absolutePath, mtime, hash, existing?.id ?? null);
   });
 
   const nodeId = txn();

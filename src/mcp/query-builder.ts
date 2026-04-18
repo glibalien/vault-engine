@@ -19,6 +19,12 @@ export interface ReferenceFilter {
   direction?: 'outgoing' | 'incoming' | 'both';
 }
 
+export interface JoinFilter {
+  direction?: 'outgoing' | 'incoming';
+  rel_type?: string | string[];
+  target?: NodeQueryFilter;
+}
+
 export interface NodeQueryFilter {
   types?: string[];
   without_types?: string[];
@@ -31,6 +37,8 @@ export interface NodeQueryFilter {
   without_path_prefix?: string;
   path_dir?: string;
   modified_since?: string;
+  join_filters?: JoinFilter[];
+  without_joins?: JoinFilter[];
 }
 
 export interface NodeQueryResult {
@@ -237,19 +245,121 @@ export function buildFilterClauses(
   return { joins, joinParams, whereClauses, whereParams };
 }
 
+/**
+ * Compiles JoinFilter[] into EXISTS (or NOT EXISTS) subqueries on relationships.
+ *
+ * Each join filter becomes a correlated subquery against `relationships rN`
+ * joined (optionally) to `nodes tN`, where tN is the target node. The target's
+ * own NodeQueryFilter is compiled recursively via buildFilterClauses at the
+ * tN alias, so arbitrarily nested cross-node predicates are supported.
+ *
+ * Semantics:
+ *   - direction='outgoing' (default): rN.source_id = parent.id
+ *   - direction='incoming':           rN.resolved_target_id = parent.id
+ *   - Unresolved edges (resolved_target_id IS NULL) are invisible to join filters.
+ *   - rel_type: string => `= ?`, string[] => `IN (?, ?, ...)`.
+ *   - target is optional; if absent, we only check edge existence.
+ *   - Rejects empty JoinFilter (neither rel_type nor target) with INVALID_PARAMS.
+ */
+function buildJoinExistsClauses(
+  filters: JoinFilter[] | undefined,
+  parentAlias: string,
+  idx: { n: number },
+  db: Database.Database | undefined,
+  negated: boolean,
+): { whereClauses: string[]; whereParams: unknown[] } {
+  if (!filters || filters.length === 0) {
+    return { whereClauses: [], whereParams: [] };
+  }
+  const whereClauses: string[] = [];
+  const whereParams: unknown[] = [];
+
+  for (const filter of filters) {
+    if (!filter.rel_type && !filter.target) {
+      throw new Error('INVALID_PARAMS: JoinFilter requires at least one of rel_type or target');
+    }
+
+    const direction = filter.direction ?? 'outgoing';
+    const relAlias = `r${idx.n++}_${parentAlias}`;
+    const targetAlias = `t${idx.n++}_${parentAlias}`;
+
+    const outerCol = direction === 'outgoing' ? 'source_id' : 'resolved_target_id';
+    const innerJoinCol = direction === 'outgoing' ? 'resolved_target_id' : 'source_id';
+
+    const subJoins: string[] = [];
+    const subJoinParams: unknown[] = [];
+    const subWheres: string[] = [
+      `${relAlias}.${outerCol} = ${parentAlias}.id`,
+      `${relAlias}.resolved_target_id IS NOT NULL`,
+    ];
+    const subWhereParams: unknown[] = [];
+
+    if (filter.rel_type) {
+      const types = Array.isArray(filter.rel_type) ? filter.rel_type : [filter.rel_type];
+      if (types.length === 1) {
+        subWheres.push(`${relAlias}.rel_type = ?`);
+        subWhereParams.push(types[0]);
+      } else {
+        subWheres.push(`${relAlias}.rel_type IN (${types.map(() => '?').join(', ')})`);
+        subWhereParams.push(...types);
+      }
+    }
+
+    // Build target's own clauses (recursive) at targetAlias.
+    let innerJoin = '';
+    if (filter.target) {
+      innerJoin = `INNER JOIN nodes ${targetAlias} ON ${targetAlias}.id = ${relAlias}.${innerJoinCol}`;
+      const targetClauses = buildFilterClauses(filter.target, targetAlias, idx, db);
+      subJoins.push(...targetClauses.joins);
+      subJoinParams.push(...targetClauses.joinParams);
+      subWheres.push(...targetClauses.whereClauses);
+      subWhereParams.push(...targetClauses.whereParams);
+    }
+
+    const existsSql =
+      `SELECT 1 FROM relationships ${relAlias}` +
+      (innerJoin ? ` ${innerJoin}` : '') +
+      (subJoins.length ? ' ' + subJoins.join(' ') : '') +
+      ' WHERE ' + subWheres.join(' AND ');
+
+    whereClauses.push(`${negated ? 'NOT EXISTS' : 'EXISTS'} (${existsSql})`);
+    // Within the EXISTS subquery, SQL placeholders appear in order:
+    //   1. INNER JOIN nodes tN (no params)
+    //   2. target's JOIN clauses (subJoinParams)
+    //   3. WHERE clauses (subWhereParams)
+    whereParams.push(...subJoinParams, ...subWhereParams);
+  }
+
+  return { whereClauses, whereParams };
+}
+
 export function buildNodeQuery(filter: NodeQueryFilter, db?: Database.Database): NodeQueryResult {
   const idx = { n: 0 };
-  const { joins, joinParams, whereClauses, whereParams } =
-    buildFilterClauses(filter, 'n', idx, db);
+  const base = buildFilterClauses(filter, 'n', idx, db);
 
-  // join_filters + without_joins handled in Task 11; for now, no additional clauses.
+  const joinsFilterClauses = buildJoinExistsClauses(filter.join_filters, 'n', idx, db, false);
+  const withoutJoinsClauses = buildJoinExistsClauses(filter.without_joins, 'n', idx, db, true);
+
+  const joins = base.joins;
+  const joinParams = base.joinParams;
+  const whereClauses = [
+    ...base.whereClauses,
+    ...joinsFilterClauses.whereClauses,
+    ...withoutJoinsClauses.whereClauses,
+  ];
+  const whereParams = [
+    ...base.whereParams,
+    ...joinsFilterClauses.whereParams,
+    ...withoutJoinsClauses.whereParams,
+  ];
 
   const joinSql = joins.join('\n');
   const whereSql = whereClauses.length > 0
     ? 'WHERE ' + whereClauses.join(' AND ')
     : '';
 
-  // Params must match SQL placeholder order: all JOIN params first, then all WHERE params
+  // Params must match SQL placeholder order: all outer JOIN params first, then all WHERE params
+  // (EXISTS subquery params are included in whereParams since the EXISTS predicate is in WHERE).
   const params = [...joinParams, ...whereParams];
 
   const baseFrom = `FROM nodes n`;

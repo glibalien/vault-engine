@@ -1,7 +1,7 @@
 import { describe, it, expect, beforeEach } from 'vitest';
 import type Database from 'better-sqlite3';
 import { createTestDb } from '../helpers/db.js';
-import { buildNodeQuery } from '../../src/mcp/query-builder.js';
+import { buildNodeQuery, type JoinFilter } from '../../src/mcp/query-builder.js';
 
 let db: Database.Database;
 
@@ -502,5 +502,136 @@ describe('buildNodeQuery', () => {
     it('throws when db is not provided for incoming direction', () => {
       expect(() => buildNodeQuery({ references: { target: 'x', direction: 'incoming' } })).toThrow();
     });
+  });
+});
+
+describe('join_filters compile to EXISTS clauses', () => {
+  beforeEach(() => {
+    // Reset and seed: task t1 (status=open) linked to project p1 (status=done),
+    // task t2 (status=open) linked to project p2 (status=todo).
+    db = createTestDb();
+
+    const ins = db.prepare('INSERT INTO nodes (id, file_path, title, body, content_hash, file_mtime, indexed_at) VALUES (?, ?, ?, ?, ?, ?, ?)');
+    ins.run('t1', 'Tasks/t1.md', 'T1', '', null, null, null);
+    ins.run('t2', 'Tasks/t2.md', 'T2', '', null, null, null);
+    ins.run('p1', 'Projects/p1.md', 'P1', '', null, null, null);
+    ins.run('p2', 'Projects/p2.md', 'P2', '', null, null, null);
+
+    const ty = db.prepare('INSERT INTO node_types (node_id, schema_type) VALUES (?, ?)');
+    ty.run('t1', 'task'); ty.run('t2', 'task'); ty.run('p1', 'project'); ty.run('p2', 'project');
+
+    const fld = db.prepare('INSERT INTO node_fields (node_id, field_name, value_text, value_number, value_date, value_json, source) VALUES (?, ?, ?, ?, ?, ?, ?)');
+    fld.run('t1', 'status', 'open', null, null, null, 'yaml');
+    fld.run('t2', 'status', 'open', null, null, null, 'yaml');
+    fld.run('p1', 'status', 'done', null, null, null, 'yaml');
+    fld.run('p2', 'status', 'todo', null, null, null, 'yaml');
+
+    const rel = db.prepare('INSERT INTO relationships (source_id, target, rel_type, context, resolved_target_id) VALUES (?, ?, ?, NULL, ?)');
+    rel.run('t1', 'P1', 'project', 'p1');
+    rel.run('t2', 'P2', 'project', 'p2');
+  });
+
+  it('outgoing join_filter with rel_type only returns tasks that have any project edge', () => {
+    const { rows } = runQuery({
+      types: ['task'],
+      join_filters: [{ rel_type: 'project' }],
+    });
+    expect(rows.map(r => r.id).sort()).toEqual(['t1', 't2']);
+  });
+
+  it('outgoing join_filter with target filter narrows to matching targets', () => {
+    const { rows } = runQuery({
+      types: ['task'],
+      join_filters: [{
+        rel_type: 'project',
+        target: { fields: { status: { eq: 'done' } } },
+      }],
+    });
+    expect(rows.map(r => r.id)).toEqual(['t1']);
+  });
+
+  it('rel_type array compiles to IN and matches any listed type', () => {
+    const { rows } = runQuery({
+      types: ['task'],
+      join_filters: [{ rel_type: ['project', 'parent_project'] }],
+    });
+    expect(rows.map(r => r.id).sort()).toEqual(['t1', 't2']);
+  });
+
+  it('direction: incoming flips edge predicate', () => {
+    const { rows } = runQuery({
+      types: ['project'],
+      join_filters: [{
+        direction: 'incoming',
+        rel_type: 'project',
+        target: { types: ['task'], fields: { status: { eq: 'open' } } },
+      }],
+    });
+    expect(rows.map(r => r.id).sort()).toEqual(['p1', 'p2']);
+  });
+
+  it('multiple join_filters AND together (independent matches allowed)', () => {
+    // Add assignee relationship on t1 only.
+    db.prepare('INSERT INTO nodes (id, file_path, title, body, content_hash, file_mtime, indexed_at) VALUES (?, ?, ?, ?, ?, ?, ?)')
+      .run('u1', 'People/u1.md', 'U1', '', null, null, null);
+    db.prepare('INSERT INTO node_types (node_id, schema_type) VALUES (?, ?)').run('u1', 'person');
+    db.prepare('INSERT INTO node_fields (node_id, field_name, value_text, value_number, value_date, value_json, source) VALUES (?, ?, ?, ?, ?, ?, ?)')
+      .run('u1', 'role', 'engineer', null, null, null, 'yaml');
+    db.prepare('INSERT INTO relationships (source_id, target, rel_type, context, resolved_target_id) VALUES (?, ?, ?, NULL, ?)')
+      .run('t1', 'U1', 'assignee', 'u1');
+
+    const { rows } = runQuery({
+      types: ['task'],
+      join_filters: [
+        { rel_type: 'project', target: { fields: { status: { eq: 'done' } } } },
+        { rel_type: 'assignee', target: { fields: { role: { eq: 'engineer' } } } },
+      ],
+    });
+    expect(rows.map(r => r.id)).toEqual(['t1']);
+  });
+
+  it('without_joins compiles to NOT EXISTS', () => {
+    const { rows } = runQuery({
+      types: ['task'],
+      without_joins: [{ rel_type: 'project', target: { fields: { status: { eq: 'done' } } } }],
+    });
+    expect(rows.map(r => r.id)).toEqual(['t2']);
+  });
+
+  it('unresolved edges are invisible to join_filters', () => {
+    // Add t3 with an unresolved project edge.
+    db.prepare('INSERT INTO nodes (id, file_path, title, body, content_hash, file_mtime, indexed_at) VALUES (?, ?, ?, ?, ?, ?, ?)')
+      .run('t3', 'Tasks/t3.md', 'T3', '', null, null, null);
+    db.prepare('INSERT INTO node_types (node_id, schema_type) VALUES (?, ?)').run('t3', 'task');
+    db.prepare('INSERT INTO node_fields (node_id, field_name, value_text, value_number, value_date, value_json, source) VALUES (?, ?, ?, ?, ?, ?, ?)')
+      .run('t3', 'status', 'open', null, null, null, 'yaml');
+    db.prepare('INSERT INTO relationships (source_id, target, rel_type, context, resolved_target_id) VALUES (?, ?, ?, NULL, NULL)')
+      .run('t3', 'GhostProject', 'project');
+
+    const { rows } = runQuery({
+      types: ['task'],
+      join_filters: [{ rel_type: 'project' }],
+    });
+    // t3 has only an unresolved edge, so join_filters without target still excludes it.
+    expect(rows.map(r => r.id).sort()).toEqual(['t1', 't2']);
+  });
+
+  it('JoinFilter with neither rel_type nor target is rejected', () => {
+    expect(() => buildNodeQuery({
+      join_filters: [{} as JoinFilter],
+    }, db)).toThrow(/INVALID_PARAMS/);
+  });
+
+  it('alias uniqueness under nesting', () => {
+    // Outer types + nested target types: both would want t0, but scoping keeps them unique.
+    const { rows } = runQuery({
+      types: ['task'],
+      fields: { status: { eq: 'open' } },
+      join_filters: [{
+        rel_type: 'project',
+        target: { types: ['project'], fields: { status: { eq: 'done' } } },
+      }],
+    });
+    expect(rows.map(r => r.id)).toEqual(['t1']);
   });
 });

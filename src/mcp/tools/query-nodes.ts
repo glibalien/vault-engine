@@ -9,33 +9,63 @@ import type { EmbeddingIndexer } from '../../search/indexer.js';
 import type { Embedder } from '../../search/embedder.js';
 import { hybridSearch } from '../../search/search.js';
 
-const paramsShape = {
+const fieldFilterSchema = z.object({
+  eq: z.unknown().optional(),
+  ne: z.unknown().optional(),
+  gt: z.unknown().optional(),
+  lt: z.unknown().optional(),
+  gte: z.unknown().optional(),
+  lte: z.unknown().optional(),
+  contains: z.string().optional(),
+  includes: z.unknown().optional(),
+  exists: z.boolean().optional(),
+}).strict();
+
+const referenceSchema = z.object({
+  target: z.string(),
+  rel_type: z.string().optional(),
+  direction: z.enum(['outgoing', 'incoming', 'both']).default('outgoing'),
+});
+
+const targetFilterSchema = z.object({
   types: z.array(z.string()).optional(),
   without_types: z.array(z.string()).optional(),
-  fields: z.record(z.string(), z.object({
-    eq: z.unknown().optional(),
-    ne: z.unknown().optional(),
-    gt: z.unknown().optional(),
-    lt: z.unknown().optional(),
-    gte: z.unknown().optional(),
-    lte: z.unknown().optional(),
-    contains: z.string().optional(),
-    includes: z.unknown().optional(),
-    exists: z.boolean().optional(),
-  }).strict()).optional(),
+  fields: z.record(z.string(), fieldFilterSchema).optional(),
   without_fields: z.array(z.string()).optional(),
   title_eq: z.string().optional(),
   title_contains: z.string().optional(),
-  query: z.string().optional(),
-  references: z.object({
-    target: z.string(),
-    rel_type: z.string().optional(),
-    direction: z.enum(['outgoing', 'incoming', 'both']).default('outgoing'),
-  }).optional(),
+  references: referenceSchema.optional(),
   path_prefix: z.string().optional(),
   without_path_prefix: z.string().optional(),
   path_dir: z.string().optional(),
   modified_since: z.string().optional(),
+  // NOT included: join_filters, without_joins (nested joins deferred)
+}).strict();
+
+const joinFilterSchema = z.object({
+  direction: z.enum(['outgoing', 'incoming']).default('outgoing'),
+  rel_type: z.union([z.string(), z.array(z.string())]).optional(),
+  target: targetFilterSchema.optional(),
+}).strict().refine(
+  (f) => f.rel_type !== undefined || f.target !== undefined,
+  { message: 'INVALID_PARAMS: JoinFilter requires at least one of rel_type or target' },
+);
+
+const paramsShape = {
+  types: z.array(z.string()).optional(),
+  without_types: z.array(z.string()).optional(),
+  fields: z.record(z.string(), fieldFilterSchema).optional(),
+  without_fields: z.array(z.string()).optional(),
+  title_eq: z.string().optional(),
+  title_contains: z.string().optional(),
+  query: z.string().optional(),
+  references: referenceSchema.optional(),
+  path_prefix: z.string().optional(),
+  without_path_prefix: z.string().optional(),
+  path_dir: z.string().optional(),
+  modified_since: z.string().optional(),
+  join_filters: z.array(joinFilterSchema).optional(),
+  without_joins: z.array(joinFilterSchema).optional(),
   sort_by: z.enum(['title', 'file_mtime', 'indexed_at']).default('title'),
   sort_order: z.enum(['asc', 'desc']).default('asc'),
   limit: z.number().int().min(1).max(200).default(50),
@@ -96,6 +126,47 @@ function enrichRows(
   });
 }
 
+type JoinFilterParam = {
+  direction?: 'outgoing' | 'incoming';
+  rel_type?: string | string[];
+  target?: unknown;
+};
+
+function computeJoinNotice(
+  db: Database.Database,
+  joinFilters: JoinFilterParam[] | undefined,
+  withoutJoins: JoinFilterParam[] | undefined,
+): string | undefined {
+  const needsNotice =
+    (joinFilters?.some(f => f.target !== undefined) ?? false) ||
+    (withoutJoins?.some(f => f.target !== undefined) ?? false);
+
+  if (!needsNotice) return undefined;
+
+  // Collect rel_types that appeared in filters-with-target; missing rel_type means "any".
+  const relTypes = new Set<string>();
+  let anyRelType = false;
+  for (const f of [...(joinFilters ?? []), ...(withoutJoins ?? [])]) {
+    if (f.target === undefined) continue;
+    if (f.rel_type === undefined) { anyRelType = true; break; }
+    const types = Array.isArray(f.rel_type) ? f.rel_type : [f.rel_type];
+    for (const t of types) relTypes.add(t);
+  }
+
+  let sql = 'SELECT COUNT(*) AS n FROM relationships WHERE resolved_target_id IS NULL';
+  const p: unknown[] = [];
+  if (!anyRelType && relTypes.size > 0) {
+    const placeholders = Array.from(relTypes, () => '?').join(', ');
+    sql += ` AND rel_type IN (${placeholders})`;
+    p.push(...relTypes);
+  }
+  const { n } = db.prepare(sql).get(...p) as { n: number };
+  if (n > 0) {
+    return `Cross-node join filters applied. ${n} candidate edge${n === 1 ? '' : 's'} had unresolved targets and were excluded.`;
+  }
+  return undefined;
+}
+
 export function registerQueryNodes(
   server: McpServer,
   db: Database.Database,
@@ -104,7 +175,7 @@ export function registerQueryNodes(
 ): void {
   server.tool(
     'query-nodes',
-    'Query nodes with filtering by type, fields, semantic search, references, path, and date. Use the query param for full-text and semantic (vector) search with ranked results. Scores use Reciprocal Rank Fusion (RRF) — absolute values are not meaningful, only relative ordering matters. match_sources indicates retrieval method: "fts" (full-text match), "semantic" (vector/embedding match), or both. Returns paginated results. Use include_fields to return field values inline (e.g. ["project","status"] or ["*"] for all). When you know the exact title, prefer get-node with title param. For partial title matching, use title_contains. For exact title filtering combined with other constraints, use title_eq.',
+    'Query nodes with filtering by type, fields, semantic search, references, path, date, and cross-node join filters. Use the query param for full-text and semantic (vector) search with ranked results. Scores use Reciprocal Rank Fusion (RRF) — absolute values are not meaningful, only relative ordering matters. match_sources indicates retrieval method: "fts" (full-text match), "semantic" (vector/embedding match), or both. Returns paginated results. Use include_fields to return field values inline (e.g. ["project","status"] or ["*"] for all). When you know the exact title, prefer get-node with title param. For partial title matching, use title_contains. For exact title filtering combined with other constraints, use title_eq. Cross-node filtering: join_filters narrows results to nodes linked to a target matching a nested filter; without_joins excludes them. Each filter has optional direction ("outgoing" default, or "incoming"), optional rel_type (string or array for OR), and optional target (nested NodeQueryFilter without its own join_filters). Example — open tasks whose linked project is done: {"types":["task"],"fields":{"status":{"eq":"open"}},"join_filters":[{"rel_type":"project","target":{"types":["project"],"fields":{"status":{"eq":"done"}}}}]}. Differs from references: references matches by identity (a specific target), join_filters matches by pattern (any node matching the target filter). When a join filter has a target, unresolved edges are invisible to it; a "notice" field surfaces in the result if such edges existed and could have affected the answer.',
     paramsShape,
     async (params) => {
       const sortBy = params.sort_by ?? 'title';
@@ -125,7 +196,9 @@ export function registerQueryNodes(
         params.path_prefix ||
         params.without_path_prefix ||
         params.path_dir !== undefined ||
-        params.modified_since,
+        params.modified_since ||
+        params.join_filters?.length ||
+        params.without_joins?.length,
       );
 
       // Hybrid search path: query present AND embedder available
@@ -145,6 +218,8 @@ export function registerQueryNodes(
             without_path_prefix: params.without_path_prefix,
             path_dir: params.path_dir,
             modified_since: params.modified_since,
+            join_filters: params.join_filters as NodeQueryFilter['join_filters'],
+            without_joins: params.without_joins as NodeQueryFilter['without_joins'],
           };
 
           const { sql, params: sqlParams } = buildNodeQuery(filter, db);
@@ -189,7 +264,10 @@ export function registerQueryNodes(
           return node;
         });
 
-        return toolResult({ nodes, total });
+        const response: Record<string, unknown> = { nodes, total };
+        const notice = computeJoinNotice(db, params.join_filters, params.without_joins);
+        if (notice) response.notice = notice;
+        return toolResult(response);
       }
 
       // Standard structured query path (no query param, or no embedder)
@@ -205,6 +283,8 @@ export function registerQueryNodes(
         without_path_prefix: params.without_path_prefix,
         path_dir: params.path_dir,
         modified_since: params.modified_since,
+        join_filters: params.join_filters as NodeQueryFilter['join_filters'],
+        without_joins: params.without_joins as NodeQueryFilter['without_joins'],
       };
 
       const { sql, countSql, params: sqlParams } = buildNodeQuery(filter, db);
@@ -220,7 +300,10 @@ export function registerQueryNodes(
 
       const nodes = enrichRows(db, rows, includeFields);
 
-      return toolResult({ nodes, total });
+      const response: Record<string, unknown> = { nodes, total };
+      const notice = computeJoinNotice(db, params.join_filters, params.without_joins);
+      if (notice) response.notice = notice;
+      return toolResult(response);
     },
   );
 }

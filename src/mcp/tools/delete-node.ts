@@ -11,6 +11,7 @@ import { resolveNodeIdentity } from './resolve-identity.js';
 import type { WriteLockManager } from '../../sync/write-lock.js';
 import type { SyncLogger } from '../../sync/sync-logger.js';
 import type { EmbeddingIndexer } from '../../search/indexer.js';
+import { refreshOnDelete } from '../../resolver/refresh.js';
 
 const paramsShape = {
   node_id: z.string().optional(),
@@ -103,6 +104,8 @@ export function registerDeleteNode(
           db.prepare('DELETE FROM nodes WHERE id = ?').run(node.node_id);
         });
         txn();
+
+        refreshOnDelete(db, node.node_id);
 
         // Clean up embedding rows after node is confirmed deleted.
         // embedding_vec is a vec0 virtual table with no FK cascade.

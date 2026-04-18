@@ -6,7 +6,7 @@ import { StdioServerTransport } from '@modelcontextprotocol/sdk/server/stdio.js'
 loadDotenv({ path: resolve(import.meta.dirname ?? '.', '..', '.env') });
 import { openDatabase } from './db/connection.js';
 import { createSchema } from './db/schema.js';
-import { upgradeToPhase2, upgradeToPhase3, upgradeToPhase4, upgradeToPhase6, addCreatedAt, upgradeForOverrides, ensureMetaTable } from './db/migrate.js';
+import { upgradeToPhase2, upgradeToPhase3, upgradeToPhase4, upgradeToPhase6, addCreatedAt, upgradeForOverrides, ensureMetaTable, upgradeForResolvedTargetId } from './db/migrate.js';
 import { createServer } from './mcp/server.js';
 import { parseArgs } from './transport/args.js';
 import { startHttpTransport } from './transport/http.js';
@@ -26,6 +26,12 @@ import { ExtractionCache } from './extraction/cache.js';
 import { createSubprocessEmbedder, type Embedder } from './search/embedder.js';
 import { createEmbeddingIndexer, type EmbeddingIndexer } from './search/indexer.js';
 import { CURRENT_SEARCH_VERSION, getSearchVersion, setSearchVersion } from './db/search-version.js';
+import {
+  CURRENT_RESOLVED_TARGETS_VERSION,
+  getResolvedTargetsVersion,
+  setResolvedTargetsVersion,
+} from './resolver/resolved-targets-version.js';
+import { backfillResolvedTargets } from './resolver/refresh.js';
 
 const args = parseArgs(process.argv.slice(2));
 
@@ -45,6 +51,7 @@ upgradeToPhase6(db);
 addCreatedAt(db);
 upgradeForOverrides(db);
 ensureMetaTable(db);
+upgradeForResolvedTargetId(db);
 
 const excludeDirs = (process.env.VAULT_EXCLUDE_DIRS ?? '').split(',').map(s => s.trim()).filter(Boolean);
 if (excludeDirs.length > 0) {
@@ -56,6 +63,18 @@ console.log(`Indexing vault at ${vaultPath}...`);
 const indexStart = Date.now();
 await fullIndex(vaultPath, db);
 console.log(`Indexing complete in ${Date.now() - indexStart}ms`);
+
+// Resolved-target backfill: populates resolved_target_id on any rows left NULL
+// (pre-existing rows before the migration, or edges from index-order issues).
+// Runs AFTER fullIndex so it catches both pre-existing NULLs and any stragglers
+// whose target wasn't yet indexed at the moment the indexer tried to resolve.
+const storedResolvedVersion = getResolvedTargetsVersion(db);
+if (storedResolvedVersion < CURRENT_RESOLVED_TARGETS_VERSION) {
+  console.log(`Resolved-target backfill ${storedResolvedVersion} → ${CURRENT_RESOLVED_TARGETS_VERSION}...`);
+  const stats = backfillResolvedTargets(db);
+  console.log(`Backfill complete: ${stats.updated}/${stats.scanned} rows resolved (${stats.uniqueTargets} unique targets).`);
+  setResolvedTargetsVersion(db, CURRENT_RESOLVED_TARGETS_VERSION);
+}
 
 startupSchemaRender(db, vaultPath);
 

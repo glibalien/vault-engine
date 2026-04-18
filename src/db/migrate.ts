@@ -299,3 +299,32 @@ export function ensureMetaTable(db: Database.Database): void {
     );
   `);
 }
+
+/**
+ * Migration: add `resolved_target_id` column + supporting indexes to
+ * `relationships` (added 2026-04-18 for cross-node query filtering).
+ *
+ * The column is populated at insert (indexer + pipeline) and maintained via
+ * src/resolver/refresh.ts on node create/rename/delete. A separate one-shot
+ * backfill walks all existing rows on first boot after upgrade.
+ *
+ * Idempotent — safe to run on a database that already has the new column.
+ */
+export function upgradeForResolvedTargetId(db: Database.Database): void {
+  const run = db.transaction(() => {
+    const cols = db.prepare("PRAGMA table_info(relationships)").all() as Array<{ name: string }>;
+    const hasCol = cols.some(c => c.name === 'resolved_target_id');
+    if (!hasCol) {
+      db.prepare(
+        'ALTER TABLE relationships ADD COLUMN resolved_target_id TEXT REFERENCES nodes(id) ON DELETE SET NULL'
+      ).run();
+    }
+    db.prepare(
+      'CREATE INDEX IF NOT EXISTS idx_relationships_resolved_target_id ON relationships(resolved_target_id)'
+    ).run();
+    db.prepare(
+      'CREATE INDEX IF NOT EXISTS idx_relationships_source_resolved ON relationships(source_id, resolved_target_id)'
+    ).run();
+  });
+  run();
+}

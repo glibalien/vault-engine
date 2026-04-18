@@ -79,20 +79,23 @@ export function createSchema(db: Database.Database): void {
     CREATE INDEX IF NOT EXISTS idx_node_fields_value_number ON node_fields(value_number);
     CREATE INDEX IF NOT EXISTS idx_node_fields_value_date ON node_fields(value_date);
 
-    -- Relationships store raw target strings (model A: query-time resolution).
-    -- No resolved_target_id column — resolution happens at query time via
-    -- src/resolver/resolve.ts. See that file for rationale and upgrade path.
+    -- Relationships store raw target strings plus an optional resolved node id.
+    -- resolved_target_id is populated at insert (indexer + pipeline) and maintained
+    -- via src/resolver/refresh.ts on node create/rename/delete.
     CREATE TABLE IF NOT EXISTS relationships (
       id INTEGER PRIMARY KEY AUTOINCREMENT,
       source_id TEXT NOT NULL REFERENCES nodes(id) ON DELETE CASCADE,
       target TEXT NOT NULL,
       rel_type TEXT NOT NULL,
       context TEXT,
+      resolved_target_id TEXT REFERENCES nodes(id) ON DELETE SET NULL,
       UNIQUE(source_id, target, rel_type)
     );
     CREATE INDEX IF NOT EXISTS idx_relationships_source_id ON relationships(source_id);
     CREATE INDEX IF NOT EXISTS idx_relationships_target ON relationships(target);
     CREATE INDEX IF NOT EXISTS idx_relationships_rel_type ON relationships(rel_type);
+    -- Indexes on resolved_target_id are created by upgradeForResolvedTargetId in db/migrate.ts:
+    -- on an existing DB the column doesn't exist yet when createSchema runs.
 
     CREATE TABLE IF NOT EXISTS edits_log (
       id INTEGER PRIMARY KEY AUTOINCREMENT,

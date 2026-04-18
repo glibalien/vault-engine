@@ -1,5 +1,4 @@
 import type Database from 'better-sqlite3';
-import { basename } from 'node:path';
 import { resolveTarget } from '../resolver/resolve.js';
 
 export interface FieldFilter {
@@ -152,22 +151,16 @@ export function buildNodeQuery(filter: NodeQueryFilter, db?: Database.Database):
       if (!db) {
         throw new Error('db is required for incoming reference filter (resolveTarget lookup)');
       }
+      // With resolved_target_id pre-populated on every relationship row
+      // (see src/resolver/refresh.ts + startup backfill in src/index.ts),
+      // the incoming branch is a single-key join — no variant IN-list needed.
       const resolved = resolveTarget(db, ref.target);
       if (!resolved) {
         whereClauses.push('1 = 0');
       } else {
-        const targetNode = db.prepare('SELECT file_path, title FROM nodes WHERE id = ?')
-          .get(resolved.id) as { file_path: string; title: string | null };
-        const possibleTargets: string[] = [];
-        if (targetNode.title) possibleTargets.push(targetNode.title);
-        possibleTargets.push(targetNode.file_path);
-        possibleTargets.push(basename(targetNode.file_path, '.md'));
-        const unique = [...new Set(possibleTargets)];
-
         const alias = `r${joinIdx++}`;
-        const placeholders = unique.map(() => '?').join(', ');
-        let joinCond = `INNER JOIN relationships ${alias} ON ${alias}.source_id = n.id AND ${alias}.target IN (${placeholders})`;
-        joinParams.push(...unique);
+        let joinCond = `INNER JOIN relationships ${alias} ON ${alias}.source_id = n.id AND ${alias}.resolved_target_id = ?`;
+        joinParams.push(resolved.id);
         if (ref.rel_type) {
           joinCond += ` AND ${alias}.rel_type = ?`;
           joinParams.push(ref.rel_type);

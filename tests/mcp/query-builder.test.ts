@@ -37,10 +37,13 @@ function seedTestData() {
   insertField.run('n2', 'scheduled', '2026-04-01', null, null, null, 'frontmatter');
   insertField.run('n3', 'scheduled', '2026-06-30', null, null, null, 'frontmatter');
 
+  // Relationships now carry resolved_target_id (populated by the indexer and
+  // backfilled on startup). Seed it directly so the incoming-references branch
+  // — which joins on resolved_target_id = ? — returns rows as expected.
   const insertRel = db.prepare(
-    'INSERT INTO relationships (source_id, target, rel_type, context) VALUES (?, ?, ?, ?)'
+    'INSERT INTO relationships (source_id, target, rel_type, context, resolved_target_id) VALUES (?, ?, ?, ?, ?)'
   );
-  insertRel.run('n1', 'Quick Note', 'wiki-link', null);
+  insertRel.run('n1', 'Quick Note', 'wiki-link', null, 'n2');
 }
 
 function runQuery(filter: Parameters<typeof buildNodeQuery>[0]) {

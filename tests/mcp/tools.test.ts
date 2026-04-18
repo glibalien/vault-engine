@@ -50,10 +50,13 @@ function seedTestData() {
   insertField.run('n3', 'priority', null, 1, null, null, 'frontmatter');
   insertField.run('n2', 'old_field', 'leftover', null, null, null, 'orphan');
 
+  // Relationships now carry resolved_target_id (populated by the indexer and
+  // backfilled on startup). Seed it directly so the incoming-references branch
+  // — which joins on resolved_target_id = ? — returns rows as expected.
   const insertRel = db.prepare(
-    'INSERT INTO relationships (source_id, target, rel_type, context) VALUES (?, ?, ?, ?)'
+    'INSERT INTO relationships (source_id, target, rel_type, context, resolved_target_id) VALUES (?, ?, ?, ?, ?)'
   );
-  insertRel.run('n1', 'Quick Note', 'wiki-link', null);
+  insertRel.run('n1', 'Quick Note', 'wiki-link', null, 'n2');
 }
 
 beforeEach(() => {

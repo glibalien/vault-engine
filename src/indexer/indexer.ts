@@ -10,6 +10,7 @@ import { sha256 } from './hash.js';
 import { shouldIgnore } from './ignore.js';
 import type { EmbeddingIndexer } from '../search/indexer.js';
 import { resolveTarget } from '../resolver/resolve.js';
+import { refreshOnDelete } from '../resolver/refresh.js';
 
 const WIKILINK_RE = /\[\[([^\]|]+)(?:\|([^\]]+))?\]\]/;
 
@@ -388,6 +389,8 @@ export function deleteNodeByPath(filePath: string, db: Database.Database, embedd
     stmts.deleteNode.run(existing.id);
   });
   txn();
+
+  refreshOnDelete(db, existing.id);
 
   // Clean up embedding rows after node is confirmed deleted.
   // embedding_vec is a vec0 virtual table with no FK cascade.

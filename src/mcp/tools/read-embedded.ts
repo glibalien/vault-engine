@@ -4,7 +4,7 @@ import { z } from 'zod';
 import { join, basename } from 'node:path';
 import { stat, readdir } from 'node:fs/promises';
 import { safeVaultPath } from '../../pipeline/safe-path.js';
-import { toolResult } from './errors.js';
+import { ok, fail } from './errors.js';
 import type { ExtractionCache } from '../../extraction/cache.js';
 
 /** Search vault recursively for a file by basename (binary files aren't in nodes table). */
@@ -44,10 +44,10 @@ export function registerReadEmbedded(
       const { file_path, filename } = params;
 
       if (!file_path && !filename) {
-        return toolResult({ error: 'Exactly one of file_path or filename is required', code: 'INVALID_PARAMS' });
+        return fail('INVALID_PARAMS', 'Exactly one of file_path or filename is required');
       }
       if (file_path && filename) {
-        return toolResult({ error: 'Provide only one of file_path or filename', code: 'INVALID_PARAMS' });
+        return fail('INVALID_PARAMS', 'Provide only one of file_path or filename');
       }
 
       let resolvedPath: string;
@@ -70,23 +70,21 @@ export function registerReadEmbedded(
             if (found) {
               resolvedPath = found;
             } else {
-              return toolResult({ error: `File not found in vault: ${filename}`, code: 'NOT_FOUND' });
+              return fail('NOT_FOUND', `File not found in vault: ${filename}`);
             }
           }
         } else if (matches.length === 1) {
           resolvedPath = join(vaultPath, matches[0].file_path);
         } else {
-          return toolResult({
-            error: `Multiple files match "${filename}"`,
-            code: 'AMBIGUOUS_FILENAME',
-            matches: matches.map(m => m.file_path),
+          return fail('AMBIGUOUS_FILENAME', `Multiple files match "${filename}"`, {
+            details: { matches: matches.map(m => m.file_path) },
           });
         }
       }
 
       try {
         const result = await extractionCache.getExtraction(resolvedPath);
-        return toolResult({
+        return ok({
           text: result.text,
           media_type: result.mediaType,
           extractor_id: result.extractorId,
@@ -96,12 +94,12 @@ export function registerReadEmbedded(
       } catch (err) {
         const message = (err as Error).message;
         if (message.startsWith('EXTRACTOR_UNAVAILABLE')) {
-          return toolResult({ error: message, code: 'EXTRACTOR_UNAVAILABLE' });
+          return fail('EXTRACTOR_UNAVAILABLE', message);
         }
         if (message.startsWith('No extractor')) {
-          return toolResult({ error: message, code: 'INVALID_PARAMS' });
+          return fail('INVALID_PARAMS', message);
         }
-        return toolResult({ error: message, code: 'INTERNAL_ERROR' });
+        return fail('INTERNAL_ERROR', message);
       }
     },
   );

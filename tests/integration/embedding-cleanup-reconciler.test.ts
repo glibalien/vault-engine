@@ -47,7 +47,7 @@ describe('reconciler embedding cleanup', () => {
     rmSync(vaultPath, { recursive: true, force: true });
   });
 
-  it('passes embeddingIndexer to deleteNodeByPath on sweep-detected deletions', async () => {
+  it('calls embeddingIndexer.removeNode on sweep-detected deletions', async () => {
     writeFileSync(join(vaultPath, 'a.md'), '---\ntypes:\n---\n# A\n', 'utf-8');
     fullIndex(vaultPath, db);
     const nodeId = (db.prepare('SELECT id FROM nodes WHERE file_path = ?').get('a.md') as { id: string }).id;

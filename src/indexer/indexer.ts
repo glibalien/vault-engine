@@ -8,9 +8,9 @@ import { splitFrontmatter } from '../parser/frontmatter.js';
 import type { WikiLink, YamlValue } from '../parser/types.js';
 import { sha256 } from './hash.js';
 import { shouldIgnore } from './ignore.js';
-import type { EmbeddingIndexer } from '../search/indexer.js';
 import { resolveTarget } from '../resolver/resolve.js';
-import { refreshOnDelete } from '../resolver/refresh.js';
+import { executeDeletion } from '../pipeline/delete.js';
+import { WriteLockManager } from '../sync/write-lock.js';
 
 const WIKILINK_RE = /\[\[([^\]|]+)(?:\|([^\]]+))?\]\]/;
 
@@ -31,7 +31,6 @@ interface Statements {
   deleteRelationships: Database.Statement;
   insertRelationship: Database.Statement;
   insertEditLog: Database.Statement;
-  deleteNode: Database.Statement;
   allFilePaths: Database.Statement;
   updateMtime: Database.Statement;
 }
@@ -67,7 +66,6 @@ function prepareStatements(db: Database.Database): Statements {
     insertEditLog: db.prepare(
       'INSERT INTO edits_log (node_id, timestamp, event_type, details) VALUES (?, ?, ?, ?)',
     ),
-    deleteNode: db.prepare('DELETE FROM nodes WHERE id = ?'),
     allFilePaths: db.prepare('SELECT id, file_path FROM nodes'),
     updateMtime: db.prepare('UPDATE nodes SET file_mtime = ? WHERE id = ?'),
   };
@@ -269,26 +267,23 @@ export interface IndexerOptions {
 export function fullIndex(vaultPath: string, db: Database.Database, options?: IndexerOptions): IndexStats {
   const stmts = prepareStatements(db);
   const stats: IndexStats = { indexed: 0, skipped: 0, deleted: 0, errors: 0 };
+  const lockManager = new WriteLockManager();
 
   // 1. Walk vault
   const diskFiles = new Set(walkDir(vaultPath, vaultPath));
 
   // 2. Detect deletions
   const dbNodes = stmts.allFilePaths.all() as { id: string; file_path: string }[];
-  const runSql = db.exec.bind(db);
 
   const deleteTransaction = db.transaction(() => {
     for (const node of dbNodes) {
       if (!diskFiles.has(node.file_path)) {
-        // Delete FTS entry
-        const rowInfo = stmts.getNodeRowid.get(node.id) as { rowid: number } | undefined;
-        if (rowInfo) {
-          stmts.deleteFts.run(rowInfo.rowid);
-        }
-        // Log before deletion
-        stmts.insertEditLog.run(node.id, Date.now(), 'file-deleted', node.file_path);
-        // Delete node (cascade handles types, fields, relationships)
-        stmts.deleteNode.run(node.id);
+        executeDeletion(db, lockManager, vaultPath, {
+          source: 'fullIndex',
+          node_id: node.id,
+          file_path: node.file_path,
+          unlink_file: false,
+        });
         options?.onNodeDeleted?.(node.id);
         stats.deleted++;
       }
@@ -370,33 +365,3 @@ export function indexFile(absolutePath: string, vaultPath: string, db: Database.
   return nodeId;
 }
 
-/**
- * Remove a node by its vault-relative file path.
- */
-export function deleteNodeByPath(filePath: string, db: Database.Database, embeddingIndexer?: EmbeddingIndexer): boolean {
-  const stmts = prepareStatements(db);
-
-  const existing = stmts.getNodeByPath.get(filePath) as { id: string } | undefined;
-  if (!existing) return false;
-
-  const txn = db.transaction(() => {
-    // Delete FTS entry
-    const rowInfo = stmts.getNodeRowid.get(existing.id) as { rowid: number } | undefined;
-    if (rowInfo) {
-      stmts.deleteFts.run(rowInfo.rowid);
-    }
-    // Log
-    stmts.insertEditLog.run(existing.id, Date.now(), 'file-deleted', filePath);
-    // Delete node (cascade)
-    stmts.deleteNode.run(existing.id);
-  });
-  txn();
-
-  refreshOnDelete(db, existing.id);
-
-  // Clean up embedding rows after node is confirmed deleted.
-  // embedding_vec is a vec0 virtual table with no FK cascade.
-  embeddingIndexer?.removeNode(existing.id);
-
-  return true;
-}

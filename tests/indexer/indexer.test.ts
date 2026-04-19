@@ -3,7 +3,7 @@ import { join } from 'node:path';
 import { unlinkSync, writeFileSync, utimesSync } from 'node:fs';
 import Database from 'better-sqlite3';
 import { createSchema } from '../../src/db/schema.js';
-import { fullIndex, indexFile, deleteNodeByPath, sha256, shouldIgnore, setExcludeDirs } from '../../src/indexer/index.js';
+import { fullIndex, indexFile, sha256, shouldIgnore, setExcludeDirs } from '../../src/indexer/index.js';
 import { createTempVault } from '../helpers/vault.js';
 
 let vaultPath: string;
@@ -272,32 +272,3 @@ describe('indexFile', () => {
   });
 });
 
-// ── deleteNodeByPath ────────────────────────────────────────────────
-
-describe('deleteNodeByPath', () => {
-  it('removes a node and its cascade data', () => {
-    fullIndex(vaultPath, db);
-    const countBefore = (db.prepare('SELECT COUNT(*) as c FROM nodes').get() as { c: number }).c;
-
-    const deleted = deleteNodeByPath('multi-type.md', db);
-    expect(deleted).toBe(true);
-
-    const countAfter = (db.prepare('SELECT COUNT(*) as c FROM nodes').get() as { c: number }).c;
-    expect(countAfter).toBe(countBefore - 1);
-
-    // Types should be gone too
-    const types = db.prepare("SELECT COUNT(*) as c FROM node_types WHERE node_id IN (SELECT id FROM nodes WHERE file_path = 'multi-type.md')").get() as { c: number };
-    expect(types.c).toBe(0);
-  });
-
-  it('returns false for non-existent path', () => {
-    expect(deleteNodeByPath('does-not-exist.md', db)).toBe(false);
-  });
-
-  it('logs file-deleted event', () => {
-    fullIndex(vaultPath, db);
-    deleteNodeByPath('multi-type.md', db);
-    const logs = db.prepare("SELECT COUNT(*) as c FROM edits_log WHERE event_type = 'file-deleted'").get() as { c: number };
-    expect(logs.c).toBeGreaterThanOrEqual(1);
-  });
-});

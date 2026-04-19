@@ -5,7 +5,8 @@ import { parse as parseYaml } from 'yaml';
 import { watch, type FSWatcher } from 'chokidar';
 import { sha256 } from '../indexer/hash.js';
 import { shouldIgnore } from '../indexer/ignore.js';
-import { indexFile, deleteNodeByPath } from '../indexer/indexer.js';
+import { indexFile } from '../indexer/indexer.js';
+import { executeDeletion } from '../pipeline/delete.js';
 import { parseMarkdown } from '../parser/parse.js';
 import { splitFrontmatter } from '../parser/frontmatter.js';
 import { executeMutation } from '../pipeline/execute.js';
@@ -46,7 +47,16 @@ export function startWatcher(
   mutex.processEvent = async (event) => {
     if (event.type === 'unlink') {
       const relPath = relative(vaultPath, join(vaultPath, event.path));
-      deleteNodeByPath(relPath, db, embeddingIndexer);
+      const row = db.prepare('SELECT id FROM nodes WHERE file_path = ?').get(relPath) as { id: string } | undefined;
+      if (row) {
+        executeDeletion(db, writeLock, vaultPath, {
+          source: 'watcher',
+          node_id: row.id,
+          file_path: relPath,
+          unlink_file: false,
+        });
+        embeddingIndexer?.removeNode(row.id);
+      }
     } else {
       const absPath = join(vaultPath, event.path);
       processFileChange(absPath, relative(vaultPath, absPath), db, writeLock, vaultPath, syncLogger, embeddingIndexer);
@@ -145,7 +155,16 @@ export function startWatcher(
       mutex.enqueue({ type: 'unlink', path: relPath });
     } else {
       mutex.run(async () => {
-        deleteNodeByPath(relPath, db, embeddingIndexer);
+        const row = db.prepare('SELECT id FROM nodes WHERE file_path = ?').get(relPath) as { id: string } | undefined;
+        if (row) {
+          executeDeletion(db, writeLock, vaultPath, {
+            source: 'watcher',
+            node_id: row.id,
+            file_path: relPath,
+            unlink_file: false,
+          });
+          embeddingIndexer?.removeNode(row.id);
+        }
       });
     }
   }

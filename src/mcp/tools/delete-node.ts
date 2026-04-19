@@ -3,15 +3,12 @@
 import type { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import type Database from 'better-sqlite3';
 import { z } from 'zod';
-import { join } from 'node:path';
-import { unlinkSync } from 'node:fs';
-import { safeVaultPath } from '../../pipeline/safe-path.js';
 import { toolResult, toolErrorResult } from './errors.js';
 import { resolveNodeIdentity } from './resolve-identity.js';
 import type { WriteLockManager } from '../../sync/write-lock.js';
 import type { SyncLogger } from '../../sync/sync-logger.js';
 import type { EmbeddingIndexer } from '../../search/indexer.js';
-import { refreshOnDelete } from '../../resolver/refresh.js';
+import { executeDeletion } from '../../pipeline/delete.js';
 
 const paramsShape = {
   node_id: z.string().optional(),
@@ -87,37 +84,14 @@ export function registerDeleteNode(
       }
 
       // Confirmed deletion
-      const absPath = safeVaultPath(vaultPath, node.file_path);
-
-      writeLock.withLockSync(absPath, () => {
-        const txn = db.transaction(() => {
-          // Delete FTS
-          const rowInfo = db.prepare('SELECT rowid FROM nodes WHERE id = ?').get(node.node_id) as { rowid: number } | undefined;
-          if (rowInfo) {
-            db.prepare('DELETE FROM nodes_fts WHERE rowid = ?').run(rowInfo.rowid);
-          }
-          // Log
-          db.prepare('INSERT INTO edits_log (node_id, timestamp, event_type, details) VALUES (?, ?, ?, ?)').run(
-            node.node_id, Date.now(), 'file-deleted', node.file_path,
-          );
-          // Delete node (CASCADE handles node_fields, node_types, relationships)
-          db.prepare('DELETE FROM nodes WHERE id = ?').run(node.node_id);
-        });
-        txn();
-
-        refreshOnDelete(db, node.node_id);
-
-        // Clean up embedding rows after node is confirmed deleted.
-        // embedding_vec is a vec0 virtual table with no FK cascade.
-        embeddingIndexer?.removeNode(node.node_id);
-
-        // Delete file from disk
-        try {
-          unlinkSync(absPath);
-        } catch {
-          // File may already be gone
-        }
+      const result = executeDeletion(db, writeLock, vaultPath, {
+        source: 'tool',
+        node_id: node.node_id,
+        file_path: node.file_path,
+        unlink_file: true,
       });
+
+      embeddingIndexer?.removeNode(result.node_id);
 
       return toolResult({
         deleted: true,

@@ -50,6 +50,8 @@ export function fail(
 }
 
 export function adaptIssue(v: ValidationIssue | ToolIssue): Issue {
+  // Discriminator: ValidationIssue has severity: 'error' (required); ToolIssue has no severity.
+  // If ToolIssue ever gains a severity field, update this discriminator to use a more explicit check.
   if ('severity' in v) {
     const issue: Issue = {
       code: v.code,

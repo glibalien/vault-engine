@@ -9,6 +9,7 @@ import type { WriteLockManager } from '../../sync/write-lock.js';
 import type { SyncLogger } from '../../sync/sync-logger.js';
 import type { EmbeddingIndexer } from '../../search/indexer.js';
 import { executeDeletion } from '../../pipeline/delete.js';
+import { createOperation, finalizeOperation } from '../../undo/operation.js';
 
 const paramsShape = {
   node_id: z.string().optional(),
@@ -96,21 +97,29 @@ export function registerDeleteNode(
       }
 
       // Confirmed deletion
-      const result = executeDeletion(db, writeLock, vaultPath, {
-        source: 'tool',
-        node_id: node.node_id,
-        file_path: node.file_path,
-        unlink_file: true,
+      const operation_id = createOperation(db, {
+        source_tool: 'delete-node',
+        description: `delete-node: '${node.title}'`,
       });
+      try {
+        const result = executeDeletion(db, writeLock, vaultPath, {
+          source: 'tool',
+          node_id: node.node_id,
+          file_path: node.file_path,
+          unlink_file: true,
+        }, { operation_id });
 
-      embeddingIndexer?.removeNode(result.node_id);
+        embeddingIndexer?.removeNode(result.node_id);
 
-      return ok({
-        deleted: true,
-        node_id: node.node_id,
-        file_path: node.file_path,
-        dangling_references: incomingCount.c,
-      });
+        return ok({
+          deleted: true,
+          node_id: node.node_id,
+          file_path: node.file_path,
+          dangling_references: incomingCount.c,
+        });
+      } finally {
+        finalizeOperation(db, operation_id);
+      }
     },
   );
 }

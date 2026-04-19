@@ -10,6 +10,7 @@ import { registerUpdateNode } from '../../src/mcp/tools/update-node.js';
 import { registerAddTypeToNode } from '../../src/mcp/tools/add-type-to-node.js';
 import { registerRemoveTypeFromNode } from '../../src/mcp/tools/remove-type-from-node.js';
 import { registerRenameNode } from '../../src/mcp/tools/rename-node.js';
+import { registerDeleteNode } from '../../src/mcp/tools/delete-node.js';
 import { fullIndex } from '../../src/indexer/indexer.js';
 import { WriteLockManager } from '../../src/sync/write-lock.js';
 import { restoreOperation } from '../../src/undo/restore.js';
@@ -221,5 +222,52 @@ describe('undo integration — rename-node', () => {
     // 1 for the rename itself + N for each actually-updated referencing node (N >= 1)
     expect(list.operations[0].node_count).toBeGreaterThanOrEqual(2);
     expect(list.operations[0].description).toContain('references');
+  });
+});
+
+describe('undo integration — delete-node', () => {
+  let vaultPath: string;
+  let cleanup: () => void;
+  let db: Database.Database;
+  let writeLock: WriteLockManager;
+  let server: McpServer;
+
+  beforeEach(() => {
+    const v = createTempVault();
+    vaultPath = v.vaultPath;
+    cleanup = v.cleanup;
+    db = createTestDb();
+    addUndoTables(db);
+    db.prepare("INSERT INTO schemas (name, display_name, field_claims) VALUES ('note', 'Note', '[]')").run();
+    writeLock = new WriteLockManager();
+    server = new McpServer({ name: 'test', version: '0' });
+    registerDeleteNode(server, db, writeLock, vaultPath);
+  });
+
+  afterEach(() => { db.close(); cleanup(); });
+
+  it('captures one operation capturing pre-delete state', async () => {
+    writeFileSync(join(vaultPath, 'del.md'), '---\ntypes:\n  - note\n---\n# Del\n\noriginal\n', 'utf-8');
+    fullIndex(vaultPath, db);
+
+    await callTool(server, 'delete-node', { file_path: 'del.md', confirm: true, referencing_nodes_limit: 20 });
+
+    const list = listOperations(db, {});
+    expect(list.operations.length).toBe(1);
+    expect(list.operations[0].source_tool).toBe('delete-node');
+    expect(list.operations[0].node_count).toBe(1);
+  });
+
+  it('restoring the operation re-creates the node with its original id', async () => {
+    writeFileSync(join(vaultPath, 'res.md'), '---\ntypes:\n  - note\n---\n# Res\n\nhello\n', 'utf-8');
+    fullIndex(vaultPath, db);
+    const originalId = (db.prepare('SELECT id FROM nodes WHERE file_path = ?').get('res.md') as { id: string }).id;
+
+    await callTool(server, 'delete-node', { file_path: 'res.md', confirm: true, referencing_nodes_limit: 20 });
+    const opId = listOperations(db, {}).operations[0].operation_id;
+
+    restoreOperation(db, writeLock, vaultPath, opId, new Set([opId]));
+    const row = db.prepare('SELECT id FROM nodes WHERE id = ?').get(originalId) as { id: string } | undefined;
+    expect(row?.id).toBe(originalId);
   });
 });

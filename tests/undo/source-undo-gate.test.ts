@@ -58,4 +58,26 @@ describe("pipeline source: 'undo'", () => {
       title: 'X', types: ['note'], fields: {}, body: '',
     })).not.toThrow();
   });
+
+  it('skips default population when source=undo (preserves historical state)', () => {
+    // Seed a global field with a default value, required, attached to 'note' via a claim
+    db.prepare(
+      "INSERT INTO global_fields (name, field_type, required, default_value) VALUES ('tag', 'string', 1, '\"today\"')"
+    ).run();
+    db.prepare(
+      "INSERT INTO schema_field_claims (schema_name, field, required_override, default_value_override, default_value_overridden) VALUES ('note', 'tag', 1, '\"today\"', 1)"
+    ).run();
+
+    // Restore a node via source=undo WITHOUT providing the 'tag' field.
+    // skipDefaults=true should prevent the default from being injected.
+    const res = executeMutation(db, writeLock, vaultPath, {
+      source: 'undo', node_id: 'restored_no_defaults', file_path: 'nd.md',
+      title: 'ND', types: ['note'], fields: {}, body: '',
+    });
+
+    // The node_fields table should NOT contain the defaulted 'tag' field — skipDefaults worked.
+    const fieldRow = db.prepare('SELECT field_name FROM node_fields WHERE node_id = ?')
+      .get(res.node_id) as { field_name: string } | undefined;
+    expect(fieldRow).toBeUndefined();
+  });
 });

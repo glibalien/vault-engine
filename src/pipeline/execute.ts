@@ -120,7 +120,7 @@ export function executeMutation(
       mutation.types,
       claimsByType,
       globalFields,
-      { fileCtx, skipDefaults: mutation.source === 'normalizer' || mutation.source === 'propagation' },
+      { fileCtx, skipDefaults: mutation.source === 'normalizer' || mutation.source === 'propagation' || mutation.source === 'undo' },
     );
 
     // ── Stage 3: Source-specific error handling ──────────────────────

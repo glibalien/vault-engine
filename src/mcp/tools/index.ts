@@ -28,6 +28,7 @@ import { registerBatchMutate } from './batch-mutate.js';
 import { registerReadEmbedded } from './read-embedded.js';
 import { registerQuerySyncLog } from './query-sync-log.js';
 import { registerListUndoHistory } from './list-undo-history.js';
+import { registerUndoOperations } from './undo-operations.js';
 
 export function registerAllTools(server: McpServer, db: Database.Database, ctx?: { writeLock?: import('../../sync/write-lock.js').WriteLockManager; syncLogger?: import('../../sync/sync-logger.js').SyncLogger; vaultPath?: string; extractionCache?: import('../../extraction/cache.js').ExtractionCache; extractorRegistry?: import('../../extraction/registry.js').ExtractorRegistry; embeddingIndexer?: import('../../search/indexer.js').EmbeddingIndexer; embedder?: import('../../search/embedder.js').Embedder }): void {
   registerVaultStats(server, db, ctx?.extractorRegistry, ctx?.embeddingIndexer);
@@ -65,5 +66,6 @@ export function registerAllTools(server: McpServer, db: Database.Database, ctx?:
     registerRemoveTypeFromNode(server, db, ctx.writeLock, ctx.vaultPath, ctx.syncLogger);
     registerRenameNode(server, db, ctx.writeLock, ctx.vaultPath, ctx.syncLogger);
     registerBatchMutate(server, db, ctx.writeLock, ctx.vaultPath, ctx.syncLogger, ctx.embeddingIndexer);
+    registerUndoOperations(server, db, ctx.writeLock, ctx.vaultPath);
   }
 }

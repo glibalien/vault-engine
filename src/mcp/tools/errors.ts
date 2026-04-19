@@ -11,7 +11,8 @@ export type ErrorCode =
   | 'EXTRACTOR_UNAVAILABLE'
   | 'AMBIGUOUS_FILENAME'
   | 'CONFLICT'
-  | 'BATCH_FAILED';
+  | 'BATCH_FAILED'
+  | 'OPERATION_NOT_FOUND';
 
 export interface Issue {
   code: string;

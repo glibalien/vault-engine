@@ -57,8 +57,8 @@ export function adaptIssue(v: ValidationIssue | ToolIssue): Issue {
       code: v.code,
       message: v.message,
       severity: v.severity,
-      field: v.field,
     };
+    if (v.field !== undefined) issue.field = v.field;
     if (v.details !== undefined) issue.details = v.details;
     return issue;
   }

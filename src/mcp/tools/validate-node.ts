@@ -1,7 +1,7 @@
 import type { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import type Database from 'better-sqlite3';
 import { z } from 'zod';
-import { toolResult, toolErrorResult } from './errors.js';
+import { ok, fail, adaptIssue } from './errors.js';
 import { getGlobalField } from '../../global-fields/crud.js';
 import { validateProposedState } from '../../validation/validate.js';
 import type { FieldClaim, GlobalFieldDefinition } from '../../validation/types.js';
@@ -23,10 +23,10 @@ export function registerValidateNode(server: McpServer, db: Database.Database): 
 
         // Exactly one of node_id or proposed required
         if (!node_id && !proposed) {
-          return toolErrorResult('INVALID_PARAMS', 'Exactly one of node_id or proposed is required');
+          return fail('INVALID_PARAMS', 'Exactly one of node_id or proposed is required');
         }
         if (node_id && proposed) {
-          return toolErrorResult('INVALID_PARAMS', 'Exactly one of node_id or proposed is required');
+          return fail('INVALID_PARAMS', 'Exactly one of node_id or proposed is required');
         }
 
         let types: string[];
@@ -134,16 +134,16 @@ export function registerValidateNode(server: McpServer, db: Database.Database): 
           };
         }
 
-        return toolResult({
+        return ok({
           valid: result.valid,
           effective_fields: effectiveFieldsObj,
           coerced_state: result.coerced_state,
-          issues: result.issues,
+          issues: result.issues.map(adaptIssue),
           orphan_fields: result.orphan_fields,
           types_without_schemas: typesWithoutSchemas,
         });
       } catch (err) {
-        return toolErrorResult('INTERNAL_ERROR', err instanceof Error ? err.message : String(err));
+        return fail('INTERNAL_ERROR', err instanceof Error ? err.message : String(err));
       }
     },
   );

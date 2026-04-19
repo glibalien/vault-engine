@@ -2,7 +2,7 @@ import type { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import type Database from 'better-sqlite3';
 import { z } from 'zod';
 import { basename } from 'node:path';
-import { toolResult, toolErrorResult } from './errors.js';
+import { ok, fail } from './errors.js';
 import { resolveFieldValue, type FieldRow } from '../field-value.js';
 import { resolveTarget } from '../../resolver/resolve.js';
 import { getNodeConformance } from '../../validation/conformance.js';
@@ -51,10 +51,10 @@ export function registerGetNode(
       // Validate exactly one param provided
       const provided = [node_id, file_path, title].filter(v => v !== undefined);
       if (provided.length === 0) {
-        return toolErrorResult('INVALID_PARAMS', 'Exactly one of node_id, file_path, or title is required');
+        return fail('INVALID_PARAMS', 'Exactly one of node_id, file_path, or title is required');
       }
       if (provided.length > 1) {
-        return toolErrorResult('INVALID_PARAMS', 'Exactly one of node_id, file_path, or title is required');
+        return fail('INVALID_PARAMS', 'Exactly one of node_id, file_path, or title is required');
       }
 
       let node: NodeRow | undefined;
@@ -76,7 +76,7 @@ export function registerGetNode(
       }
 
       if (!node) {
-        return toolErrorResult('NOT_FOUND', 'Node not found');
+        return fail('NOT_FOUND', 'Node not found');
       }
 
       // Get types
@@ -180,7 +180,7 @@ export function registerGetNode(
         resultObj.embed_errors = [];
       }
 
-      return toolResult(resultObj);
+      return ok(resultObj);
     },
   );
 }

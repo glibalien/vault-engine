@@ -58,8 +58,9 @@ beforeEach(() => {
 describe('schemaless type consistency', () => {
   it('get-node marks custom in types_without_schemas and task in types_with_schemas', async () => {
     const handler = getToolHandler('get-node');
-    const result = parseResult(await handler({ node_id: 'n1' }));
-    const c = result.conformance;
+    const body = parseResult(await handler({ node_id: 'n1' }));
+    expect(body.ok).toBe(true);
+    const c = body.data.conformance;
 
     expect(c.types_with_schemas).toContain('task');
     expect(c.types_without_schemas).toContain('custom');
@@ -67,8 +68,9 @@ describe('schemaless type consistency', () => {
 
   it('list-types marks custom with has_schema:false, claim_count:null', async () => {
     const handler = getToolHandler('list-types');
-    const result = parseResult(await handler({}));
-    const custom = result.find((t: any) => t.type === 'custom');
+    const body = parseResult(await handler({}));
+    expect(body.ok).toBe(true);
+    const custom = body.data.find((t: any) => t.type === 'custom');
 
     expect(custom).toBeDefined();
     expect(custom.has_schema).toBe(false);
@@ -77,14 +79,17 @@ describe('schemaless type consistency', () => {
 
   it('validate-node reports custom in types_without_schemas', async () => {
     const handler = getToolHandler('validate-node');
-    const result = parseResult(await handler({ node_id: 'n1' }));
+    const body = parseResult(await handler({ node_id: 'n1' }));
+    expect(body.ok).toBe(true);
 
-    expect(result.types_without_schemas).toContain('custom');
+    expect(body.data.types_without_schemas).toContain('custom');
   });
 
   it('describe-schema for task does not include custom type in its scope', async () => {
     const handler = getToolHandler('describe-schema');
-    const result = parseResult(await handler({ name: 'task' }));
+    const body = parseResult(await handler({ name: 'task' }));
+    expect(body.ok).toBe(true);
+    const result = body.data;
 
     // describe-schema returns data about 'task' which has a schema.
     // The schemaless 'custom' type is not part of describe-schema's output,

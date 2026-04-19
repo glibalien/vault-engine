@@ -45,7 +45,9 @@ describe('vault-stats extractor status', () => {
     registry.registerUnavailable('deepgram', 'audio', ['.m4a', '.mp3'], 'DEEPGRAM_API_KEY');
 
     const handler = getVaultStatsHandler(registry);
-    const result = parseResult(await handler({}) as any) as any;
+    const body = parseResult(await handler({}) as any) as any;
+    expect(body.ok).toBe(true);
+    const result = body.data;
 
     expect(result.extractors).toBeDefined();
     expect(Array.isArray(result.extractors.active)).toBe(true);
@@ -61,7 +63,9 @@ describe('vault-stats extractor status', () => {
 
   it('omits extractors property when registry is not provided (backward compat)', async () => {
     const handler = getVaultStatsHandler(undefined);
-    const result = parseResult(await handler({}) as any) as any;
+    const body = parseResult(await handler({}) as any) as any;
+    expect(body.ok).toBe(true);
+    const result = body.data;
 
     expect(result.extractors).toBeUndefined();
     // Core stats still present
@@ -73,7 +77,9 @@ describe('vault-stats extractor status', () => {
     const registry = new ExtractorRegistry();
 
     const handler = getVaultStatsHandler(registry);
-    const result = parseResult(await handler({}) as any) as any;
+    const body = parseResult(await handler({}) as any) as any;
+    expect(body.ok).toBe(true);
+    const result = body.data;
 
     expect(result.extractors).toBeDefined();
     expect(result.extractors.active).toEqual([]);

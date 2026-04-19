@@ -1,7 +1,7 @@
 import type { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import type Database from 'better-sqlite3';
 import { z } from 'zod';
-import { toolResult, toolErrorResult } from './errors.js';
+import { ok, fail } from './errors.js';
 
 interface GlobalFieldRow {
   name: string;
@@ -27,7 +27,7 @@ export function registerDescribeGlobalField(server: McpServer, db: Database.Data
         GlobalFieldRow | undefined;
 
       if (!row) {
-        return toolErrorResult('NOT_FOUND', `Global field '${name}' not found`);
+        return fail('NOT_FOUND', `Global field '${name}' not found`);
       }
 
       // Types that claim this field
@@ -51,7 +51,7 @@ export function registerDescribeGlobalField(server: McpServer, db: Database.Data
          )`
       ).get(name) as { count: number };
 
-      return toolResult({
+      return ok({
         name: row.name,
         field_type: row.field_type,
         enum_values: row.enum_values ? JSON.parse(row.enum_values) : null,

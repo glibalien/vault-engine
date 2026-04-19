@@ -49,7 +49,9 @@ describe('vault-stats search_index', () => {
 
   it('includes search_index in vault-stats output', async () => {
     const result = await handler();
-    const data = JSON.parse(result.content[0].text);
+    const body = JSON.parse(result.content[0].text);
+    expect(body.ok).toBe(true);
+    const data = body.data;
     expect(data.search_index).toBeDefined();
     expect(data.search_index.status).toBe('ready');
     expect(data.search_index.nodes_total).toBe(1);
@@ -71,7 +73,9 @@ describe('vault-stats search_index', () => {
     };
     registerVaultStats(fakeServer2 as any, db);
     const result = await captured2!();
-    const data = JSON.parse(result.content[0].text);
+    const body = JSON.parse(result.content[0].text);
+    expect(body.ok).toBe(true);
+    const data = body.data;
     expect(data.search_index).toBeUndefined();
   });
 });

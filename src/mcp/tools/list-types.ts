@@ -1,6 +1,6 @@
 import type { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import type Database from 'better-sqlite3';
-import { toolResult } from './errors.js';
+import { ok } from './errors.js';
 
 interface TypeRow {
   type: string;
@@ -29,7 +29,7 @@ export function registerListTypes(server: McpServer, db: Database.Database): voi
          ORDER BY count DESC`
       ).all() as TypeRow[];
 
-      return toolResult(types.map(t => ({
+      return ok(types.map(t => ({
         type: t.type,
         count: t.count,
         has_schema: Boolean(t.has_schema),

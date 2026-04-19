@@ -66,7 +66,9 @@ describe('get-node include_embeds', () => {
     const cache = new ExtractionCache(db, registry);
 
     const handler = getGetNodeHandler(cache, tmpDir);
-    const result = parseResult(await handler({ node_id: 'n1' }) as any) as any;
+    const body = parseResult(await handler({ node_id: 'n1' }) as any) as any;
+    expect(body.ok).toBe(true);
+    const result = body.data;
 
     expect(result.embeds).toBeDefined();
     expect(Array.isArray(result.embeds)).toBe(true);
@@ -86,7 +88,9 @@ describe('get-node include_embeds', () => {
 
     const handler = getGetNodeHandler(cache, tmpDir);
     // No include_embeds param — should default to true
-    const result = parseResult(await handler({ node_id: 'n1' }) as any) as any;
+    const body = parseResult(await handler({ node_id: 'n1' }) as any) as any;
+    expect(body.ok).toBe(true);
+    const result = body.data;
 
     expect(result.embeds).toBeDefined();
     expect(result.embeds).toEqual([]);
@@ -102,7 +106,9 @@ describe('get-node include_embeds', () => {
     const cache = new ExtractionCache(db, registry);
 
     const handler = getGetNodeHandler(cache, tmpDir);
-    const result = parseResult(await handler({ node_id: 'n1', include_embeds: false }) as any) as any;
+    const body = parseResult(await handler({ node_id: 'n1', include_embeds: false }) as any) as any;
+    expect(body.ok).toBe(true);
+    const result = body.data;
 
     expect(result.embeds).toBeUndefined();
     expect(result.embed_errors).toBeUndefined();
@@ -110,14 +116,14 @@ describe('get-node include_embeds', () => {
 
   it('respects max_embeds parameter', async () => {
     // Create a node with 5 embed refs
-    const body = [
+    const nodeBody = [
       '![[audio1.m4a]]',
       '![[audio2.m4a]]',
       '![[audio3.m4a]]',
       '![[audio4.m4a]]',
       '![[audio5.m4a]]',
     ].join('\n');
-    seedNode('n1', 'notes/note.md', 'Test Note', body);
+    seedNode('n1', 'notes/note.md', 'Test Note', nodeBody);
 
     // Create all 5 audio files
     for (let i = 1; i <= 5; i++) {
@@ -129,7 +135,9 @@ describe('get-node include_embeds', () => {
     const cache = new ExtractionCache(db, registry);
 
     const handler = getGetNodeHandler(cache, tmpDir);
-    const result = parseResult(await handler({ node_id: 'n1', max_embeds: 2 }) as any) as any;
+    const envelope = parseResult(await handler({ node_id: 'n1', max_embeds: 2 }) as any) as any;
+    expect(envelope.ok).toBe(true);
+    const result = envelope.data;
 
     expect(result.embeds).toHaveLength(2);
     // The remaining refs beyond the limit become errors (TRUNCATED)
@@ -143,7 +151,9 @@ describe('get-node include_embeds', () => {
 
     // No cache — handler called with only 2 args (backward-compatible)
     const handler = getGetNodeHandler(undefined, undefined);
-    const result = parseResult(await handler({ node_id: 'n1' }) as any) as any;
+    const body = parseResult(await handler({ node_id: 'n1' }) as any) as any;
+    expect(body.ok).toBe(true);
+    const result = body.data;
 
     // include_embeds defaults to true but no cache => empty arrays
     expect(result.embeds).toEqual([]);

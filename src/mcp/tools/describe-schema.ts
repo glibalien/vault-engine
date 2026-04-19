@@ -1,7 +1,7 @@
 import type { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import type Database from 'better-sqlite3';
 import { z } from 'zod';
-import { toolResult, toolErrorResult } from './errors.js';
+import { ok, fail } from './errors.js';
 
 interface SchemaRow {
   name: string;
@@ -56,7 +56,7 @@ export function registerDescribeSchema(server: McpServer, db: Database.Database)
         .get(name) as SchemaRow | undefined;
 
       if (!row) {
-        return toolErrorResult('NOT_FOUND', `Schema '${name}' not found`);
+        return fail('NOT_FOUND', `Schema '${name}' not found`);
       }
 
       // Read claims from schema_field_claims table
@@ -146,7 +146,7 @@ export function registerDescribeSchema(server: McpServer, db: Database.Database)
          ORDER BY count DESC`
       ).all(name, name) as OrphanRow[];
 
-      return toolResult({
+      return ok({
         name: row.name,
         display_name: row.display_name,
         icon: row.icon,

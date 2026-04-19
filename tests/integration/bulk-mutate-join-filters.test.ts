@@ -84,6 +84,7 @@ describe('update-node query mode with join_filters', () => {
     expect(r.matched).toBe(1);
     const preview = r.preview as Array<{ node_id: string }>;
     expect(preview.map(p => p.node_id)).toEqual(['t1']);
+    // TODO(Task 9): migrate to expect(body.warnings).toContainEqual({code: 'CROSS_NODE_FILTER_UNRESOLVED', ...})
     expect(r.notice).toMatch(/cross-node join filters/i);
   });
 

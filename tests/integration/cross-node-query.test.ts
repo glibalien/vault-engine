@@ -132,6 +132,7 @@ describe('cross-node query integration', () => {
     );
     const w = r.warnings.find(w => w.code === 'CROSS_NODE_FILTER_UNRESOLVED');
     expect(w!.message).toMatch(/Could not resolve cross-node filter edges/);
+    expect(w!.details).toEqual({ edges: ['project'] });
   });
 
   it('no warning when join_filter has no target (only rel_type filter)', async () => {

@@ -3,6 +3,7 @@ import { createTestDb } from '../helpers/db.js';
 import { createTempVault } from '../helpers/vault.js';
 import { addUndoTables } from '../../src/db/migrate.js';
 import { executeMutation } from '../../src/pipeline/execute.js';
+import { executeDeletion } from '../../src/pipeline/delete.js';
 import { WriteLockManager } from '../../src/sync/write-lock.js';
 import type Database from 'better-sqlite3';
 
@@ -97,6 +98,61 @@ describe('executeMutation — undo snapshot capture', () => {
     }, undefined, { operation_id: 'op-noop' });
 
     const count = (db.prepare('SELECT COUNT(*) AS c FROM undo_snapshots WHERE operation_id = ?').get('op-noop') as { c: number }).c;
+    expect(count).toBe(0);
+  });
+});
+
+describe('executeDeletion — undo snapshot capture', () => {
+  let vaultPath: string;
+  let cleanup: () => void;
+  let db: Database.Database;
+  let writeLock: WriteLockManager;
+
+  beforeEach(() => {
+    const v = createTempVault();
+    vaultPath = v.vaultPath;
+    cleanup = v.cleanup;
+    db = createTestDb();
+    addUndoTables(db);
+    db.prepare("INSERT INTO schemas (name, display_name, field_claims) VALUES ('note', 'Note', '[]')").run();
+    writeLock = new WriteLockManager();
+  });
+
+  afterEach(() => {
+    db.close();
+    cleanup();
+  });
+
+  it('writes a was_deleted=0 snapshot capturing pre-delete state', () => {
+    db.prepare("INSERT INTO undo_operations (operation_id, timestamp, source_tool, description, node_count, status) VALUES (?, ?, ?, ?, 0, 'active')")
+      .run('op-del', Date.now(), 'delete-node', 'del');
+
+    const createRes = executeMutation(db, writeLock, vaultPath, {
+      source: 'tool', node_id: null, file_path: 'to-delete.md',
+      title: 'X', types: ['note'], fields: {}, body: 'content',
+    });
+    const nodeId = createRes.node_id;
+
+    executeDeletion(db, writeLock, vaultPath, {
+      source: 'tool', node_id: nodeId, file_path: 'to-delete.md', unlink_file: true,
+    }, { operation_id: 'op-del' });
+
+    const snap = db.prepare('SELECT * FROM undo_snapshots WHERE operation_id = ?').get('op-del') as { was_deleted: number; file_path: string; body: string; post_mutation_hash: string | null };
+    expect(snap.was_deleted).toBe(0);
+    expect(snap.file_path).toBe('to-delete.md');
+    expect(snap.body).toBe('content');
+    expect(snap.post_mutation_hash).toBeNull();
+  });
+
+  it('does not write a snapshot when undoContext is absent', () => {
+    const createRes = executeMutation(db, writeLock, vaultPath, {
+      source: 'tool', node_id: null, file_path: 'silent-delete.md',
+      title: 'Y', types: ['note'], fields: {}, body: 'y',
+    });
+    executeDeletion(db, writeLock, vaultPath, {
+      source: 'tool', node_id: createRes.node_id, file_path: 'silent-delete.md', unlink_file: true,
+    });
+    const count = (db.prepare('SELECT COUNT(*) AS c FROM undo_snapshots').get() as { c: number }).c;
     expect(count).toBe(0);
   });
 });

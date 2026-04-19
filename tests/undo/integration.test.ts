@@ -7,6 +7,8 @@ import { createTempVault } from '../helpers/vault.js';
 import { addUndoTables } from '../../src/db/migrate.js';
 import { registerCreateNode } from '../../src/mcp/tools/create-node.js';
 import { registerUpdateNode } from '../../src/mcp/tools/update-node.js';
+import { registerAddTypeToNode } from '../../src/mcp/tools/add-type-to-node.js';
+import { registerRemoveTypeFromNode } from '../../src/mcp/tools/remove-type-from-node.js';
 import { fullIndex } from '../../src/indexer/indexer.js';
 import { WriteLockManager } from '../../src/sync/write-lock.js';
 import { restoreOperation } from '../../src/undo/restore.js';
@@ -140,5 +142,46 @@ describe('undo integration — update-node (single)', () => {
 
     const list = listOperations(db, {});
     expect(list.operations.length).toBe(0);
+  });
+});
+
+describe('undo integration — add/remove type', () => {
+  let vaultPath: string;
+  let cleanup: () => void;
+  let db: Database.Database;
+  let writeLock: WriteLockManager;
+  let server: McpServer;
+
+  beforeEach(() => {
+    const v = createTempVault();
+    vaultPath = v.vaultPath;
+    cleanup = v.cleanup;
+    db = createTestDb();
+    addUndoTables(db);
+    db.prepare("INSERT INTO schemas (name, display_name, field_claims) VALUES ('note', 'Note', '[]'), ('task', 'Task', '[]')").run();
+    writeLock = new WriteLockManager();
+    server = new McpServer({ name: 'test', version: '0' });
+    registerAddTypeToNode(server, db, writeLock, vaultPath);
+    registerRemoveTypeFromNode(server, db, writeLock, vaultPath);
+  });
+
+  afterEach(() => { db.close(); cleanup(); });
+
+  it('captures an operation when add-type-to-node succeeds', async () => {
+    writeFileSync(join(vaultPath, 'at.md'), '---\ntypes:\n  - note\n---\n# AT\n', 'utf-8');
+    fullIndex(vaultPath, db);
+    await callTool(server, 'add-type-to-node', { file_path: 'at.md', type: 'task' });
+    const list = listOperations(db, {});
+    expect(list.operations.length).toBe(1);
+    expect(list.operations[0].source_tool).toBe('add-type-to-node');
+  });
+
+  it('captures an operation when remove-type-from-node succeeds', async () => {
+    writeFileSync(join(vaultPath, 'rt.md'), '---\ntypes:\n  - note\n  - task\n---\n# RT\n', 'utf-8');
+    fullIndex(vaultPath, db);
+    await callTool(server, 'remove-type-from-node', { file_path: 'rt.md', type: 'task' });
+    const list = listOperations(db, {});
+    expect(list.operations.length).toBe(1);
+    expect(list.operations[0].source_tool).toBe('remove-type-from-node');
   });
 });

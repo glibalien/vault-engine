@@ -11,6 +11,7 @@ import { reconstructValue } from '../../pipeline/classify-value.js';
 import { buildFixable } from '../../validation/fixable.js';
 import type { WriteLockManager } from '../../sync/write-lock.js';
 import type { SyncLogger } from '../../sync/sync-logger.js';
+import { createOperation, finalizeOperation } from '../../undo/operation.js';
 
 const paramsShape = {
   node_id: z.string().optional(),
@@ -101,6 +102,11 @@ export function registerRemoveTypeFromNode(
       }
       const currentBody = (db.prepare('SELECT body FROM nodes WHERE id = ?').get(node.node_id) as { body: string }).body;
 
+      const operation_id = createOperation(db, {
+        source_tool: 'remove-type-from-node',
+        description: `remove-type-from-node: removed '${params.type}' from '${node.title}'`,
+      });
+
       try {
         const result = executeMutation(db, writeLock, vaultPath, {
           source: 'tool',
@@ -110,7 +116,7 @@ export function registerRemoveTypeFromNode(
           types: resultingTypes,
           fields: currentFields,
           body: currentBody,
-        }, syncLogger);
+        }, syncLogger, { operation_id });
 
         // Write fields-orphaned log entry if any fields became orphans
         if (wouldOrphanFields.length > 0) {
@@ -152,6 +158,8 @@ export function registerRemoveTypeFromNode(
           return fail('VALIDATION_FAILED', err.message);
         }
         return fail('INTERNAL_ERROR', err instanceof Error ? err.message : String(err));
+      } finally {
+        finalizeOperation(db, operation_id);
       }
     },
   );

@@ -15,6 +15,7 @@ import type { WriteLockManager } from '../../sync/write-lock.js';
 import type { SyncLogger } from '../../sync/sync-logger.js';
 import { checkTypesHaveSchemas } from '../../pipeline/check-types.js';
 import { buildFixable } from '../../validation/fixable.js';
+import { createOperation, finalizeOperation } from '../../undo/operation.js';
 
 const paramsShape = {
   node_id: z.string().optional(),
@@ -103,6 +104,11 @@ export function registerAddTypeToNode(
 
       const mergedFields = { ...currentFields, ...defaults };
 
+      const operation_id = createOperation(db, {
+        source_tool: 'add-type-to-node',
+        description: `add-type-to-node: added '${params.type}' to '${node.title}'`,
+      });
+
       try {
         const result = executeMutation(db, writeLock, vaultPath, {
           source: 'tool',
@@ -112,7 +118,7 @@ export function registerAddTypeToNode(
           types: newTypes,
           fields: mergedFields,
           body: currentBody,
-        }, syncLogger);
+        }, syncLogger, { operation_id });
 
         // Log field-defaulted entries for defaults populated by add-type-to-node.
         // The pipeline sees these as 'provided' since they're pre-merged, so we
@@ -161,6 +167,8 @@ export function registerAddTypeToNode(
           return fail('VALIDATION_FAILED', err.message);
         }
         return fail('INTERNAL_ERROR', err instanceof Error ? err.message : String(err));
+      } finally {
+        finalizeOperation(db, operation_id);
       }
     },
   );

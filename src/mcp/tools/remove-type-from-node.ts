@@ -3,11 +3,12 @@
 import type { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import type Database from 'better-sqlite3';
 import { z } from 'zod';
-import { ok, fail, type Issue } from './errors.js';
+import { ok, fail, adaptIssue, type Issue } from './errors.js';
 import { resolveNodeIdentity } from './resolve-identity.js';
 import { executeMutation } from '../../pipeline/execute.js';
 import { PipelineError } from '../../pipeline/types.js';
 import { reconstructValue } from '../../pipeline/classify-value.js';
+import { buildFixable } from '../../validation/fixable.js';
 import type { WriteLockManager } from '../../sync/write-lock.js';
 import type { SyncLogger } from '../../sync/sync-logger.js';
 
@@ -134,6 +135,19 @@ export function registerRemoveTypeFromNode(
           edits_logged: result.edits_logged + (wouldOrphanFields.length > 0 ? 1 : 0),
         });
       } catch (err) {
+        if (err instanceof PipelineError && err.validation) {
+          const errorCount = err.validation.issues.filter(i => i.severity === 'error').length;
+          return fail(
+            'VALIDATION_FAILED',
+            `Validation failed with ${errorCount} error(s)`,
+            {
+              details: {
+                issues: err.validation.issues.map(adaptIssue),
+                fixable: buildFixable(err.validation.issues, err.validation.effective_fields),
+              },
+            },
+          );
+        }
         if (err instanceof PipelineError) {
           return fail('VALIDATION_FAILED', err.message);
         }

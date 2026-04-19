@@ -1,5 +1,5 @@
 import { describe, it, expect, beforeEach, afterEach } from 'vitest';
-import { mkdtempSync, writeFileSync, rmSync, existsSync } from 'node:fs';
+import { mkdtempSync, writeFileSync, rmSync } from 'node:fs';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 import Database from 'better-sqlite3';
@@ -102,11 +102,8 @@ describe('unified deletion routing', () => {
     await new Promise(resolve => setTimeout(resolve, 150));
     reconciler.stop();
 
-    // Deletion happened
     expect(db.prepare('SELECT COUNT(*) AS c FROM nodes WHERE id = ?').get(deletedId)).toEqual({ c: 0 });
-    // Sibling unchanged
     expect(db.prepare('SELECT COUNT(*) AS c FROM nodes WHERE file_path = ?').get('normal.md')).toEqual({ c: 1 });
-    // file-deleted row for the deleted node has the right source
     const details = getLatestDeleteDetails(db, deletedId);
     expect(details.source).toBe('reconciler');
   });

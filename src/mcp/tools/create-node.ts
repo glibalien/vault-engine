@@ -6,7 +6,7 @@ import { z } from 'zod';
 import { existsSync } from 'node:fs';
 import { join } from 'node:path';
 import { safeVaultPath } from '../../pipeline/safe-path.js';
-import { toolResult, toolErrorResult, toolValidationErrorResult } from './errors.js';
+import { ok, fail, adaptIssue } from './errors.js';
 import { checkTitleSafety, checkBodyFrontmatter } from './title-warnings.js';
 import { executeMutation } from '../../pipeline/execute.js';
 import { PipelineError } from '../../pipeline/types.js';
@@ -44,19 +44,25 @@ export function registerCreateNode(
       // ── Type-schema check (Stage 1 gate) ──────────────────────────
       const typeCheck = checkTypesHaveSchemas(db, types);
       if (!typeCheck.valid) {
-        return toolResult({
-          error: 'UNKNOWN_TYPE',
-          unknown_types: typeCheck.unknown,
-          message: `Cannot write node with type${typeCheck.unknown.length > 1 ? 's' : ''} ${typeCheck.unknown.map(t => `'${t}'`).join(', ')} — no schema exists. Use list-schemas to see available types, or use create-schema to define a new type first.`,
-          available_schemas: typeCheck.available,
-          suggestion: 'For general-purpose notes and reference material, use type \'note\'.',
-        });
+        return fail(
+          'UNKNOWN_TYPE',
+          `Unknown type(s): ${typeCheck.unknown.join(', ')}`,
+          {
+            details: {
+              unknown_types: typeCheck.unknown,
+              available_schemas: typeCheck.available,
+              suggestion: `Cannot write node with type${typeCheck.unknown.length > 1 ? 's' : ''} ${typeCheck.unknown.map(t => `'${t}'`).join(', ')} — no schema exists. Use list-schemas to see available types, or use create-schema to define a new type first. For general-purpose notes and reference material, use type 'note'.`,
+            },
+          },
+        );
       }
 
       // ── Validate directory param ──────────────────────────────────
       if (directory !== undefined && directory.endsWith('.md')) {
-        return toolErrorResult('INVALID_PARAMS',
-          '"directory" must be a folder path, not a filename. The filename is always derived from the node title.');
+        return fail(
+          'INVALID_PARAMS',
+          '"directory" must be a folder path, not a filename. The filename is always derived from the node title.',
+        );
       }
 
       // Derive file path
@@ -70,14 +76,16 @@ export function registerCreateNode(
         schemaDefaultDir = schema?.default_directory ?? null;
 
         if (directory !== undefined && schemaDefaultDir && !override_default_directory) {
-          return toolErrorResult('INVALID_PARAMS',
-            `Type "${types[0]}" routes to "${schemaDefaultDir}/" via schema. Pass override_default_directory: true to place this node elsewhere.`);
+          return fail(
+            'INVALID_PARAMS',
+            `Type "${types[0]}" routes to "${schemaDefaultDir}/" via schema. Pass override_default_directory: true to place this node elsewhere.`,
+          );
         }
 
         if (schema?.filename_template) {
           const derived = evaluateTemplate(schema.filename_template, title, fields);
           if (derived === null) {
-            return toolErrorResult('INVALID_PARAMS', 'Filename template has unresolved variables');
+            return fail('INVALID_PARAMS', 'Filename template has unresolved variables');
           }
           fileName = derived;
         }
@@ -104,27 +112,29 @@ export function registerCreateNode(
           ? `File path "${filePath}" already exists (node: ${existing.title})`
           : diskConflict ? `File "${filePath}" already exists on disk` : undefined;
         const allIssues = [...validation.issues, ...extraIssues];
-        return toolResult({
-          dry_run: true,
-          would_create: {
-            file_path: filePath,
-            title,
-            types,
-            coerced_state: validation.coerced_state,
-            issues: allIssues,
-            fixable: buildFixable(validation.issues, validation.effective_fields),
-            orphan_fields: validation.orphan_fields,
-            ...(conflict ? { conflict } : {}),
+        return ok(
+          {
+            dry_run: true,
+            would_create: {
+              file_path: filePath,
+              title,
+              types,
+              coerced_state: validation.coerced_state,
+              fixable: buildFixable(validation.issues, validation.effective_fields),
+              orphan_fields: validation.orphan_fields,
+              ...(conflict ? { conflict } : {}),
+            },
           },
-        });
+          allIssues.map(adaptIssue),
+        );
       }
 
       // Non-dry-run: reject conflicts
       if (existing) {
-        return toolErrorResult('INVALID_PARAMS', `File path "${filePath}" already exists (node: ${existing.title})`);
+        return fail('INVALID_PARAMS', `File path "${filePath}" already exists (node: ${existing.title})`);
       }
       if (diskConflict) {
-        return toolErrorResult('INVALID_PARAMS', `File "${filePath}" already exists on disk`);
+        return fail('INVALID_PARAMS', `File "${filePath}" already exists on disk`);
       }
 
       try {
@@ -138,23 +148,35 @@ export function registerCreateNode(
           body,
         }, syncLogger);
 
-        return toolResult({
-          node_id: result.node_id,
-          file_path: result.file_path,
-          title,
-          types,
-          coerced_state: result.validation.coerced_state,
-          issues: [...result.validation.issues, ...extraIssues],
-          orphan_fields: result.validation.orphan_fields,
-        });
+        return ok(
+          {
+            node_id: result.node_id,
+            file_path: result.file_path,
+            title,
+            types,
+            coerced_state: result.validation.coerced_state,
+            orphan_fields: result.validation.orphan_fields,
+          },
+          [...result.validation.issues, ...extraIssues].map(adaptIssue),
+        );
       } catch (err) {
         if (err instanceof PipelineError && err.validation) {
-          return toolValidationErrorResult(err.validation);
+          const errorCount = err.validation.issues.filter(i => i.severity === 'error').length;
+          return fail(
+            'VALIDATION_FAILED',
+            `Validation failed with ${errorCount} error(s)`,
+            {
+              details: {
+                issues: err.validation.issues.map(adaptIssue),
+                fixable: buildFixable(err.validation.issues, err.validation.effective_fields),
+              },
+            },
+          );
         }
         if (err instanceof PipelineError) {
-          return toolErrorResult('VALIDATION_FAILED', err.message);
+          return fail('VALIDATION_FAILED', err.message);
         }
-        return toolErrorResult('INTERNAL_ERROR', err instanceof Error ? err.message : String(err));
+        return fail('INTERNAL_ERROR', err instanceof Error ? err.message : String(err));
       }
     },
   );

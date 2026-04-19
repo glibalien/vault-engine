@@ -206,9 +206,10 @@ describe('create-node surface tightening', () => {
       title: 'Test',
       types: [],
       directory: 'Notes/test.md',
-    }));
-    expect(result.code).toBe('INVALID_PARAMS');
-    expect(result.error).toMatch(/directory.*must be a folder/i);
+    })) as any;
+    expect(result.ok).toBe(false);
+    expect(result.error.code).toBe('INVALID_PARAMS');
+    expect(result.error.message).toMatch(/directory.*must be a folder/i);
   });
 
   it('uses schema default_directory when no directory param', async () => {
@@ -217,8 +218,9 @@ describe('create-node surface tightening', () => {
     const result = parseResult(await handler({
       title: 'My Task',
       types: ['task'],
-    }));
-    expect(result.file_path).toBe('Tasks/My Task.md');
+    })) as any;
+    expect(result.ok).toBe(true);
+    expect(result.data.file_path).toBe('Tasks/My Task.md');
   });
 
   it('rejects directory override when schema has default_directory and override flag is missing', async () => {
@@ -228,9 +230,10 @@ describe('create-node surface tightening', () => {
       title: 'My Task',
       types: ['task'],
       directory: 'Elsewhere',
-    }));
-    expect(result.code).toBe('INVALID_PARAMS');
-    expect(result.error).toMatch(/override_default_directory/);
+    })) as any;
+    expect(result.ok).toBe(false);
+    expect(result.error.code).toBe('INVALID_PARAMS');
+    expect(result.error.message).toMatch(/override_default_directory/);
   });
 
   it('allows directory override when override_default_directory is true', async () => {
@@ -241,8 +244,9 @@ describe('create-node surface tightening', () => {
       types: ['task'],
       directory: 'Elsewhere',
       override_default_directory: true,
-    }));
-    expect(result.file_path).toBe('Elsewhere/My Task.md');
+    })) as any;
+    expect(result.ok).toBe(true);
+    expect(result.data.file_path).toBe('Elsewhere/My Task.md');
   });
 
   it('allows directory on schema-less nodes without override flag', async () => {
@@ -250,18 +254,20 @@ describe('create-node surface tightening', () => {
       title: 'Loose Note',
       types: [],
       directory: 'Scratch',
-    }));
-    expect(result.file_path).toBe('Scratch/Loose Note.md');
+    })) as any;
+    expect(result.ok).toBe(true);
+    expect(result.data.file_path).toBe('Scratch/Loose Note.md');
   });
 
   it('includes title safety warning in response', async () => {
     const result = parseResult(await handler({
       title: 'Something (bad)',
       types: [],
-    }));
-    expect(result.file_path).toBe('Something (bad).md');
-    const issues = result.issues as Array<{ code: string }>;
-    expect(issues.some(i => i.code === 'TITLE_WIKILINK_UNSAFE')).toBe(true);
+    })) as any;
+    expect(result.ok).toBe(true);
+    expect(result.data.file_path).toBe('Something (bad).md');
+    const warnings = result.warnings as Array<{ code: string }>;
+    expect(warnings.some(w => w.code === 'TITLE_WIKILINK_UNSAFE')).toBe(true);
   });
 
   it('includes frontmatter-in-body warning in response', async () => {
@@ -269,10 +275,11 @@ describe('create-node surface tightening', () => {
       title: 'Test Note',
       types: [],
       body: '---\ntitle: oops\n---\nContent',
-    }));
-    expect(result.node_id).toBeDefined();
-    const issues = result.issues as Array<{ code: string }>;
-    expect(issues.some(i => i.code === 'FRONTMATTER_IN_BODY')).toBe(true);
+    })) as any;
+    expect(result.ok).toBe(true);
+    expect(result.data.node_id).toBeDefined();
+    const warnings = result.warnings as Array<{ code: string }>;
+    expect(warnings.some(w => w.code === 'FRONTMATTER_IN_BODY')).toBe(true);
   });
 });
 

@@ -12,7 +12,7 @@ import remarkFrontmatter from 'remark-frontmatter';
 import remarkGfm from 'remark-gfm';
 import type { Node, Parent } from 'unist';
 import type { Text } from 'mdast';
-import { toolResult, toolErrorResult } from './errors.js';
+import { ok, fail, adaptIssue } from './errors.js';
 import { resolveNodeIdentity } from './resolve-identity.js';
 import { checkTitleSafety, type ToolIssue } from './title-warnings.js';
 import { executeMutation } from '../../pipeline/execute.js';
@@ -168,7 +168,7 @@ export function registerRenameNode(
         title: params.title,
       });
       if (!resolved.ok) {
-        return toolErrorResult(resolved.code, resolved.message);
+        return fail(resolved.code, resolved.message);
       }
       const { node } = resolved;
       const oldTitle = node.title;
@@ -176,7 +176,7 @@ export function registerRenameNode(
 
       // ── Validate directory param ──────────────────────────────────
       if (params.directory !== undefined && params.directory.endsWith('.md')) {
-        return toolErrorResult('INVALID_PARAMS',
+        return fail('INVALID_PARAMS',
           '"directory" must be a folder path, not a filename. The filename is always derived from the node title.');
       }
 
@@ -204,10 +204,10 @@ export function registerRenameNode(
       if (newFilePath !== oldFilePath) {
         const conflict = db.prepare('SELECT id, title FROM nodes WHERE file_path = ?').get(newFilePath) as { id: string; title: string } | undefined;
         if (conflict) {
-          return toolErrorResult('INVALID_PARAMS', `File path "${newFilePath}" already exists (node: ${conflict.title})`);
+          return fail('INVALID_PARAMS', `File path "${newFilePath}" already exists (node: ${conflict.title})`);
         }
         if (existsSync(join(vaultPath, newFilePath))) {
-          return toolErrorResult('INVALID_PARAMS', `File "${newFilePath}" already exists on disk`);
+          return fail('INVALID_PARAMS', `File "${newFilePath}" already exists on disk`);
         }
       }
 
@@ -223,17 +223,19 @@ export function registerRenameNode(
       try {
         const { refsUpdated } = txn();
         const issues: ToolIssue[] = checkTitleSafety(params.new_title);
-        return toolResult({
-          node_id: node.node_id,
-          old_file_path: oldFilePath,
-          new_file_path: newFilePath,
-          old_title: oldTitle,
-          new_title: params.new_title,
-          references_updated: refsUpdated,
-          issues,
-        });
+        return ok(
+          {
+            node_id: node.node_id,
+            old_file_path: oldFilePath,
+            new_file_path: newFilePath,
+            old_title: oldTitle,
+            new_title: params.new_title,
+            references_updated: refsUpdated,
+          },
+          issues.map(adaptIssue),
+        );
       } catch (err) {
-        return toolErrorResult('INTERNAL_ERROR', err instanceof Error ? err.message : String(err));
+        return fail('INTERNAL_ERROR', err instanceof Error ? err.message : String(err));
       }
     },
   );

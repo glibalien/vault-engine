@@ -110,23 +110,25 @@ describe('rename-node surface tightening', () => {
 
   it('rejects directory ending in .md', async () => {
     const node = createNode('Notes/old.md', 'old');
-    const result = parseResult(await handler({
+    const body = parseResult(await handler({
       node_id: node.node_id,
       new_title: 'new',
       directory: 'Notes/new.md',
-    }));
-    expect(result.code).toBe('INVALID_PARAMS');
-    expect(result.error).toMatch(/directory.*must be a folder/i);
+    })) as any;
+    expect(body.ok).toBe(false);
+    expect(body.error.code).toBe('INVALID_PARAMS');
+    expect(body.error.message).toMatch(/directory.*must be a folder/i);
   });
 
   it('accepts directory param and derives file path from title', async () => {
     const node = createNode('Notes/old.md', 'old');
-    const result = parseResult(await handler({
+    const body = parseResult(await handler({
       node_id: node.node_id,
       new_title: 'Renamed',
       directory: 'Archive',
-    }));
-    expect(result.new_file_path).toBe('Archive/Renamed.md');
+    })) as any;
+    expect(body.ok).toBe(true);
+    expect(body.data.new_file_path).toBe('Archive/Renamed.md');
     expect(existsSync(join(vaultPath, 'Archive/Renamed.md'))).toBe(true);
   });
 
@@ -135,31 +137,39 @@ describe('rename-node surface tightening', () => {
     createSchemaDefinition(db, { name: 'task', default_directory: 'Tasks', field_claims: [{ field: 'status' }] });
     const node = createNode('Tasks/old-task.md', 'old-task', { types: ['task'] });
 
-    const result = parseResult(await handler({
+    const body = parseResult(await handler({
       node_id: node.node_id,
       new_title: 'New Task',
-    }));
-    expect(result.new_file_path).toBe('Tasks/New Task.md');
+    })) as any;
+    expect(body.ok).toBe(true);
+    expect(body.data.new_file_path).toBe('Tasks/New Task.md');
+    expect(body.warnings).toEqual([]);
   });
 
   it('keeps current directory when no schema and no directory param', async () => {
     const node = createNode('Somewhere/old.md', 'old');
-    const result = parseResult(await handler({
+    const body = parseResult(await handler({
       node_id: node.node_id,
       new_title: 'Renamed',
-    }));
-    expect(result.new_file_path).toBe('Somewhere/Renamed.md');
+    })) as any;
+    expect(body.ok).toBe(true);
+    expect(body.data.new_file_path).toBe('Somewhere/Renamed.md');
+    expect(body.warnings).toEqual([]);
   });
 
   it('includes title safety warnings in response', async () => {
     const node = createNode('Notes/old.md', 'old');
-    const result = parseResult(await handler({
+    const body = parseResult(await handler({
       node_id: node.node_id,
       new_title: 'Something (with parens)',
-    }));
-    expect(result.new_file_path).toBe('Notes/Something (with parens).md');
-    const issues = result.issues as Array<{ code: string }>;
-    expect(issues.some(i => i.code === 'TITLE_WIKILINK_UNSAFE')).toBe(true);
+    })) as any;
+    expect(body.ok).toBe(true);
+    expect(body.data.new_file_path).toBe('Notes/Something (with parens).md');
+    const warnings = body.warnings as Array<{ code: string; severity: string; details?: { characters?: string[] } }>;
+    const unsafe = warnings.find(w => w.code === 'TITLE_WIKILINK_UNSAFE');
+    expect(unsafe).toBeDefined();
+    expect(unsafe!.severity).toBe('warning');
+    expect(unsafe!.details?.characters).toEqual(expect.arrayContaining(['(', ')']));
   });
 });
 

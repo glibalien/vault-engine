@@ -3,6 +3,7 @@ import { createHttpApp } from '../src/transport/http.js';
 import { createServer } from '../src/mcp/server.js';
 import { openDatabase } from '../src/db/connection.js';
 import { createSchema } from '../src/db/schema.js';
+import { addUndoTables } from '../src/db/migrate.js';
 import { join } from 'node:path';
 import { mkdtempSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
@@ -27,6 +28,7 @@ describe('Phase 0 smoke test', () => {
     const dbPath = join(tmpDir, '.vault-engine', 'vault.db');
     db = openDatabase(dbPath);
     createSchema(db);
+    addUndoTables(db);
   });
 
   afterAll(() => {

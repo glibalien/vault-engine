@@ -37,6 +37,17 @@ export function registerVaultStats(server: McpServer, db: Database.Database, ext
         'SELECT COUNT(*) as count FROM schemas'
       ).get() as { count: number }).count;
 
+      const undoActive = (db.prepare("SELECT COUNT(*) AS c FROM undo_operations WHERE status = 'active'").get() as { c: number }).c;
+      // Approx byte size: sum of LENGTH on body + JSON columns.
+      const undoBytes = (db.prepare(`
+        SELECT COALESCE(SUM(
+          IFNULL(LENGTH(body), 0) +
+          IFNULL(LENGTH(types), 0) +
+          IFNULL(LENGTH(fields), 0) +
+          IFNULL(LENGTH(relationships), 0)
+        ), 0) AS b FROM undo_snapshots
+      `).get() as { b: number }).b;
+
       const resultObj: Record<string, unknown> = {
         node_count: nodeCount,
         type_counts: typeCounts,
@@ -44,6 +55,10 @@ export function registerVaultStats(server: McpServer, db: Database.Database, ext
         relationship_count: relationshipCount,
         orphan_count: orphanCount,
         schema_count: schemaCount,
+        undo: {
+          active_operations: undoActive,
+          total_snapshot_bytes: undoBytes,
+        },
       };
 
       if (extractorRegistry) {

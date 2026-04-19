@@ -7,7 +7,7 @@ import type { ValidationResult, ValidationIssue } from '../validation/types.js';
 export type { FileContext } from '../validation/resolve-default.js';
 
 export interface ProposedMutation {
-  source: 'tool' | 'watcher' | 'normalizer';
+  source: 'tool' | 'watcher' | 'normalizer' | 'propagation';
   node_id: string | null;           // null for create-node
   file_path: string;                 // vault-relative path
   title: string;

@@ -311,3 +311,51 @@ describe('rerenderNodesWithField', () => {
     expect(body.includes('count:')).toBe(false);
   });
 });
+
+describe('propagateSchemaChange — edits_log row ordering', () => {
+  it('pipeline rows precede caller-emitted adoption/orphan rows within a single update-schema call', () => {
+    createGlobalField(db, { name: 'status', field_type: 'string', default_value: 'open', required: true });
+    createGlobalField(db, { name: 'legacy', field_type: 'string' });
+    createSchemaDefinition(db, { name: 'task', field_claims: [{ field: 'legacy', sort_order: 1000 }] });
+
+    // Node has 'legacy' field but not 'status'
+    const node = createNode({
+      file_path: 'k.md',
+      title: 'K',
+      types: ['task'],
+      fields: { legacy: 'old-value' },
+    });
+
+    const logIdBeforeBaseline = (db.prepare('SELECT COALESCE(MAX(id), 0) AS id FROM edits_log').get() as { id: number }).id;
+
+    // Now: remove 'legacy' AND add 'status' (with required+default) simultaneously
+    const oldClaims = [{ field: 'legacy', sort_order: 1000 }];
+    const newClaims = [{ field: 'status', sort_order: 2000 }];
+    updateSchemaDefinition(db, 'task', { field_claims: newClaims });
+    const diff = diffClaims(oldClaims, newClaims);
+
+    propagateSchemaChange(db, writeLock, vaultPath, 'task', diff);
+
+    // Fetch rows added during this propagation, in insertion order
+    const rows = db.prepare(
+      "SELECT id, event_type, details FROM edits_log WHERE node_id = ? AND id > ? ORDER BY id ASC"
+    ).all(node.node_id, logIdBeforeBaseline) as Array<{ id: number; event_type: string; details: string }>;
+
+    // Exactly one field-defaulted and one fields-orphaned row from propagate.ts's post-emission
+    const fieldDefaulted = rows.filter(r => r.event_type === 'field-defaulted');
+    const fieldsOrphaned = rows.filter(r => r.event_type === 'fields-orphaned');
+    expect(fieldDefaulted.length).toBe(1);
+    expect(fieldsOrphaned.length).toBe(1);
+
+    // Adoption row comes before orphan row (caller emits in this order)
+    expect(fieldDefaulted[0].id).toBeLessThan(fieldsOrphaned[0].id);
+
+    // Both rows carry source='propagation'
+    expect(JSON.parse(fieldDefaulted[0].details).source).toBe('propagation');
+    expect(JSON.parse(fieldsOrphaned[0].details).source).toBe('propagation');
+
+    // If the pipeline itself emitted any rows (none expected here since no
+    // value-coerced or merge-conflict scenarios), they'd sit BEFORE the
+    // adoption/orphan rows by id.
+  });
+});

@@ -12,6 +12,7 @@ import { executeMutation } from '../../pipeline/execute.js';
 import { PipelineError } from '../../pipeline/types.js';
 import { reconstructValue } from '../../pipeline/classify-value.js';
 import { backupFile, restoreFile, cleanupBackups } from '../../pipeline/file-writer.js';
+import { executeDeletion } from '../../pipeline/delete.js';
 import { checkTypesHaveSchemas } from '../../pipeline/check-types.js';
 import { buildFixable } from '../../validation/fixable.js';
 import type { WriteLockManager } from '../../sync/write-lock.js';
@@ -212,15 +213,14 @@ export function registerBatchMutate(
               const bp = backupFile(absPath, tmpDir);
               if (bp) backups.push({ filePath: absPath, backupPath: bp });
 
-              const rowInfo = db.prepare('SELECT rowid FROM nodes WHERE id = ?').get(node.node_id) as { rowid: number } | undefined;
-              if (rowInfo) db.prepare('DELETE FROM nodes_fts WHERE rowid = ?').run(rowInfo.rowid);
-              db.prepare('INSERT INTO edits_log (node_id, timestamp, event_type, details) VALUES (?, ?, ?, ?)').run(
-                node.node_id, Date.now(), 'file-deleted', node.file_path,
-              );
-              db.prepare('DELETE FROM nodes WHERE id = ?').run(node.node_id);
+              executeDeletion(db, writeLock, vaultPath, {
+                source: 'batch',
+                node_id: node.node_id,
+                file_path: node.file_path,
+                unlink_file: true,
+              });
               deletedNodeIds.push(node.node_id);
 
-              try { unlinkSync(absPath); } catch {}
               results.push({ op: 'delete', node_id: node.node_id, file_path: node.file_path });
             }
           } catch (err) {

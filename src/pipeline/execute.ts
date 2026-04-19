@@ -73,7 +73,7 @@ export function executeMutation(
       mutation.types,
       claimsByType,
       globalFields,
-      { fileCtx, skipDefaults: mutation.source === 'normalizer' },
+      { fileCtx, skipDefaults: mutation.source === 'normalizer' || mutation.source === 'propagation' },
     );
 
     // ── Stage 3: Source-specific error handling ──────────────────────
@@ -82,11 +82,13 @@ export function executeMutation(
     const retainedValues: Record<string, { retained_value: unknown; rejected_value: unknown }> = {};
     const defaultedFields: Array<{ field: string; default_value: unknown; default_source: 'global' | 'claim' }> = [];
 
-    if (mutation.source === 'tool' || mutation.source === 'normalizer') {
-      // Tool path: check for blocking errors. Normalizer also tolerates
-      // REQUIRED_MISSING since it re-renders existing DB state without
-      // backfilling defaults.
-      const toleratedCodes = mutation.source === 'normalizer'
+    if (mutation.source === 'tool' || mutation.source === 'normalizer' || mutation.source === 'propagation') {
+      // Tool path: check for blocking errors. Normalizer and propagation
+      // also tolerate REQUIRED_MISSING since they re-render existing DB state
+      // without backfilling defaults — pre-existing violations must not
+      // block schema-driven re-renders.
+      const isReRenderPath = mutation.source === 'normalizer' || mutation.source === 'propagation';
+      const toleratedCodes = isReRenderPath
         ? new Set(['MERGE_CONFLICT', 'REQUIRED_MISSING'])
         : new Set(['MERGE_CONFLICT']);
       if (validation.issues.some(i => i.severity === 'error' && !toleratedCodes.has(i.code))) {

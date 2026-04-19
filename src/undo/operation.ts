@@ -27,10 +27,17 @@ export function createOperation(
 }
 
 export function finalizeOperation(db: Database.Database, operation_id: string): void {
-  const count = (db.prepare('SELECT COUNT(*) AS c FROM undo_snapshots WHERE operation_id = ?')
-    .get(operation_id) as { c: number }).c;
-  db.prepare('UPDATE undo_operations SET node_count = ? WHERE operation_id = ?')
-    .run(count, operation_id);
+  // Called from tool-handler `finally` blocks. We must not throw here because
+  // that would mask a PipelineError in flight. A failed node_count update
+  // isn't fatal — the row stays at 0 and the orphan sweep will clean it up.
+  try {
+    const count = (db.prepare('SELECT COUNT(*) AS c FROM undo_snapshots WHERE operation_id = ?')
+      .get(operation_id) as { c: number }).c;
+    db.prepare('UPDATE undo_operations SET node_count = ? WHERE operation_id = ?')
+      .run(count, operation_id);
+  } catch (err) {
+    console.error(`finalizeOperation failed for ${operation_id}:`, err instanceof Error ? err.message : err);
+  }
 }
 
 export function markUndone(db: Database.Database, operation_id: string): void {

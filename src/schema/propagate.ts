@@ -6,7 +6,6 @@
 
 import type Database from 'better-sqlite3';
 import { statSync } from 'node:fs';
-import { join } from 'node:path';
 import { mergeFieldClaims } from '../validation/merge.js';
 import { loadSchemaContext } from '../pipeline/schema-context.js';
 import { reconstructValue } from '../pipeline/classify-value.js';

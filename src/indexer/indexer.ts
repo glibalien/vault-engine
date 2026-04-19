@@ -11,6 +11,8 @@ import { shouldIgnore } from './ignore.js';
 import type { EmbeddingIndexer } from '../search/indexer.js';
 import { resolveTarget } from '../resolver/resolve.js';
 import { refreshOnDelete } from '../resolver/refresh.js';
+import { executeDeletion } from '../pipeline/delete.js';
+import { WriteLockManager } from '../sync/write-lock.js';
 
 const WIKILINK_RE = /\[\[([^\]|]+)(?:\|([^\]]+))?\]\]/;
 
@@ -261,6 +263,7 @@ export interface IndexStats {
 export interface IndexerOptions {
   onNodeIndexed?: (nodeId: string) => void;
   onNodeDeleted?: (nodeId: string) => void;
+  writeLock?: WriteLockManager;
 }
 
 /**
@@ -269,6 +272,7 @@ export interface IndexerOptions {
 export function fullIndex(vaultPath: string, db: Database.Database, options?: IndexerOptions): IndexStats {
   const stmts = prepareStatements(db);
   const stats: IndexStats = { indexed: 0, skipped: 0, deleted: 0, errors: 0 };
+  const lockManager = options?.writeLock ?? new WriteLockManager();
 
   // 1. Walk vault
   const diskFiles = new Set(walkDir(vaultPath, vaultPath));
@@ -280,15 +284,12 @@ export function fullIndex(vaultPath: string, db: Database.Database, options?: In
   const deleteTransaction = db.transaction(() => {
     for (const node of dbNodes) {
       if (!diskFiles.has(node.file_path)) {
-        // Delete FTS entry
-        const rowInfo = stmts.getNodeRowid.get(node.id) as { rowid: number } | undefined;
-        if (rowInfo) {
-          stmts.deleteFts.run(rowInfo.rowid);
-        }
-        // Log before deletion
-        stmts.insertEditLog.run(node.id, Date.now(), 'file-deleted', node.file_path);
-        // Delete node (cascade handles types, fields, relationships)
-        stmts.deleteNode.run(node.id);
+        executeDeletion(db, lockManager, vaultPath, {
+          source: 'fullIndex',
+          node_id: node.id,
+          file_path: node.file_path,
+          unlink_file: false,
+        });
         options?.onNodeDeleted?.(node.id);
         stats.deleted++;
       }

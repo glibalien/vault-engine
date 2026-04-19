@@ -1,6 +1,4 @@
 import { describe, it, expect, beforeEach, afterEach } from 'vitest';
-import { join } from 'node:path';
-import { existsSync, readFileSync } from 'node:fs';
 import Database from 'better-sqlite3';
 import { createSchema } from '../../src/db/schema.js';
 import { executeMutation } from '../../src/pipeline/execute.js';
@@ -9,7 +7,6 @@ import type { ProposedMutation } from '../../src/pipeline/types.js';
 import { WriteLockManager } from '../../src/sync/write-lock.js';
 import { createGlobalField } from '../../src/global-fields/crud.js';
 import { createSchemaDefinition } from '../../src/schema/crud.js';
-import { sha256 } from '../../src/indexer/hash.js';
 import { createTempVault } from '../helpers/vault.js';
 
 let vaultPath: string;

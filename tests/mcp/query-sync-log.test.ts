@@ -45,28 +45,32 @@ describe('query-sync-log tool', () => {
     insertRow('note.md', 'watcher-event', 'watcher', {});
     insertRow('other.md', 'watcher-event', 'watcher', { hash: 'xyz', size: 200 });
 
-    const data = await callTool({ file_path: 'note.md' });
-    expect(data.rows).toHaveLength(2);
-    expect(data.rows[0].event).toBe('watcher-event');
-    expect(data.rows[1].event).toBe('watcher-event');
+    const body = await callTool({ file_path: 'note.md' });
+    expect(body.ok).toBe(true);
+    expect(body.warnings).toEqual([]);
+    expect(body.data.rows).toHaveLength(2);
+    expect(body.data.rows[0].event).toBe('watcher-event');
+    expect(body.data.rows[1].event).toBe('watcher-event');
   });
 
   it('filters by event type', async () => {
     insertRow('note.md', 'watcher-event', 'watcher', {});
     insertRow('note.md', 'file-written', 'tool', { hash: 'abc' });
 
-    const data = await callTool({ file_path: 'note.md', events: ['file-written'] });
-    expect(data.rows).toHaveLength(1);
-    expect(data.rows[0].event).toBe('file-written');
+    const body = await callTool({ file_path: 'note.md', events: ['file-written'] });
+    expect(body.ok).toBe(true);
+    expect(body.data.rows).toHaveLength(1);
+    expect(body.data.rows[0].event).toBe('file-written');
   });
 
   it('filters by source', async () => {
     insertRow('note.md', 'file-written', 'tool', {});
     insertRow('note.md', 'watcher-event', 'watcher', {});
 
-    const data = await callTool({ file_path: 'note.md', source: 'tool' });
-    expect(data.rows).toHaveLength(1);
-    expect(data.rows[0].source).toBe('tool');
+    const body = await callTool({ file_path: 'note.md', source: 'tool' });
+    expect(body.ok).toBe(true);
+    expect(body.data.rows).toHaveLength(1);
+    expect(body.data.rows[0].source).toBe('tool');
   });
 
   it('respects limit', async () => {
@@ -74,58 +78,69 @@ describe('query-sync-log tool', () => {
       insertRow('note.md', 'watcher-event', 'watcher', {});
     }
 
-    const data = await callTool({ file_path: 'note.md', limit: 3 });
-    expect(data.rows).toHaveLength(3);
-    expect(data.truncated).toBe(true);
+    const body = await callTool({ file_path: 'note.md', limit: 3 });
+    expect(body.ok).toBe(true);
+    expect(body.data.rows).toHaveLength(3);
+    expect(body.data.truncated).toBe(true);
+    expect(body.warnings).toEqual(
+      expect.arrayContaining([expect.objectContaining({ code: 'RESULT_TRUNCATED' })]),
+    );
   });
 
   it('supports desc sort order', async () => {
     insertRow('note.md', 'watcher-event', 'watcher', {}, 1000);
     insertRow('note.md', 'file-written', 'tool', {}, 2000);
 
-    const data = await callTool({ file_path: 'note.md', sort_order: 'desc' });
-    expect(data.rows[0].event).toBe('file-written');
-    expect(data.rows[1].event).toBe('watcher-event');
+    const body = await callTool({ file_path: 'note.md', sort_order: 'desc' });
+    expect(body.ok).toBe(true);
+    expect(body.data.rows[0].event).toBe('file-written');
+    expect(body.data.rows[1].event).toBe('watcher-event');
   });
 
   it('filters by since with relative time', async () => {
     insertRow('note.md', 'watcher-event', 'watcher', {}, Date.now() - 7200_000);
     insertRow('note.md', 'file-written', 'tool', {}, Date.now() - 1800_000);
 
-    const data = await callTool({ file_path: 'note.md', since: '1h' });
-    expect(data.rows).toHaveLength(1);
-    expect(data.rows[0].event).toBe('file-written');
+    const body = await callTool({ file_path: 'note.md', since: '1h' });
+    expect(body.ok).toBe(true);
+    expect(body.data.rows).toHaveLength(1);
+    expect(body.data.rows[0].event).toBe('file-written');
   });
 
   it('returns all files when no file_path specified', async () => {
     insertRow('a.md', 'watcher-event', 'watcher', {});
     insertRow('b.md', 'file-written', 'tool', {});
 
-    const data = await callTool({});
-    expect(data.rows).toHaveLength(2);
+    const body = await callTool({});
+    expect(body.ok).toBe(true);
+    expect(body.data.rows).toHaveLength(2);
   });
 
   it('parses details JSON in results', async () => {
     insertRow('note.md', 'watcher-event', 'watcher', { hash: 'abc123', size: 1024 });
 
-    const data = await callTool({ file_path: 'note.md' });
-    expect(data.rows[0].details).toEqual({ hash: 'abc123', size: 1024 });
+    const body = await callTool({ file_path: 'note.md' });
+    expect(body.ok).toBe(true);
+    expect(body.data.rows[0].details).toEqual({ hash: 'abc123', size: 1024 });
   });
 
   it('returns count and truncated flag', async () => {
     insertRow('note.md', 'watcher-event', 'watcher', {});
     insertRow('note.md', 'file-written', 'tool', {});
 
-    const data = await callTool({ file_path: 'note.md' });
-    expect(data.count).toBe(2);
-    expect(data.truncated).toBe(false);
+    const body = await callTool({ file_path: 'note.md' });
+    expect(body.ok).toBe(true);
+    expect(body.data.count).toBe(2);
+    expect(body.data.truncated).toBe(false);
+    expect(body.warnings).toEqual([]);
   });
 
   it('includes time as ISO string', async () => {
     insertRow('note.md', 'watcher-event', 'watcher', {}, 1000000);
 
-    const data = await callTool({ file_path: 'note.md' });
-    expect(data.rows[0].time).toBe(new Date(1000000).toISOString());
-    expect(data.rows[0].timestamp).toBe(1000000);
+    const body = await callTool({ file_path: 'note.md' });
+    expect(body.ok).toBe(true);
+    expect(body.data.rows[0].time).toBe(new Date(1000000).toISOString());
+    expect(body.data.rows[0].timestamp).toBe(1000000);
   });
 });

@@ -359,3 +359,43 @@ describe('propagateSchemaChange — edits_log row ordering', () => {
     // adoption/orphan rows by id.
   });
 });
+
+describe('propagateSchemaChange — date-token defaults', () => {
+  it("resolves '$now' in adoption default to today's YYYY-MM-DD before inserting", () => {
+    createGlobalField(db, {
+      name: 'created_on',
+      field_type: 'date',
+      default_value: '$now',
+      required: true,
+    });
+    createSchemaDefinition(db, { name: 'task', field_claims: [] });
+
+    const node = createNode({ file_path: 'l.md', title: 'L', types: ['task'], fields: {} });
+
+    updateSchemaDefinition(db, 'task', { field_claims: [{ field: 'created_on', sort_order: 1000 }] });
+    const diff = diffClaims([], [{ field: 'created_on', sort_order: 1000 }]);
+
+    const result = propagateSchemaChange(db, writeLock, vaultPath, 'task', diff);
+
+    expect(result.defaults_populated).toBe(1);
+
+    // The field was persisted with the resolved YYYY-MM-DD string (coerced dates
+    // are stored as strings in value_text, not as value_date).
+    const field = db.prepare(
+      'SELECT value_text, value_date FROM node_fields WHERE node_id = ? AND field_name = ?',
+    ).get(node.node_id, 'created_on') as { value_text: string | null; value_date: string | null } | undefined;
+    const today = new Date().toISOString().slice(0, 10); // YYYY-MM-DD
+    const persisted = field?.value_text ?? field?.value_date ?? '';
+    expect(persisted.startsWith(today)).toBe(true);
+    // Must be the resolved form, not the unresolved token
+    expect(persisted).not.toBe('$now');
+
+    // field-defaulted row stored the resolved string, not the token
+    const logRow = db.prepare(
+      "SELECT details FROM edits_log WHERE node_id = ? AND event_type = 'field-defaulted' ORDER BY id DESC LIMIT 1",
+    ).get(node.node_id) as { details: string };
+    const details = readDetails(logRow);
+    expect(details.default_value).not.toBe('$now');
+    expect(String(details.default_value).startsWith(today)).toBe(true);
+  });
+});

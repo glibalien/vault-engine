@@ -14,10 +14,15 @@ export function createOperation(
   params: CreateOperationParams,
 ): string {
   const operation_id = nanoid();
+  // Timestamps are strictly monotonic so the superseded-by-later-op conflict
+  // check in restore.ts (ordering via timestamp >) can't fail on ms-resolution
+  // collisions when two operations are created in the same millisecond.
+  const lastTs = (db.prepare('SELECT MAX(timestamp) AS t FROM undo_operations').get() as { t: number | null }).t ?? 0;
+  const timestamp = Math.max(Date.now(), lastTs + 1);
   db.prepare(`
     INSERT INTO undo_operations (operation_id, timestamp, source_tool, description, node_count, status)
     VALUES (?, ?, ?, ?, 0, 'active')
-  `).run(operation_id, Date.now(), params.source_tool, params.description);
+  `).run(operation_id, timestamp, params.source_tool, params.description);
   return operation_id;
 }
 

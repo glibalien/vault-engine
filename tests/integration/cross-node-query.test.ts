@@ -11,7 +11,7 @@ let db: Database.Database;
 let vault: string;
 let handler: (args: Record<string, unknown>) => Promise<unknown>;
 
-function parseResult(result: unknown): Record<string, unknown> {
+function parseEnvelope(result: unknown): { ok: boolean; data: Record<string, unknown>; warnings: Array<Record<string, unknown>> } {
   const r = result as { content: Array<{ type: string; text: string }> };
   return JSON.parse(r.content[0].text);
 }
@@ -75,26 +75,28 @@ afterEach(() => {
 
 describe('cross-node query integration', () => {
   it('open tasks whose linked project is done', async () => {
-    const r = parseResult(await handler({
+    const r = parseEnvelope(await handler({
       types: ['task'],
       fields: { status: { eq: 'open' } },
       join_filters: [{ rel_type: 'project', target: { types: ['project'], fields: { status: { eq: 'done' } } } }],
     }));
-    const ids = (r.nodes as Array<{ id: string }>).map(n => n.id).sort();
+    expect(r.ok).toBe(true);
+    const ids = (r.data.nodes as Array<{ id: string }>).map(n => n.id).sort();
     expect(ids).toEqual(['t1']);
   });
 
   it('without_joins: tasks with no done-project edge', async () => {
-    const r = parseResult(await handler({
+    const r = parseEnvelope(await handler({
       types: ['task'],
       without_joins: [{ rel_type: 'project', target: { fields: { status: { eq: 'done' } } } }],
     }));
-    const ids = (r.nodes as Array<{ id: string }>).map(n => n.id).sort();
+    expect(r.ok).toBe(true);
+    const ids = (r.data.nodes as Array<{ id: string }>).map(n => n.id).sort();
     expect(ids).toEqual(['t2', 't3']);
   });
 
   it('incoming: projects with >=1 open task', async () => {
-    const r = parseResult(await handler({
+    const r = parseEnvelope(await handler({
       types: ['project'],
       join_filters: [{
         direction: 'incoming',
@@ -102,36 +104,43 @@ describe('cross-node query integration', () => {
         target: { types: ['task'], fields: { status: { eq: 'open' } } },
       }],
     }));
-    const ids = (r.nodes as Array<{ id: string }>).map(n => n.id).sort();
+    expect(r.ok).toBe(true);
+    const ids = (r.data.nodes as Array<{ id: string }>).map(n => n.id).sort();
     expect(ids).toEqual(['p1', 'p2']);
   });
 
   it('no rel_type: meetings linked to any person at Acme', async () => {
-    const r = parseResult(await handler({
+    const r = parseEnvelope(await handler({
       types: ['meeting'],
       join_filters: [{
         target: { types: ['person'], fields: { company: { eq: 'Acme' } } },
       }],
     }));
-    const ids = (r.nodes as Array<{ id: string }>).map(n => n.id).sort();
+    expect(r.ok).toBe(true);
+    const ids = (r.data.nodes as Array<{ id: string }>).map(n => n.id).sort();
     expect(ids).toEqual(['m1']);
   });
 
-  it('surfaces notice when unresolved edges could have affected results', async () => {
-    const r = parseResult(await handler({
+  it('surfaces CROSS_NODE_FILTER_UNRESOLVED warning when unresolved edges could have affected results', async () => {
+    const r = parseEnvelope(await handler({
       types: ['task'],
       join_filters: [{ rel_type: 'project', target: { fields: { status: { eq: 'done' } } } }],
     }));
-    expect(r.notice).toContain('unresolved');
-    expect((r.notice as string)).toMatch(/1 candidate edge/);
+    expect(r.ok).toBe(true);
+    expect(r.warnings).toEqual(
+      expect.arrayContaining([expect.objectContaining({ code: 'CROSS_NODE_FILTER_UNRESOLVED' })])
+    );
+    const w = r.warnings.find(w => w.code === 'CROSS_NODE_FILTER_UNRESOLVED');
+    expect(w!.message).toMatch(/1 candidate edge/);
   });
 
-  it('no notice when join_filter has no target (only rel_type filter)', async () => {
-    const r = parseResult(await handler({
+  it('no warning when join_filter has no target (only rel_type filter)', async () => {
+    const r = parseEnvelope(await handler({
       types: ['task'],
       join_filters: [{ rel_type: 'project' }],
     }));
-    expect(r.notice).toBeUndefined();
+    expect(r.ok).toBe(true);
+    expect(r.warnings).toEqual([]);
   });
 
   it('composition: top-level fields + join_filters + without_joins in one query', async () => {
@@ -140,7 +149,7 @@ describe('cross-node query integration', () => {
     seedRel('t1', 'U1', 'assignee', 'u1');
     seedRel('t2', 'U1', 'assignee', 'u1');
 
-    const r = parseResult(await handler({
+    const r = parseEnvelope(await handler({
       types: ['task'],
       fields: { status: { eq: 'open' } },
       join_filters: [
@@ -151,24 +160,27 @@ describe('cross-node query integration', () => {
         { rel_type: 'project', target: { fields: { status: { eq: 'todo' } } } },
       ],
     }));
-    const ids = (r.nodes as Array<{ id: string }>).map(n => n.id).sort();
+    expect(r.ok).toBe(true);
+    const ids = (r.data.nodes as Array<{ id: string }>).map(n => n.id).sort();
     expect(ids).toEqual(['t1']);
   });
 
   it('references still works (backward compat via resolved_target_id internally)', async () => {
-    const r = parseResult(await handler({
+    const r = parseEnvelope(await handler({
       references: { target: 'P1', direction: 'outgoing' },
     }));
-    const ids = (r.nodes as Array<{ id: string }>).map(n => n.id).sort();
+    expect(r.ok).toBe(true);
+    const ids = (r.data.nodes as Array<{ id: string }>).map(n => n.id).sort();
     expect(ids).toEqual(['t1']);
   });
 
   it('pagination count is correct with join_filters', async () => {
-    const r = parseResult(await handler({
+    const r = parseEnvelope(await handler({
       types: ['task'],
       join_filters: [{ rel_type: 'project' }],
       limit: 1,
     }));
-    expect(r.total).toBe(2); // t1 and t2, not t3 (unresolved edge invisible)
+    expect(r.ok).toBe(true);
+    expect(r.data.total).toBe(2); // t1 and t2, not t3 (unresolved edge invisible)
   });
 });

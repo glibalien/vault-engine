@@ -218,7 +218,9 @@ describe('query-nodes', () => {
 
   it('returns all nodes with no filters', async () => {
     const handler = getToolHandler(registerQueryNodes);
-    const result = parseResult(await handler({}) as any) as any;
+    const body = parseResult(await handler({}) as any) as any;
+    expect(body.ok).toBe(true);
+    const result = body.data;
     expect(result.total).toBe(3);
     expect(result.nodes).toHaveLength(3);
     // Default sort by title asc
@@ -229,49 +231,63 @@ describe('query-nodes', () => {
 
   it('filters by single type', async () => {
     const handler = getToolHandler(registerQueryNodes);
-    const result = parseResult(await handler({ types: ['note'] }) as any) as any;
+    const body = parseResult(await handler({ types: ['note'] }) as any) as any;
+    expect(body.ok).toBe(true);
+    const result = body.data;
     expect(result.total).toBe(2);
     expect(result.nodes.map((n: any) => n.id).sort()).toEqual(['n1', 'n2']);
   });
 
   it('filters by multi-type intersection', async () => {
     const handler = getToolHandler(registerQueryNodes);
-    const result = parseResult(await handler({ types: ['meeting', 'note'] }) as any) as any;
+    const body = parseResult(await handler({ types: ['meeting', 'note'] }) as any) as any;
+    expect(body.ok).toBe(true);
+    const result = body.data;
     expect(result.total).toBe(1);
     expect(result.nodes[0].id).toBe('n1');
   });
 
   it('filters by field equality (text)', async () => {
     const handler = getToolHandler(registerQueryNodes);
-    const result = parseResult(await handler({ fields: { project: { eq: 'Vault Engine' } } }) as any) as any;
+    const body = parseResult(await handler({ fields: { project: { eq: 'Vault Engine' } } }) as any) as any;
+    expect(body.ok).toBe(true);
+    const result = body.data;
     expect(result.total).toBe(1);
     expect(result.nodes[0].id).toBe('n1');
   });
 
   it('filters by numeric comparison (lte)', async () => {
     const handler = getToolHandler(registerQueryNodes);
-    const result = parseResult(await handler({ fields: { priority: { lte: 5 } } }) as any) as any;
+    const body = parseResult(await handler({ fields: { priority: { lte: 5 } } }) as any) as any;
+    expect(body.ok).toBe(true);
+    const result = body.data;
     expect(result.total).toBe(1);
     expect(result.nodes[0].id).toBe('n3');
   });
 
   it('filters by field exists', async () => {
     const handler = getToolHandler(registerQueryNodes);
-    const result = parseResult(await handler({ fields: { project: { exists: true } } }) as any) as any;
+    const body = parseResult(await handler({ fields: { project: { exists: true } } }) as any) as any;
+    expect(body.ok).toBe(true);
+    const result = body.data;
     expect(result.total).toBe(1);
     expect(result.nodes[0].id).toBe('n1');
   });
 
   it('filters by field not exists', async () => {
     const handler = getToolHandler(registerQueryNodes);
-    const result = parseResult(await handler({ fields: { project: { exists: false } } }) as any) as any;
+    const body = parseResult(await handler({ fields: { project: { exists: false } } }) as any) as any;
+    expect(body.ok).toBe(true);
+    const result = body.data;
     expect(result.total).toBe(2);
     expect(result.nodes.map((n: any) => n.id).sort()).toEqual(['n2', 'n3']);
   });
 
   it('supports pagination', async () => {
     const handler = getToolHandler(registerQueryNodes);
-    const result = parseResult(await handler({ limit: 1, offset: 1 }) as any) as any;
+    const body = parseResult(await handler({ limit: 1, offset: 1 }) as any) as any;
+    expect(body.ok).toBe(true);
+    const result = body.data;
     expect(result.total).toBe(3);
     expect(result.nodes).toHaveLength(1);
     expect(result.nodes[0].title).toBe('Quick Note');
@@ -279,28 +295,36 @@ describe('query-nodes', () => {
 
   it('supports sorting', async () => {
     const handler = getToolHandler(registerQueryNodes);
-    const result = parseResult(await handler({ sort_by: 'file_mtime', sort_order: 'desc' }) as any) as any;
+    const body = parseResult(await handler({ sort_by: 'file_mtime', sort_order: 'desc' }) as any) as any;
+    expect(body.ok).toBe(true);
+    const result = body.data;
     expect(result.nodes[0].id).toBe('n3');
     expect(result.nodes[2].id).toBe('n1');
   });
 
   it('filters by path_prefix', async () => {
     const handler = getToolHandler(registerQueryNodes);
-    const result = parseResult(await handler({ path_prefix: 'meetings/' }) as any) as any;
+    const body = parseResult(await handler({ path_prefix: 'meetings/' }) as any) as any;
+    expect(body.ok).toBe(true);
+    const result = body.data;
     expect(result.total).toBe(1);
     expect(result.nodes[0].id).toBe('n1');
   });
 
   it('filters by type (meeting)', async () => {
     const handler = getToolHandler(registerQueryNodes);
-    const result = parseResult(await handler({ types: ['meeting'] }) as any) as any;
+    const body = parseResult(await handler({ types: ['meeting'] }) as any) as any;
+    expect(body.ok).toBe(true);
+    const result = body.data;
     expect(result.total).toBe(1);
     expect(result.nodes[0].id).toBe('n1');
   });
 
   it('filters by outgoing reference', async () => {
     const handler = getToolHandler(registerQueryNodes);
-    const result = parseResult(await handler({ references: { target: 'Quick Note' } }) as any) as any;
+    const body = parseResult(await handler({ references: { target: 'Quick Note' } }) as any) as any;
+    expect(body.ok).toBe(true);
+    const result = body.data;
     expect(result.total).toBe(1);
     expect(result.nodes[0].id).toBe('n1');
   });
@@ -309,9 +333,11 @@ describe('query-nodes', () => {
     const handler = getToolHandler(registerQueryNodes);
     // n1 has a wiki-link to 'Quick Note', which is n2's title.
     // Incoming to 'Quick Note' should return n1 (the source of the link).
-    const result = parseResult(await handler({
+    const body = parseResult(await handler({
       references: { target: 'Quick Note', direction: 'incoming' },
     }) as any) as any;
+    expect(body.ok).toBe(true);
+    const result = body.data;
     expect(result.total).toBe(1);
     expect(result.nodes[0].id).toBe('n1');
   });
@@ -320,59 +346,68 @@ describe('query-nodes', () => {
     const handler = getToolHandler(registerQueryNodes);
     // limit > 200 should be clamped by zod validation
     // Since zod max(200) throws, we pass 200 and it works
-    const result = parseResult(await handler({ limit: 200 }) as any) as any;
-    expect(result.total).toBe(3);
+    const body = parseResult(await handler({ limit: 200 }) as any) as any;
+    expect(body.ok).toBe(true);
+    expect(body.data.total).toBe(3);
   });
 
   it('enriches results with types and field_count', async () => {
     const handler = getToolHandler(registerQueryNodes);
-    const result = parseResult(await handler({ types: ['meeting'] }) as any) as any;
-    const node = result.nodes[0];
+    const body = parseResult(await handler({ types: ['meeting'] }) as any) as any;
+    expect(body.ok).toBe(true);
+    const node = body.data.nodes[0];
     expect(node.types).toEqual(expect.arrayContaining(['meeting', 'note']));
     expect(node.field_count).toBe(1);
   });
 
   it('filters by without_types (negation)', async () => {
     const handler = getToolHandler(registerQueryNodes);
-    const result = parseResult(await handler({ without_types: ['meeting'] }) as any) as any;
+    const body = parseResult(await handler({ without_types: ['meeting'] }) as any) as any;
+    expect(body.ok).toBe(true);
     // n1 is meeting+note, n2 is note, n3 is task
-    expect((result as any).nodes.every((n: any) => !n.types.includes('meeting'))).toBe(true);
-    expect((result as any).nodes.length).toBe(2);
+    expect(body.data.nodes.every((n: any) => !n.types.includes('meeting'))).toBe(true);
+    expect(body.data.nodes.length).toBe(2);
   });
 
   it('filters by without_fields (negation)', async () => {
     const handler = getToolHandler(registerQueryNodes);
-    const result = parseResult(await handler({ without_fields: ['project'] }) as any) as any;
+    const body = parseResult(await handler({ without_fields: ['project'] }) as any) as any;
+    expect(body.ok).toBe(true);
     // n1 has project, n2 and n3 don't
-    expect((result as any).nodes.length).toBe(2);
-    expect((result as any).nodes.every((n: any) => n.id !== 'n1')).toBe(true);
+    expect(body.data.nodes.length).toBe(2);
+    expect(body.data.nodes.every((n: any) => n.id !== 'n1')).toBe(true);
   });
 
   it('returns field values when include_fields is specified', async () => {
     const handler = getToolHandler(registerQueryNodes);
-    const result = parseResult(await handler({ types: ['meeting'], include_fields: ['project'] }) as any) as any;
+    const body = parseResult(await handler({ types: ['meeting'], include_fields: ['project'] }) as any) as any;
+    expect(body.ok).toBe(true);
+    const result = body.data;
     expect(result.total).toBe(1);
     expect(result.nodes[0].fields).toEqual({ project: 'Vault Engine' });
   });
 
   it('omits fields key when include_fields is not specified', async () => {
     const handler = getToolHandler(registerQueryNodes);
-    const result = parseResult(await handler({ types: ['meeting'] }) as any) as any;
-    expect(result.nodes[0].fields).toBeUndefined();
+    const body = parseResult(await handler({ types: ['meeting'] }) as any) as any;
+    expect(body.ok).toBe(true);
+    expect(body.data.nodes[0].fields).toBeUndefined();
   });
 
   it('returns empty fields object when requested field does not exist on node', async () => {
     const handler = getToolHandler(registerQueryNodes);
-    const result = parseResult(await handler({ types: ['task'], include_fields: ['project'] }) as any) as any;
+    const body = parseResult(await handler({ types: ['task'], include_fields: ['project'] }) as any) as any;
+    expect(body.ok).toBe(true);
     // n3 (task) has no project field
-    expect(result.nodes[0].fields).toEqual({});
+    expect(body.data.nodes[0].fields).toEqual({});
   });
 
   it('wildcard include_fields returns all fields', async () => {
     const handler = getToolHandler(registerQueryNodes);
-    const result = parseResult(await handler({ types: ['task'], include_fields: ['*'] }) as any) as any;
+    const body = parseResult(await handler({ types: ['task'], include_fields: ['*'] }) as any) as any;
+    expect(body.ok).toBe(true);
     // n3 has only 'priority' field with value 1
-    expect(result.nodes[0].fields).toEqual({ priority: 1 });
+    expect(body.data.nodes[0].fields).toEqual({ priority: 1 });
   });
 
   it('include_fields resolves JSON values correctly', async () => {
@@ -386,8 +421,9 @@ describe('query-nodes', () => {
     ).run('n_json', 'tags', null, null, null, '["design","spec"]', 'frontmatter');
 
     const handler = getToolHandler(registerQueryNodes);
-    const result = parseResult(await handler({ types: ['json-test-type'], include_fields: ['tags'] }) as any) as any;
-    expect(result.nodes[0].fields).toEqual({ tags: ['design', 'spec'] });
+    const body = parseResult(await handler({ types: ['json-test-type'], include_fields: ['tags'] }) as any) as any;
+    expect(body.ok).toBe(true);
+    expect(body.data.nodes[0].fields).toEqual({ tags: ['design', 'spec'] });
   });
 
   it('include_fields with multiple specific fields', async () => {
@@ -397,16 +433,18 @@ describe('query-nodes', () => {
     ).run('n1', 'status', 'active', null, null, null, 'frontmatter');
 
     const handler = getToolHandler(registerQueryNodes);
-    const result = parseResult(await handler({ types: ['meeting'], include_fields: ['project', 'status'] }) as any) as any;
-    expect(result.nodes[0].fields).toEqual({ project: 'Vault Engine', status: 'active' });
+    const body = parseResult(await handler({ types: ['meeting'], include_fields: ['project', 'status'] }) as any) as any;
+    expect(body.ok).toBe(true);
+    expect(body.data.nodes[0].fields).toEqual({ project: 'Vault Engine', status: 'active' });
   });
 
   it('field_count is unaffected by include_fields', async () => {
     const handler = getToolHandler(registerQueryNodes);
-    const result = parseResult(await handler({ types: ['meeting'], include_fields: ['project'] }) as any) as any;
+    const body = parseResult(await handler({ types: ['meeting'], include_fields: ['project'] }) as any) as any;
+    expect(body.ok).toBe(true);
     // n1 has 1 field (project). field_count should still be 1.
-    expect(result.nodes[0].field_count).toBe(1);
-    expect(result.nodes[0].fields).toEqual({ project: 'Vault Engine' });
+    expect(body.data.nodes[0].field_count).toBe(1);
+    expect(body.data.nodes[0].fields).toEqual({ project: 'Vault Engine' });
   });
 });
 

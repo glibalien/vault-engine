@@ -166,7 +166,7 @@ function computeJoinWarning(
     return {
       code: 'CROSS_NODE_FILTER_UNRESOLVED',
       severity: 'warning',
-      message: `Cross-node join filters applied. ${n} candidate edge${n === 1 ? '' : 's'} had unresolved targets and were excluded.`,
+      message: `Could not resolve cross-node filter edges: ${edges.join(', ')}`,
       details: { edges },
     };
   }

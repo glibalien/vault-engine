@@ -131,7 +131,7 @@ describe('cross-node query integration', () => {
       expect.arrayContaining([expect.objectContaining({ code: 'CROSS_NODE_FILTER_UNRESOLVED' })])
     );
     const w = r.warnings.find(w => w.code === 'CROSS_NODE_FILTER_UNRESOLVED');
-    expect(w!.message).toMatch(/1 candidate edge/);
+    expect(w!.message).toMatch(/Could not resolve cross-node filter edges/);
   });
 
   it('no warning when join_filter has no target (only rel_type filter)', async () => {

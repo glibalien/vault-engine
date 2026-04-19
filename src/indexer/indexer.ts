@@ -279,7 +279,6 @@ export function fullIndex(vaultPath: string, db: Database.Database, options?: In
 
   // 2. Detect deletions
   const dbNodes = stmts.allFilePaths.all() as { id: string; file_path: string }[];
-  const runSql = db.exec.bind(db);
 
   const deleteTransaction = db.transaction(() => {
     for (const node of dbNodes) {

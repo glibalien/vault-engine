@@ -69,20 +69,23 @@ if (pdfFallback !== null) {
 }
 
 // --- Phase 4: Embedding indexer (subprocess-isolated) ---
+// Skipped in --normalize mode: saves ~1.5 GB ONNX arena; any fullIndex deletions leak embedding rows until the next server-mode startup cleans them up.
 let embeddingIndexer: EmbeddingIndexer | undefined;
 let embedderRef: (Embedder & { shutdown(): Promise<void> }) | undefined;
 
-const modelsDir = resolve(vaultPath, '.vault-engine', 'models');
-console.log('Initializing embedder subprocess...');
-try {
-  const embedder = createSubprocessEmbedder({ modelsDir });
-  embedderRef = embedder;
-  embeddingIndexer = createEmbeddingIndexer(db, embedder, {
-    extractionCache,
-    vaultPath,
-  });
-} catch (err) {
-  console.error('Failed to initialize embedder — search disabled:', err instanceof Error ? err.message : err);
+if (!args.normalize) {
+  const modelsDir = resolve(vaultPath, '.vault-engine', 'models');
+  console.log('Initializing embedder subprocess...');
+  try {
+    const embedder = createSubprocessEmbedder({ modelsDir });
+    embedderRef = embedder;
+    embeddingIndexer = createEmbeddingIndexer(db, embedder, {
+      extractionCache,
+      vaultPath,
+    });
+  } catch (err) {
+    console.error('Failed to initialize embedder — search disabled:', err instanceof Error ? err.message : err);
+  }
 }
 
 console.log(`Indexing vault at ${vaultPath}...`);

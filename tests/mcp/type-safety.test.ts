@@ -4,6 +4,7 @@ import Database from 'better-sqlite3';
 import { existsSync } from 'node:fs';
 import { join } from 'node:path';
 import { createSchema } from '../../src/db/schema.js';
+import { addUndoTables } from '../../src/db/migrate.js';
 import { createSchemaDefinition } from '../../src/schema/crud.js';
 import { createGlobalField } from '../../src/global-fields/crud.js';
 import { WriteLockManager } from '../../src/sync/write-lock.js';
@@ -43,6 +44,7 @@ beforeEach(() => {
   db.pragma('journal_mode = WAL');
   db.pragma('foreign_keys = ON');
   createSchema(db);
+  addUndoTables(db);
   writeLock = new WriteLockManager();
 
   // Set up schemas

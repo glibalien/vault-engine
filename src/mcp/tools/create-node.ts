@@ -16,6 +16,7 @@ import { checkTypesHaveSchemas } from '../../pipeline/check-types.js';
 import { loadSchemaContext } from '../../pipeline/schema-context.js';
 import { validateProposedState } from '../../validation/validate.js';
 import { buildFixable } from '../../validation/fixable.js';
+import { createOperation, finalizeOperation } from '../../undo/operation.js';
 
 const paramsShape = {
   title: z.string(),
@@ -137,6 +138,12 @@ export function registerCreateNode(
         return fail('INVALID_PARAMS', `File "${filePath}" already exists on disk`);
       }
 
+      // ── Undo operation setup (skipped for dry_run) ──────────────────
+      const operation_id = dryRun ? undefined : createOperation(db, {
+        source_tool: 'create-node',
+        description: `create-node: '${title}'`,
+      });
+
       try {
         const result = executeMutation(db, writeLock, vaultPath, {
           source: 'tool',
@@ -146,7 +153,7 @@ export function registerCreateNode(
           types,
           fields,
           body,
-        }, syncLogger);
+        }, syncLogger, operation_id ? { operation_id } : undefined);
 
         return ok(
           {
@@ -177,6 +184,8 @@ export function registerCreateNode(
           return fail('VALIDATION_FAILED', err.message);
         }
         return fail('INTERNAL_ERROR', err instanceof Error ? err.message : String(err));
+      } finally {
+        if (operation_id) finalizeOperation(db, operation_id);
       }
     },
   );

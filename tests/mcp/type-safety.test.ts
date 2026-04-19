@@ -309,8 +309,9 @@ describe('add-type-to-node type enforcement', () => {
       node_id: seed.node_id,
       type: 'reference',
     }) as any);
-    expect(result.error).toBe('UNKNOWN_TYPE');
-    expect(result.unknown_types).toEqual(['reference']);
+    expect(result.ok).toBe(false);
+    expect(result.error.code).toBe('UNKNOWN_TYPE');
+    expect(result.error.details.unknown_types).toEqual(['reference']);
   });
 
   it('allows valid type', async () => {
@@ -320,8 +321,8 @@ describe('add-type-to-node type enforcement', () => {
       node_id: seed.node_id,
       type: 'task',
     }) as any);
-    expect(result.error).toBeUndefined();
-    expect(result.types).toContain('task');
+    expect(result.ok).toBe(true);
+    expect(result.data.types).toContain('task');
   });
 });
 

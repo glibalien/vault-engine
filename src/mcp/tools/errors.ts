@@ -1,6 +1,5 @@
-import type { ValidationResult, ValidationIssue } from '../../validation/types.js';
+import type { ValidationIssue } from '../../validation/types.js';
 import type { ToolIssue } from './title-warnings.js';
-import { buildFixable } from '../../validation/fixable.js';
 
 export type ErrorCode =
   | 'NOT_FOUND'
@@ -65,24 +64,4 @@ export function adaptIssue(v: ValidationIssue | ToolIssue): Issue {
   const issue: Issue = { code: v.code, message: v.message, severity: 'warning' };
   if (v.characters !== undefined) issue.details = { characters: v.characters };
   return issue;
-}
-
-// ─── Legacy helpers — to be deleted in final task ─────────────────────
-
-export function toolResult(data: unknown): ToolCallResult {
-  return wrap(data);
-}
-
-export function toolErrorResult(code: ErrorCode, message: string) {
-  return toolResult({ error: message, code });
-}
-
-export function toolValidationErrorResult(validation: ValidationResult) {
-  const fixable = buildFixable(validation.issues, validation.effective_fields);
-  return toolResult({
-    error: `Validation failed with ${validation.issues.filter(i => i.severity === 'error').length} error(s)`,
-    code: 'VALIDATION_FAILED' as ErrorCode,
-    issues: validation.issues,
-    fixable,
-  });
 }

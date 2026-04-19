@@ -3,10 +3,7 @@
 // Conflict detection + restore orchestration. See design spec:
 // docs/superpowers/specs/2026-04-19-undo-system-design.md
 
-import { existsSync, readFileSync } from 'node:fs';
-import { join } from 'node:path';
 import type Database from 'better-sqlite3';
-import { sha256 } from '../indexer/hash.js';
 import { executeMutation } from '../pipeline/execute.js';
 import { executeDeletion } from '../pipeline/delete.js';
 import type { WriteLockManager } from '../sync/write-lock.js';

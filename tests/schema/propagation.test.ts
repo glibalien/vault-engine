@@ -1,6 +1,6 @@
 import { describe, it, expect, beforeEach, afterEach } from 'vitest';
 import { join } from 'node:path';
-import { existsSync, readFileSync } from 'node:fs';
+import { existsSync, readFileSync, statSync, writeFileSync } from 'node:fs';
 import Database from 'better-sqlite3';
 import { createSchema } from '../../src/db/schema.js';
 import { executeMutation } from '../../src/pipeline/execute.js';
@@ -253,19 +253,22 @@ describe('rerenderNodesWithField', () => {
     // A node WITHOUT the field — must not be touched
     createNode({ file_path: 'h3.md', title: 'H3' });
 
-    // Flip the content so re-render will produce a different hash
-    // (status field is persisted; changing the claim's label affects rendering)
-    updateSchemaDefinition(db, 'task', { field_claims: [{ field: 'status', sort_order: 1000, label: 'New Status' }] });
+    // Corrupt the h1 file on disk so its hash no longer matches the DB — this
+    // is what forces rerenderNodesWithField to actually re-write h1.
+    const h1Path = join(vaultPath, 'h1.md');
+    writeFileSync(h1Path, readFileSync(h1Path, 'utf-8') + '\n<!-- drift -->\n');
+    const h3Path = join(vaultPath, 'h3.md');
+    const h3MtimeBefore = statSync(h3Path).mtimeMs;
 
     const logIdBaseline = (db.prepare('SELECT COALESCE(MAX(id), 0) AS id FROM edits_log').get() as { id: number }).id;
 
     const rerendered = rerenderNodesWithField(db, writeLock, vaultPath, 'status');
 
-    // Nodes containing 'status' may or may not re-write depending on whether
-    // the rendered output actually changed. What matters here: no adoption or
-    // orphan rows should be emitted, and the count reflects only nodes whose
-    // output actually changed.
-    expect(rerendered).toBeGreaterThanOrEqual(0);
+    // h1 had drift → re-rendered. h2 already matched → no re-write. h3 lacks the field → not visited.
+    expect(rerendered).toBe(1);
+
+    // h3 must not have been touched
+    expect(statSync(h3Path).mtimeMs).toBe(h3MtimeBefore);
 
     // Confirm no adoption/orphan rows were emitted by rerenderNodesWithField
     const newAdoptionRows = db.prepare(
@@ -305,6 +308,6 @@ describe('rerenderNodesWithField', () => {
     // The file was re-rendered (content changed since the field was removed)
     expect(count).toBe(1);
     const body = readFileSync(join(vaultPath, 'j.md'), 'utf-8');
-    expect(body.includes('count: 42')).toBe(false);
+    expect(body.includes('count:')).toBe(false);
   });
 });

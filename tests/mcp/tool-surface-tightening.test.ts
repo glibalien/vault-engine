@@ -330,11 +330,13 @@ describe('update-node set_title renames file', () => {
 
   it('set_title renames the file on disk', async () => {
     const node = createNode('Notes/Original.md', 'Original');
-    const result = parseResult(await handler({
+    const body = parseResult(await handler({
       node_id: node.node_id,
       set_title: 'Renamed',
     }));
-    expect(result.file_path).toBe('Notes/Renamed.md');
+    expect(body.ok).toBe(true);
+    const data = body.data as Record<string, unknown>;
+    expect(data.file_path).toBe('Notes/Renamed.md');
     expect(existsSync(join(vaultPath, 'Notes/Renamed.md'))).toBe(true);
     expect(existsSync(join(vaultPath, 'Notes/Original.md'))).toBe(false);
   });
@@ -363,31 +365,37 @@ describe('update-node set_title renames file', () => {
   it('set_title returns conflict error when target path exists', async () => {
     createNode('Notes/A.md', 'A');
     createNode('Notes/B.md', 'B');
-    const result = parseResult(await handler({
+    const body = parseResult(await handler({
       title: 'A',
       set_title: 'B',
     }));
-    expect(result.code).toBe('CONFLICT');
+    expect(body.ok).toBe(false);
+    const error = body.error as { code: string; message: string };
+    expect(error.code).toBe('CONFLICT');
   });
 
   it('set_title with same title is a no-op', async () => {
     const node = createNode('Notes/Same.md', 'Same');
-    const result = parseResult(await handler({
+    const body = parseResult(await handler({
       node_id: node.node_id,
       set_title: 'Same',
     }));
-    expect(result.file_path).toBe('Notes/Same.md');
+    expect(body.ok).toBe(true);
+    const data = body.data as Record<string, unknown>;
+    expect(data.file_path).toBe('Notes/Same.md');
   });
 
   it('set_title includes title safety warnings', async () => {
     const node = createNode('Notes/Old.md', 'Old');
-    const result = parseResult(await handler({
+    const body = parseResult(await handler({
       node_id: node.node_id,
       set_title: 'New (with parens)',
     }));
-    expect(result.file_path).toBe('Notes/New (with parens).md');
-    const issues = result.issues as Array<{ code: string }>;
-    expect(issues.some(i => i.code === 'TITLE_WIKILINK_UNSAFE')).toBe(true);
+    expect(body.ok).toBe(true);
+    const data = body.data as Record<string, unknown>;
+    expect(data.file_path).toBe('Notes/New (with parens).md');
+    const warnings = body.warnings as Array<{ code: string }>;
+    expect(warnings.some(i => i.code === 'TITLE_WIKILINK_UNSAFE')).toBe(true);
   });
 });
 
@@ -437,13 +445,15 @@ describe('update-node query mode set_directory', () => {
   });
 
   it('rejects set_directory ending in .md', async () => {
-    const result = parseResult(await handler({
+    const body = parseResult(await handler({
       query: { types: ['task'] },
       set_directory: 'Archive/foo.md',
       dry_run: true,
     }));
-    expect(result.code).toBe('INVALID_PARAMS');
-    expect(result.error).toMatch(/directory.*must be a folder/i);
+    expect(body.ok).toBe(false);
+    const error = body.error as { code: string; message: string };
+    expect(error.code).toBe('INVALID_PARAMS');
+    expect(error.message).toMatch(/directory.*must be a folder/i);
   });
 
   it('set_directory moves files in query mode', async () => {
@@ -451,13 +461,15 @@ describe('update-node query mode set_directory', () => {
     createSchemaDefinition(db, { name: 'task', field_claims: [{ field: 'status' }] });
     createNode('Tasks/A.md', 'A', { types: ['task'] });
 
-    const result = parseResult(await handler({
+    const body = parseResult(await handler({
       query: { types: ['task'] },
       set_directory: 'Archive',
       dry_run: false,
       confirm_large_batch: true,
     }));
-    expect(result.updated).toBe(1);
+    expect(body.ok).toBe(true);
+    const data = body.data as Record<string, unknown>;
+    expect(data.updated).toBe(1);
     expect(existsSync(join(vaultPath, 'Archive/A.md'))).toBe(true);
   });
 });

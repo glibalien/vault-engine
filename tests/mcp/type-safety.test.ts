@@ -173,8 +173,9 @@ describe('update-node type enforcement', () => {
       node_id: seed.node_id,
       set_types: ['reference'],
     }) as any);
-    expect(result.error).toBe('UNKNOWN_TYPE');
-    expect(result.unknown_types).toEqual(['reference']);
+    expect(result.ok).toBe(false);
+    expect(result.error.code).toBe('UNKNOWN_TYPE');
+    expect(result.error.details.unknown_types).toEqual(['reference']);
   });
 
   it('allows set_types with valid types', async () => {
@@ -184,8 +185,8 @@ describe('update-node type enforcement', () => {
       node_id: seed.node_id,
       set_types: ['task'],
     }) as any);
-    expect(result.error).toBeUndefined();
-    expect(result.types).toEqual(['task']);
+    expect(result.ok).toBe(true);
+    expect(result.data.types).toEqual(['task']);
   });
 
   it('does not check types when set_types is absent', async () => {
@@ -195,7 +196,7 @@ describe('update-node type enforcement', () => {
       node_id: seed.node_id,
       set_fields: { project: 'X' },
     }) as any);
-    expect(result.error).toBeUndefined();
+    expect(result.ok).toBe(true);
   });
 
   it('dry_run in single-node mode returns preview without writing', async () => {
@@ -206,8 +207,9 @@ describe('update-node type enforcement', () => {
       set_fields: { project: 'Preview' },
       dry_run: true,
     }) as any);
-    expect(result.dry_run).toBe(true);
-    expect(result.preview).toBeDefined();
+    expect(result.ok).toBe(true);
+    expect(result.data.dry_run).toBe(true);
+    expect(result.data.preview).toBeDefined();
     // Verify DB was not mutated
     const fields = db.prepare('SELECT value_text FROM node_fields WHERE node_id = ? AND field_name = ?')
       .get(seed.node_id, 'project') as { value_text: string } | undefined;
@@ -221,8 +223,8 @@ describe('update-node type enforcement', () => {
       node_id: seed.node_id,
       add_types: ['task'],
     }) as any);
-    expect(result.error).toBeUndefined();
-    expect(result.types).toEqual(expect.arrayContaining(['note', 'task']));
+    expect(result.ok).toBe(true);
+    expect(result.data.types).toEqual(expect.arrayContaining(['note', 'task']));
     // Verify DB was mutated
     const types = (db.prepare('SELECT schema_type FROM node_types WHERE node_id = ?')
       .all(seed.node_id) as Array<{ schema_type: string }>).map(t => t.schema_type);
@@ -245,8 +247,8 @@ describe('update-node type enforcement', () => {
       node_id: seed.node_id,
       remove_types: ['task'],
     }) as any);
-    expect(result.error).toBeUndefined();
-    expect(result.types).toEqual(['note']);
+    expect(result.ok).toBe(true);
+    expect(result.data.types).toEqual(['note']);
   });
 
   it('applies add_types + remove_types together in single-node mode', async () => {
@@ -257,8 +259,8 @@ describe('update-node type enforcement', () => {
       add_types: ['task'],
       remove_types: ['note'],
     }) as any);
-    expect(result.error).toBeUndefined();
-    expect(result.types).toEqual(['task']);
+    expect(result.ok).toBe(true);
+    expect(result.data.types).toEqual(['task']);
   });
 
   it('rejects unknown type in single-node add_types', async () => {
@@ -268,8 +270,9 @@ describe('update-node type enforcement', () => {
       node_id: seed.node_id,
       add_types: ['reference'],
     }) as any);
-    expect(result.error).toBe('UNKNOWN_TYPE');
-    expect(result.unknown_types).toEqual(['reference']);
+    expect(result.ok).toBe(false);
+    expect(result.error.code).toBe('UNKNOWN_TYPE');
+    expect(result.error.details.unknown_types).toEqual(['reference']);
   });
 
   it('rejects unknown type in query mode add_types', async () => {
@@ -279,7 +282,8 @@ describe('update-node type enforcement', () => {
       query: { types: ['note'] },
       add_types: ['reference'],
     }) as any);
-    expect(result.error).toBe('UNKNOWN_TYPE');
+    expect(result.ok).toBe(false);
+    expect(result.error.code).toBe('UNKNOWN_TYPE');
   });
 });
 

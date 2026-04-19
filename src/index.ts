@@ -153,7 +153,7 @@ const mutex = new IndexMutex();
 const writeLock = new WriteLockManager();
 const syncLogger = new SyncLogger(db);
 const watcher = startWatcher(vaultPath, db, mutex, writeLock, syncLogger, embeddingIndexer);
-const reconciler = startReconciler(vaultPath, db, mutex, writeLock, syncLogger);
+const reconciler = startReconciler(vaultPath, db, mutex, writeLock, syncLogger, embeddingIndexer);
 const normalizer = startNormalizer(vaultPath, db, writeLock, syncLogger, {
   cronExpression: process.env.NORMALIZE_CRON ?? '',
   quiescenceMinutes: parseInt(process.env.NORMALIZE_QUIESCENCE_MINUTES ?? '60', 10) || 60,

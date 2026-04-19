@@ -75,7 +75,7 @@ export function registerDeleteNode(
           warnings.push({
             code: 'PENDING_REFERENCES',
             severity: 'warning',
-            message: `${incomingCount.c} other node(s) reference this node. Deleting will create dangling references.`,
+            message: `${incomingCount.c} other node(s) reference this node. Deletion will leave dangling references.`,
             details: { incoming_reference_count: incomingCount.c, referencing_nodes },
           });
         }

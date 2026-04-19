@@ -59,9 +59,37 @@ if (excludeDirs.length > 0) {
   console.log(`Excluding directories: ${excludeDirs.join(', ')}`);
 }
 
+// --- Extraction + Embedder (must init before fullIndex for delete cleanup) ---
+const { registry: extractorRegistry, pdfFallback } = buildExtractors(
+  process.env as Record<string, string | undefined>,
+);
+const extractionCache = new ExtractionCache(db, extractorRegistry);
+if (pdfFallback !== null) {
+  extractionCache.setPdfFallback(pdfFallback);
+}
+
+// --- Phase 4: Embedding indexer (subprocess-isolated) ---
+let embeddingIndexer: EmbeddingIndexer | undefined;
+let embedderRef: (Embedder & { shutdown(): Promise<void> }) | undefined;
+
+const modelsDir = resolve(vaultPath, '.vault-engine', 'models');
+console.log('Initializing embedder subprocess...');
+try {
+  const embedder = createSubprocessEmbedder({ modelsDir });
+  embedderRef = embedder;
+  embeddingIndexer = createEmbeddingIndexer(db, embedder, {
+    extractionCache,
+    vaultPath,
+  });
+} catch (err) {
+  console.error('Failed to initialize embedder — search disabled:', err instanceof Error ? err.message : err);
+}
+
 console.log(`Indexing vault at ${vaultPath}...`);
 const indexStart = Date.now();
-await fullIndex(vaultPath, db);
+await fullIndex(vaultPath, db, {
+  onNodeDeleted: (nodeId) => embeddingIndexer?.removeNode(nodeId),
+});
 console.log(`Indexing complete in ${Date.now() - indexStart}ms`);
 
 // Resolved-target backfill: populates resolved_target_id on any rows left NULL
@@ -89,28 +117,8 @@ if (args.normalize) {
   process.exit(stats.errored > 0 ? 1 : 0);
 }
 
-const { registry: extractorRegistry, pdfFallback } = buildExtractors(
-  process.env as Record<string, string | undefined>,
-);
-const extractionCache = new ExtractionCache(db, extractorRegistry);
-if (pdfFallback !== null) {
-  extractionCache.setPdfFallback(pdfFallback);
-}
-
-// --- Phase 4: Embedding indexer (subprocess-isolated) ---
-let embeddingIndexer: EmbeddingIndexer | undefined;
-let embedderRef: (Embedder & { shutdown(): Promise<void> }) | undefined;
-
-const modelsDir = resolve(vaultPath, '.vault-engine', 'models');
-console.log('Initializing embedder subprocess...');
-try {
-  const embedder = createSubprocessEmbedder({ modelsDir });
-  embedderRef = embedder;
-  embeddingIndexer = createEmbeddingIndexer(db, embedder, {
-    extractionCache,
-    vaultPath,
-  });
-
+// --- Embedder post-init: version check + initial enqueue + background ---
+if (embeddingIndexer) {
   // Detect a search pipeline version bump — if so, clear the old embeddings
   // so everything re-embeds under the new semantics (chunking + extractions).
   const storedVersion = getSearchVersion(db);
@@ -139,8 +147,6 @@ try {
   backgroundProcess().catch(err => console.error('Embedding error:', err instanceof Error ? err.message : err));
 
   console.log(`Embedder ready, ${allNodes.length} nodes queued`);
-} catch (err) {
-  console.error('Failed to initialize embedder — search disabled:', err instanceof Error ? err.message : err);
 }
 
 const mutex = new IndexMutex();

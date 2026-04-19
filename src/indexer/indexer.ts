@@ -31,7 +31,6 @@ interface Statements {
   deleteRelationships: Database.Statement;
   insertRelationship: Database.Statement;
   insertEditLog: Database.Statement;
-  deleteNode: Database.Statement;
   allFilePaths: Database.Statement;
   updateMtime: Database.Statement;
 }
@@ -67,7 +66,6 @@ function prepareStatements(db: Database.Database): Statements {
     insertEditLog: db.prepare(
       'INSERT INTO edits_log (node_id, timestamp, event_type, details) VALUES (?, ?, ?, ?)',
     ),
-    deleteNode: db.prepare('DELETE FROM nodes WHERE id = ?'),
     allFilePaths: db.prepare('SELECT id, file_path FROM nodes'),
     updateMtime: db.prepare('UPDATE nodes SET file_mtime = ? WHERE id = ?'),
   };

@@ -1,7 +1,7 @@
 import type { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import type Database from 'better-sqlite3';
 import { z } from 'zod';
-import { toolResult, toolErrorResult } from './errors.js';
+import { ok, fail } from './errors.js';
 import { updateGlobalField } from '../../global-fields/crud.js';
 import { renderFieldsFile, renderSchemaFile } from '../../schema/render.js';
 import { rerenderNodesWithField } from '../../schema/propagate.js';
@@ -48,13 +48,13 @@ export function registerUpdateGlobalField(server: McpServer, db: Database.Databa
             // their node_fields rows for this field were deleted
             const uncoercibleIds = result.uncoercible?.map(u => u.node_id);
             const nodes_rerendered = rerenderNodesWithField(db, ctx.writeLock, ctx.vaultPath, name, uncoercibleIds, ctx.syncLogger);
-            return toolResult({ ...result, nodes_rerendered });
+            return ok({ ...result, nodes_rerendered });
           }
         }
 
-        return toolResult(result);
+        return ok(result);
       } catch (err) {
-        return toolErrorResult('INVALID_PARAMS', err instanceof Error ? err.message : String(err));
+        return fail('INVALID_PARAMS', err instanceof Error ? err.message : String(err));
       }
     },
   );

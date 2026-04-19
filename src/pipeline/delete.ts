@@ -5,7 +5,7 @@ import type { WriteLockManager } from '../sync/write-lock.js';
 import { refreshOnDelete } from '../resolver/refresh.js';
 
 export interface ProposedDeletion {
-  source: 'tool' | 'watcher' | 'reconciler' | 'fullIndex' | 'batch';
+  source: 'tool' | 'watcher' | 'reconciler' | 'fullIndex' | 'batch' | 'undo';
   node_id: string;
   file_path: string;
   unlink_file: boolean;

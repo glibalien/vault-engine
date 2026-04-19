@@ -17,7 +17,7 @@ export interface EditsLogEntry {
  */
 export function buildDeviationEntries(
   nodeId: string,
-  source: 'tool' | 'watcher' | 'normalizer' | 'propagation',
+  source: 'tool' | 'watcher' | 'normalizer' | 'propagation' | 'undo',
   coercedState: Record<string, CoercedValue>,
   issues: ValidationIssue[],
   nodeTypes: string[],

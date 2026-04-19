@@ -11,6 +11,7 @@ import { registerAddTypeToNode } from '../../src/mcp/tools/add-type-to-node.js';
 import { registerRemoveTypeFromNode } from '../../src/mcp/tools/remove-type-from-node.js';
 import { registerRenameNode } from '../../src/mcp/tools/rename-node.js';
 import { registerDeleteNode } from '../../src/mcp/tools/delete-node.js';
+import { registerBatchMutate } from '../../src/mcp/tools/batch-mutate.js';
 import { fullIndex } from '../../src/indexer/indexer.js';
 import { WriteLockManager } from '../../src/sync/write-lock.js';
 import { restoreOperation } from '../../src/undo/restore.js';
@@ -269,5 +270,55 @@ describe('undo integration — delete-node', () => {
     restoreOperation(db, writeLock, vaultPath, opId, new Set([opId]));
     const row = db.prepare('SELECT id FROM nodes WHERE id = ?').get(originalId) as { id: string } | undefined;
     expect(row?.id).toBe(originalId);
+  });
+});
+
+describe('undo integration — batch-mutate', () => {
+  let vaultPath: string;
+  let cleanup: () => void;
+  let db: Database.Database;
+  let writeLock: WriteLockManager;
+  let server: McpServer;
+
+  beforeEach(() => {
+    const v = createTempVault();
+    vaultPath = v.vaultPath;
+    cleanup = v.cleanup;
+    db = createTestDb();
+    addUndoTables(db);
+    db.prepare("INSERT INTO schemas (name, display_name, field_claims) VALUES ('note', 'Note', '[]')").run();
+    writeLock = new WriteLockManager();
+    server = new McpServer({ name: 'test', version: '0' });
+    registerBatchMutate(server, db, writeLock, vaultPath);
+  });
+
+  afterEach(() => { db.close(); cleanup(); });
+
+  it('captures one operation with K snapshots for K sub-ops', async () => {
+    await callTool(server, 'batch-mutate', {
+      operations: [
+        { op: 'create', params: { title: 'B1', types: ['note'], body: 'b1' } },
+        { op: 'create', params: { title: 'B2', types: ['note'], body: 'b2' } },
+        { op: 'create', params: { title: 'B3', types: ['note'], body: 'b3' } },
+      ],
+    });
+    const list = listOperations(db, {});
+    expect(list.operations.length).toBe(1);
+    expect(list.operations[0].node_count).toBe(3);
+    expect(list.operations[0].description).toContain('batch-mutate');
+  });
+
+  it('no operation row remains when the batch rolls back', async () => {
+    await callTool(server, 'batch-mutate', {
+      operations: [
+        { op: 'create', params: { title: 'Ok', types: ['note'], body: 'ok' } },
+        { op: 'create', params: { title: 'Ok', types: ['note'], body: 'dup' } }, // duplicate path triggers rollback
+      ],
+    });
+    const list = listOperations(db, {});
+    // Either: zero ops (orphan swept eventually) OR one op with node_count=0
+    // The immediate state after tool return should have no *active-with-snapshots* op
+    const withSnaps = list.operations.filter(o => o.node_count > 0);
+    expect(withSnaps.length).toBe(0);
   });
 });

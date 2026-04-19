@@ -15,6 +15,7 @@ import { backupFile, restoreFile, cleanupBackups } from '../../pipeline/file-wri
 import { executeDeletion } from '../../pipeline/delete.js';
 import { checkTypesHaveSchemas } from '../../pipeline/check-types.js';
 import { buildFixable } from '../../validation/fixable.js';
+import { createOperation, finalizeOperation } from '../../undo/operation.js';
 import type { WriteLockManager } from '../../sync/write-lock.js';
 import type { SyncLogger } from '../../sync/sync-logger.js';
 import type { EmbeddingIndexer } from '../../search/indexer.js';
@@ -81,6 +82,11 @@ export function registerBatchMutate(
 
       let batchError: { failed_at: number; op: string; message: string; details: Record<string, unknown> } | null = null as { failed_at: number; op: string; message: string; details: Record<string, unknown> } | null;
 
+      const operation_id = createOperation(db, {
+        source_tool: 'batch-mutate',
+        description: `batch-mutate: ${params.operations.length} ops (${countKinds(params.operations)})`,
+      });
+
       const txn = db.transaction(() => {
         for (let i = 0; i < params.operations.length; i++) {
           const { op, params: opParams } = params.operations[i];
@@ -116,7 +122,7 @@ export function registerBatchMutate(
                 types,
                 fields,
                 body,
-              }, syncLogger);
+              }, syncLogger, { operation_id });
               if (result.file_written) createdFiles.push(absPath);
               results.push({ op: 'create', node_id: result.node_id, file_path: result.file_path });
 
@@ -195,7 +201,7 @@ export function registerBatchMutate(
                 types: finalTypes,
                 fields: finalFields,
                 body: finalBody,
-              }, syncLogger);
+              }, syncLogger, { operation_id });
               results.push({ op: 'update', node_id: result.node_id, file_path: result.file_path });
 
             } else if (op === 'delete') {
@@ -218,7 +224,7 @@ export function registerBatchMutate(
                 node_id: node.node_id,
                 file_path: node.file_path,
                 unlink_file: true,
-              });
+              }, { operation_id });
               deletedNodeIds.push(node.node_id);
 
               results.push({ op: 'delete', node_id: node.node_id, file_path: node.file_path });
@@ -244,51 +250,61 @@ export function registerBatchMutate(
       });
 
       try {
-        const applied = txn();
-        // Success: clean up backups and orphaned vec rows for deleted nodes.
-        cleanupBackups(backups.map(b => b.backupPath));
-        for (const nodeId of deletedNodeIds) {
-          embeddingIndexer?.removeNode(nodeId);
-        }
-        return ok({ applied: true, results: applied });
-      } catch {
-        // DB transaction rolled back. Now revert file writes.
-        const rollbackFailures: string[] = [];
+        try {
+          const applied = txn();
+          // Success: clean up backups and orphaned vec rows for deleted nodes.
+          cleanupBackups(backups.map(b => b.backupPath));
+          for (const nodeId of deletedNodeIds) {
+            embeddingIndexer?.removeNode(nodeId);
+          }
+          return ok({ applied: true, results: applied });
+        } catch {
+          // DB transaction rolled back. Now revert file writes.
+          const rollbackFailures: string[] = [];
 
-        // 1. Restore backed-up files (updates and deletes)
-        for (const { filePath, backupPath } of backups) {
-          try {
-            restoreFile(backupPath, filePath);
-          } catch (err) {
-            const msg = `Failed to restore ${filePath}: ${err instanceof Error ? err.message : err}`;
-            console.error(`[batch-mutate] ${msg}`);
-            rollbackFailures.push(msg);
+          // 1. Restore backed-up files (updates and deletes)
+          for (const { filePath, backupPath } of backups) {
+            try {
+              restoreFile(backupPath, filePath);
+            } catch (err) {
+              const msg = `Failed to restore ${filePath}: ${err instanceof Error ? err.message : err}`;
+              console.error(`[batch-mutate] ${msg}`);
+              rollbackFailures.push(msg);
+            }
           }
-        }
-        // 2. Delete newly created files
-        for (const absPath of createdFiles) {
-          try {
-            unlinkSync(absPath);
-          } catch (err) {
-            const msg = `Failed to delete ${absPath}: ${err instanceof Error ? err.message : err}`;
-            console.error(`[batch-mutate] ${msg}`);
-            rollbackFailures.push(msg);
+          // 2. Delete newly created files
+          for (const absPath of createdFiles) {
+            try {
+              unlinkSync(absPath);
+            } catch (err) {
+              const msg = `Failed to delete ${absPath}: ${err instanceof Error ? err.message : err}`;
+              console.error(`[batch-mutate] ${msg}`);
+              rollbackFailures.push(msg);
+            }
           }
-        }
 
-        if (batchError) {
-          const details: Record<string, unknown> = {
-            failed_at: batchError.failed_at,
-            op: batchError.op,
-            ...batchError.details,
-          };
-          if (rollbackFailures.length > 0) {
-            details.rollback_failures = rollbackFailures;
+          if (batchError) {
+            const details: Record<string, unknown> = {
+              failed_at: batchError.failed_at,
+              op: batchError.op,
+              ...batchError.details,
+            };
+            if (rollbackFailures.length > 0) {
+              details.rollback_failures = rollbackFailures;
+            }
+            return fail('BATCH_FAILED', batchError.message, { details });
           }
-          return fail('BATCH_FAILED', batchError.message, { details });
+          return fail('INTERNAL_ERROR', 'Batch operation failed');
         }
-        return fail('INTERNAL_ERROR', 'Batch operation failed');
+      } finally {
+        finalizeOperation(db, operation_id);
       }
     },
   );
+}
+
+function countKinds(ops: Array<{ op: string }>): string {
+  const counts: Record<string, number> = {};
+  for (const o of ops) counts[o.op] = (counts[o.op] ?? 0) + 1;
+  return Object.entries(counts).map(([k, v]) => `${v} ${k}`).join(', ');
 }

@@ -260,6 +260,7 @@ export interface IndexStats {
 
 export interface IndexerOptions {
   onNodeIndexed?: (nodeId: string) => void;
+  onNodeDeleted?: (nodeId: string) => void;
 }
 
 /**
@@ -288,6 +289,7 @@ export function fullIndex(vaultPath: string, db: Database.Database, options?: In
         stmts.insertEditLog.run(node.id, Date.now(), 'file-deleted', node.file_path);
         // Delete node (cascade handles types, fields, relationships)
         stmts.deleteNode.run(node.id);
+        options?.onNodeDeleted?.(node.id);
         stats.deleted++;
       }
     }

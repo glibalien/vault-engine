@@ -120,6 +120,12 @@ export function registerUpdateNode(
 
       // ── Query mode ──────────────────────────────────────────────────
       if (hasQuery) {
+        if (params.set_types !== undefined) {
+          return toolErrorResult(
+            'INVALID_PARAMS',
+            'set_types is not supported in query mode. Use add_types/remove_types for bulk type changes across filtered nodes.',
+          );
+        }
         const hasOp = params.set_fields !== undefined || params.add_types !== undefined || params.remove_types !== undefined || params.set_directory !== undefined;
         if (!hasOp) {
           return toolErrorResult('INVALID_PARAMS', 'Query mode requires at least one operation: set_fields, add_types, remove_types, or set_directory');
@@ -194,6 +200,16 @@ export function registerUpdateNode(
       // Compute final types: set_types wins outright, otherwise apply add/remove
       let finalTypes: string[];
       const hasTypeOp = set_types !== undefined || params.add_types !== undefined || params.remove_types !== undefined;
+      const ignored: string[] = [];
+      if (params.add_types !== undefined) ignored.push('add_types');
+      if (params.remove_types !== undefined) ignored.push('remove_types');
+      const typeOpConflict: ToolIssue[] =
+        set_types !== undefined && ignored.length > 0
+          ? [{
+              code: 'TYPE_OP_CONFLICT',
+              message: `set_types was provided — ${ignored.join(' and ')} ${ignored.length === 1 ? 'was' : 'were'} ignored. Send only set_types for a full replacement, or only add_types/remove_types for incremental changes.`,
+            }]
+          : [];
       if (set_types !== undefined) {
         finalTypes = set_types;
       } else {
@@ -244,7 +260,7 @@ export function registerUpdateNode(
             title: finalTitle,
             types: finalTypes,
             coerced_state: validation.coerced_state,
-            issues: [...validation.issues, ...titleIssues],
+            issues: [...validation.issues, ...titleIssues, ...typeOpConflict],
             fixable: buildFixable(validation.issues, validation.effective_fields),
             orphan_fields: validation.orphan_fields,
           },
@@ -281,7 +297,7 @@ export function registerUpdateNode(
             types: finalTypes,
             references_updated: refsUpdated,
             coerced_state: mutResult.validation.coerced_state,
-            issues: [...mutResult.validation.issues, ...titleIssues],
+            issues: [...mutResult.validation.issues, ...titleIssues, ...typeOpConflict],
             orphan_fields: mutResult.validation.orphan_fields,
           });
         }
@@ -303,7 +319,7 @@ export function registerUpdateNode(
           title: finalTitle,
           types: finalTypes,
           coerced_state: result.validation.coerced_state,
-          issues: result.validation.issues,
+          issues: [...result.validation.issues, ...typeOpConflict],
           orphan_fields: result.validation.orphan_fields,
         });
       } catch (err) {

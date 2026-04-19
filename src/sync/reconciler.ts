@@ -8,6 +8,7 @@ import { processFileChange } from './watcher.js';
 import type { IndexMutex } from './mutex.js';
 import type { WriteLockManager } from './write-lock.js';
 import type { SyncLogger } from './sync-logger.js';
+import type { EmbeddingIndexer } from '../search/indexer.js';
 
 export interface ReconcilerOptions {
   initialDelayMs?: number;
@@ -20,6 +21,7 @@ export function startReconciler(
   mutex: IndexMutex,
   writeLock?: WriteLockManager,
   syncLogger?: SyncLogger,
+  embeddingIndexer?: EmbeddingIndexer,
   options?: ReconcilerOptions,
 ): { stop: () => void } {
   const initialDelayMs = options?.initialDelayMs ?? 2 * 60 * 1000;
@@ -38,7 +40,7 @@ export function startReconciler(
       const dbNodes = db.prepare('SELECT id, file_path FROM nodes').all() as { id: string; file_path: string }[];
       for (const node of dbNodes) {
         if (!diskFiles.has(node.file_path)) {
-          deleteNodeByPath(node.file_path, db);
+          deleteNodeByPath(node.file_path, db, embeddingIndexer);
           stats.deleted++;
         }
       }
@@ -73,7 +75,11 @@ export function startReconciler(
             processFileChange(absPath, relPath, db, writeLock, vaultPath, syncLogger);
           }
           stats.indexed++;
-        } catch {
+        } catch (err) {
+          const msg = err instanceof Error ? err.message : String(err);
+          db.prepare(
+            'INSERT INTO edits_log (node_id, timestamp, event_type, details) VALUES (?, ?, ?, ?)',
+          ).run(null, Date.now(), 'reconciler-error', `${relPath}: ${msg}`);
           stats.errors++;
         }
       }

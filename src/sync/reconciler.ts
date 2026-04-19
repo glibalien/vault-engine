@@ -3,10 +3,10 @@ import { join, relative } from 'node:path';
 import type Database from 'better-sqlite3';
 import { sha256 } from '../indexer/hash.js';
 import { shouldIgnore } from '../indexer/ignore.js';
-import { deleteNodeByPath } from '../indexer/indexer.js';
+import { executeDeletion } from '../pipeline/delete.js';
 import { processFileChange } from './watcher.js';
 import type { IndexMutex } from './mutex.js';
-import type { WriteLockManager } from './write-lock.js';
+import { WriteLockManager } from './write-lock.js';
 import type { SyncLogger } from './sync-logger.js';
 import type { EmbeddingIndexer } from '../search/indexer.js';
 
@@ -40,7 +40,13 @@ export function startReconciler(
       const dbNodes = db.prepare('SELECT id, file_path FROM nodes').all() as { id: string; file_path: string }[];
       for (const node of dbNodes) {
         if (!diskFiles.has(node.file_path)) {
-          deleteNodeByPath(node.file_path, db, embeddingIndexer);
+          executeDeletion(db, writeLock ?? new WriteLockManager(), vaultPath, {
+            source: 'reconciler',
+            node_id: node.id,
+            file_path: node.file_path,
+            unlink_file: false,
+          });
+          embeddingIndexer?.removeNode(node.id);
           stats.deleted++;
         }
       }

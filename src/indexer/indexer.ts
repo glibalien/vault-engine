@@ -8,9 +8,7 @@ import { splitFrontmatter } from '../parser/frontmatter.js';
 import type { WikiLink, YamlValue } from '../parser/types.js';
 import { sha256 } from './hash.js';
 import { shouldIgnore } from './ignore.js';
-import type { EmbeddingIndexer } from '../search/indexer.js';
 import { resolveTarget } from '../resolver/resolve.js';
-import { refreshOnDelete } from '../resolver/refresh.js';
 import { executeDeletion } from '../pipeline/delete.js';
 import { WriteLockManager } from '../sync/write-lock.js';
 
@@ -370,33 +368,3 @@ export function indexFile(absolutePath: string, vaultPath: string, db: Database.
   return nodeId;
 }
 
-/**
- * Remove a node by its vault-relative file path.
- */
-export function deleteNodeByPath(filePath: string, db: Database.Database, embeddingIndexer?: EmbeddingIndexer): boolean {
-  const stmts = prepareStatements(db);
-
-  const existing = stmts.getNodeByPath.get(filePath) as { id: string } | undefined;
-  if (!existing) return false;
-
-  const txn = db.transaction(() => {
-    // Delete FTS entry
-    const rowInfo = stmts.getNodeRowid.get(existing.id) as { rowid: number } | undefined;
-    if (rowInfo) {
-      stmts.deleteFts.run(rowInfo.rowid);
-    }
-    // Log
-    stmts.insertEditLog.run(existing.id, Date.now(), 'file-deleted', filePath);
-    // Delete node (cascade)
-    stmts.deleteNode.run(existing.id);
-  });
-  txn();
-
-  refreshOnDelete(db, existing.id);
-
-  // Clean up embedding rows after node is confirmed deleted.
-  // embedding_vec is a vec0 virtual table with no FK cascade.
-  embeddingIndexer?.removeNode(existing.id);
-
-  return true;
-}

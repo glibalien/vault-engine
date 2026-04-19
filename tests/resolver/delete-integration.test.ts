@@ -1,15 +1,18 @@
 import { describe, it, expect, beforeEach } from 'vitest';
 import Database from 'better-sqlite3';
 import { createSchema } from '../../src/db/schema.js';
-import { deleteNodeByPath } from '../../src/indexer/indexer.js';
+import { executeDeletion } from '../../src/pipeline/delete.js';
+import { WriteLockManager } from '../../src/sync/write-lock.js';
 
 let db: Database.Database;
+let writeLock: WriteLockManager;
 
 beforeEach(() => {
   db = new Database(':memory:');
   db.pragma('journal_mode = WAL');
   db.pragma('foreign_keys = ON');
   createSchema(db);
+  writeLock = new WriteLockManager();
 });
 
 describe('delete lifecycle', () => {
@@ -24,7 +27,12 @@ describe('delete lifecycle', () => {
       'INSERT INTO relationships (source_id, target, rel_type, context, resolved_target_id) VALUES (?, ?, ?, NULL, ?)'
     ).run('src', 'Target', 'wiki-link', 'tgt');
 
-    deleteNodeByPath('Target.md', db);
+    executeDeletion(db, writeLock, '/tmp', {
+      source: 'tool',
+      node_id: 'tgt',
+      file_path: 'Target.md',
+      unlink_file: false,
+    });
 
     const row = db.prepare(
       'SELECT resolved_target_id, target FROM relationships WHERE source_id = ?'

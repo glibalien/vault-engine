@@ -69,7 +69,7 @@ export function executeMutation(
     const { claimsByType, globalFields } = loadSchemaContext(db, mutation.types);
 
     // ── Undo snapshot capture (pre-mutation state) ──────────────────
-    if (undoContext) {
+    if (undoContext && mutation.source !== 'undo') {
       if (mutation.node_id === null) {
         // Create: snapshot row with was_deleted = 1, other JSON columns null
         db.prepare(`
@@ -129,12 +129,12 @@ export function executeMutation(
     const retainedValues: Record<string, { retained_value: unknown; rejected_value: unknown }> = {};
     const defaultedFields: Array<{ field: string; default_value: unknown; default_source: 'global' | 'claim' }> = [];
 
-    if (mutation.source === 'tool' || mutation.source === 'normalizer' || mutation.source === 'propagation') {
-      // Tool path: check for blocking errors. Normalizer and propagation
-      // also tolerate REQUIRED_MISSING since they re-render existing DB state
+    if (mutation.source === 'tool' || mutation.source === 'normalizer' || mutation.source === 'propagation' || mutation.source === 'undo') {
+      // Tool path: check for blocking errors. Normalizer, propagation, and undo
+      // also tolerate REQUIRED_MISSING since they re-render / restore DB state
       // without backfilling defaults — pre-existing violations must not
-      // block schema-driven re-renders.
-      const isReRenderPath = mutation.source === 'normalizer' || mutation.source === 'propagation';
+      // block schema-driven re-renders or undo restorations.
+      const isReRenderPath = mutation.source === 'normalizer' || mutation.source === 'propagation' || mutation.source === 'undo';
       const toleratedCodes = isReRenderPath
         ? new Set(['MERGE_CONFLICT', 'REQUIRED_MISSING'])
         : new Set(['MERGE_CONFLICT']);
@@ -318,7 +318,12 @@ export function executeMutation(
 
       // Capture prior identity BEFORE the UPSERT to detect rename.
       // (create = no prior row; rename = file_path or title changed.)
-      const isCreate = mutation.node_id === null;
+      // For source='undo', a caller-provided node_id that does not yet exist
+      // in `nodes` counts as a create (undo may be restoring a previously
+      // deleted node with its original id).
+      const isCreate =
+        mutation.node_id === null
+        || (mutation.source === 'undo' && !db.prepare('SELECT 1 FROM nodes WHERE id = ?').get(mutation.node_id));
       const prior = !isCreate
         ? (db.prepare('SELECT file_path, title FROM nodes WHERE id = ?').get(nodeId) as
             | { file_path: string; title: string | null }
@@ -428,7 +433,7 @@ export function executeMutation(
       }
 
       // ── Undo snapshot finalization (post-mutation hash) ─────────────
-      if (undoContext) {
+      if (undoContext && mutation.source !== 'undo') {
         if (isCreate) {
           // Swap placeholder node_id for the generated one and record hash
           db.prepare(`

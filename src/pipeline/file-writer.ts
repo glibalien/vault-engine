@@ -1,7 +1,7 @@
 // src/pipeline/file-writer.ts
 //
 // Atomic file writes via write-to-temp-then-rename.
-// Used by the pipeline (Stage 6) and propagation re-renders.
+// Used by the pipeline (Stage 6) and batch-mutate's multi-op rollback.
 
 import { writeFileSync, renameSync, mkdirSync, existsSync, readFileSync, copyFileSync, unlinkSync } from 'node:fs';
 import { join, dirname } from 'node:path';
@@ -29,7 +29,7 @@ export function atomicWriteFile(targetPath: string, content: string, tmpDir: str
 }
 
 /**
- * Back up a file for potential rollback during propagation.
+ * Back up a file for potential rollback during batch-mutate.
  * Returns the backup path, or null if the file doesn't exist.
  */
 export function backupFile(filePath: string, tmpDir: string): string | null {
@@ -52,7 +52,7 @@ export function restoreFile(backupPath: string, targetPath: string): void {
 }
 
 /**
- * Clean up backup files after a successful propagation.
+ * Clean up backup files after a successful batch-mutate.
  */
 export function cleanupBackups(backupPaths: string[]): void {
   for (const bp of backupPaths) {

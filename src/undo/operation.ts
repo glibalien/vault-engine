@@ -1,0 +1,91 @@
+// src/undo/operation.ts
+
+import { nanoid } from 'nanoid';
+import type Database from 'better-sqlite3';
+import type { UndoOperationRow, UndoSnapshotRow } from './types.js';
+
+export interface CreateOperationParams {
+  source_tool: string;
+  description: string;
+}
+
+export function createOperation(
+  db: Database.Database,
+  params: CreateOperationParams,
+): string {
+  const operation_id = nanoid();
+  db.prepare(`
+    INSERT INTO undo_operations (operation_id, timestamp, source_tool, description, node_count, status)
+    VALUES (?, ?, ?, ?, 0, 'active')
+  `).run(operation_id, Date.now(), params.source_tool, params.description);
+  return operation_id;
+}
+
+export function finalizeOperation(db: Database.Database, operation_id: string): void {
+  const count = (db.prepare('SELECT COUNT(*) AS c FROM undo_snapshots WHERE operation_id = ?')
+    .get(operation_id) as { c: number }).c;
+  db.prepare('UPDATE undo_operations SET node_count = ? WHERE operation_id = ?')
+    .run(count, operation_id);
+}
+
+export function markUndone(db: Database.Database, operation_id: string): void {
+  db.prepare("UPDATE undo_operations SET status = 'undone' WHERE operation_id = ?")
+    .run(operation_id);
+}
+
+export function getOperation(db: Database.Database, operation_id: string): UndoOperationRow | null {
+  const row = db.prepare('SELECT * FROM undo_operations WHERE operation_id = ?').get(operation_id) as UndoOperationRow | undefined;
+  return row ?? null;
+}
+
+export function getSnapshots(db: Database.Database, operation_id: string): UndoSnapshotRow[] {
+  return db.prepare('SELECT * FROM undo_snapshots WHERE operation_id = ?')
+    .all(operation_id) as UndoSnapshotRow[];
+}
+
+export interface ListParams {
+  since?: string;           // ISO 8601
+  until?: string;           // ISO 8601
+  source_tool?: string;
+  status?: 'active' | 'undone' | 'expired' | 'all';
+  limit?: number;           // default 20, max 100
+}
+
+export interface ListResult {
+  operations: UndoOperationRow[];
+  truncated: boolean;
+}
+
+export function listOperations(db: Database.Database, params: ListParams = {}): ListResult {
+  const limit = Math.min(params.limit ?? 20, 100);
+  const clauses: string[] = [];
+  const values: (string | number)[] = [];
+
+  const status = params.status ?? 'active';
+  if (status !== 'all') {
+    clauses.push('status = ?');
+    values.push(status);
+  }
+  if (params.source_tool) {
+    clauses.push('source_tool = ?');
+    values.push(params.source_tool);
+  }
+  if (params.since) {
+    clauses.push('timestamp >= ?');
+    values.push(new Date(params.since).getTime());
+  }
+  if (params.until) {
+    clauses.push('timestamp <= ?');
+    values.push(new Date(params.until).getTime());
+  }
+
+  const where = clauses.length ? `WHERE ${clauses.join(' AND ')}` : '';
+  const rows = db.prepare(
+    `SELECT * FROM undo_operations ${where} ORDER BY timestamp DESC LIMIT ?`
+  ).all(...values, limit + 1) as UndoOperationRow[];
+
+  return {
+    operations: rows.slice(0, limit),
+    truncated: rows.length > limit,
+  };
+}

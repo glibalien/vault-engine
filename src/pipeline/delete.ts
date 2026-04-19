@@ -2,7 +2,6 @@ import { unlinkSync } from 'node:fs';
 import type Database from 'better-sqlite3';
 import { safeVaultPath } from './safe-path.js';
 import type { WriteLockManager } from '../sync/write-lock.js';
-import type { SyncLogger } from '../sync/sync-logger.js';
 import { refreshOnDelete } from '../resolver/refresh.js';
 
 export interface ProposedDeletion {
@@ -24,7 +23,6 @@ export function executeDeletion(
   writeLock: WriteLockManager,
   vaultPath: string,
   deletion: ProposedDeletion,
-  _syncLogger?: SyncLogger,
 ): DeletionResult {
   const existing = db.prepare('SELECT rowid FROM nodes WHERE id = ?').get(deletion.node_id) as
     | { rowid: number }

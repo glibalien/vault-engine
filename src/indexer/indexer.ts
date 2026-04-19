@@ -259,7 +259,6 @@ export interface IndexStats {
 export interface IndexerOptions {
   onNodeIndexed?: (nodeId: string) => void;
   onNodeDeleted?: (nodeId: string) => void;
-  writeLock?: WriteLockManager;
 }
 
 /**
@@ -268,7 +267,7 @@ export interface IndexerOptions {
 export function fullIndex(vaultPath: string, db: Database.Database, options?: IndexerOptions): IndexStats {
   const stmts = prepareStatements(db);
   const stats: IndexStats = { indexed: 0, skipped: 0, deleted: 0, errors: 0 };
-  const lockManager = options?.writeLock ?? new WriteLockManager();
+  const lockManager = new WriteLockManager();
 
   // 1. Walk vault
   const diskFiles = new Set(walkDir(vaultPath, vaultPath));

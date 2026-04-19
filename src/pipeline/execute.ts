@@ -283,16 +283,11 @@ export function executeMutation(
     if (mutation.node_id !== null && existingContent !== null && sha256(existingContent) === renderedHash && dbHash === renderedHash) {
       // The snapshot INSERT ran at Stage 1 before we knew this was a no-op.
       // Delete it here so the committing txn doesn't leave an orphan row
-      // with post_mutation_hash = NULL polluting undo history.
+      // with post_mutation_hash = NULL polluting undo history. Only reachable
+      // for non-null node_id per the outer guard, so no placeholder case.
       if (undoContext) {
-        if (mutation.node_id === null) {
-          // Placeholder row
-          db.prepare('DELETE FROM undo_snapshots WHERE operation_id = ? AND node_id = ?')
-            .run(undoContext.operation_id, `pending:${mutation.file_path}`);
-        } else {
-          db.prepare('DELETE FROM undo_snapshots WHERE operation_id = ? AND node_id = ?')
-            .run(undoContext.operation_id, mutation.node_id);
-        }
+        db.prepare('DELETE FROM undo_snapshots WHERE operation_id = ? AND node_id = ?')
+          .run(undoContext.operation_id, mutation.node_id);
       }
       syncLogger?.noop(mutation.file_path, mutation.source);
       // Complete no-op: no file write, no DB changes, no edits log

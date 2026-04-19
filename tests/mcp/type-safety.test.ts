@@ -337,8 +337,12 @@ describe('batch-mutate type enforcement', () => {
         { op: 'create', params: { title: 'Bad', types: ['reference'], fields: {}, body: '' } },
       ],
     }) as any);
-    expect(result.applied).toBe(false);
+    expect(result.ok).toBe(false);
+    expect(result.error.code).toBe('BATCH_FAILED');
     expect(result.error.message).toContain('reference');
+    expect(result.error.details.failed_at).toBe(1);
+    expect(result.error.details.op).toBe('create');
+    expect(result.warnings).toEqual([]);
     // First op should have been rolled back
     const node = db.prepare('SELECT id FROM nodes WHERE title = ?').get('Good');
     expect(node).toBeUndefined();
@@ -353,8 +357,10 @@ describe('batch-mutate type enforcement', () => {
         { op: 'create', params: { title: 'Two', types: ['task'], fields: {}, body: '' } },
       ],
     }) as any);
-    expect(result.applied).toBe(true);
-    expect(result.results).toHaveLength(2);
+    expect(result.ok).toBe(true);
+    expect(result.data.applied).toBe(true);
+    expect(result.data.results).toHaveLength(2);
+    expect(result.warnings).toEqual([]);
   });
 });
 
@@ -379,7 +385,8 @@ describe('batch-mutate update operations', () => {
         { op: 'update', params: { title: 'Append Target', append_body: 'Appended section' } },
       ],
     }) as any);
-    expect(result.applied).toBe(true);
+    expect(result.ok).toBe(true);
+    expect(result.data.applied).toBe(true);
 
     // Verify the body was appended
     const row = db.prepare('SELECT body FROM nodes WHERE title = ?').get('Append Target') as { body: string };
@@ -396,7 +403,8 @@ describe('batch-mutate update operations', () => {
         { op: 'update', params: { title: 'Empty Body', append_body: 'First content' } },
       ],
     }) as any);
-    expect(result.applied).toBe(true);
+    expect(result.ok).toBe(true);
+    expect(result.data.applied).toBe(true);
 
     const row = db.prepare('SELECT body FROM nodes WHERE title = ?').get('Empty Body') as { body: string };
     expect(row.body).toBe('First content');
@@ -412,8 +420,11 @@ describe('batch-mutate update operations', () => {
         { op: 'update', params: { title: 'Both Body', set_body: 'A', append_body: 'B' } },
       ],
     }) as any);
-    expect(result.applied).toBe(false);
+    expect(result.ok).toBe(false);
+    expect(result.error.code).toBe('BATCH_FAILED');
     expect(result.error.message).toContain('mutually exclusive');
+    expect(result.error.details.failed_at).toBe(0);
+    expect(result.error.details.op).toBe('update');
   });
 
   it('add_types appends types without replacing', async () => {
@@ -426,7 +437,8 @@ describe('batch-mutate update operations', () => {
         { op: 'update', params: { title: 'Type Target', add_types: ['task'] } },
       ],
     }) as any);
-    expect(result.applied).toBe(true);
+    expect(result.ok).toBe(true);
+    expect(result.data.applied).toBe(true);
 
     const types = (db.prepare('SELECT schema_type FROM node_types WHERE node_id = (SELECT id FROM nodes WHERE title = ?)').all('Type Target') as Array<{ schema_type: string }>).map(t => t.schema_type);
     expect(types).toContain('note');
@@ -452,7 +464,8 @@ describe('batch-mutate update operations', () => {
         { op: 'update', params: { title: 'Remove Target', remove_types: ['note'] } },
       ],
     }) as any);
-    expect(result.applied).toBe(true);
+    expect(result.ok).toBe(true);
+    expect(result.data.applied).toBe(true);
 
     const types = (db.prepare('SELECT schema_type FROM node_types WHERE node_id = (SELECT id FROM nodes WHERE title = ?)').all('Remove Target') as Array<{ schema_type: string }>).map(t => t.schema_type);
     expect(types).toEqual(['task']);
@@ -470,8 +483,9 @@ describe('batch-mutate update operations', () => {
         { op: 'update', params: { title: 'Daily Note', append_body: '## Reading\n- [[New Clipping]]' } },
       ],
     }) as any);
-    expect(result.applied).toBe(true);
-    expect(result.results).toHaveLength(2);
+    expect(result.ok).toBe(true);
+    expect(result.data.applied).toBe(true);
+    expect(result.data.results).toHaveLength(2);
 
     const row = db.prepare('SELECT body FROM nodes WHERE title = ?').get('Daily Note') as { body: string };
     expect(row.body).toBe('## Morning\n\n## Reading\n- [[New Clipping]]');

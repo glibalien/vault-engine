@@ -79,4 +79,24 @@ describe('executeMutation — undo snapshot capture', () => {
     const count = (db.prepare('SELECT COUNT(*) AS c FROM undo_snapshots').get() as { c: number }).c;
     expect(count).toBe(0);
   });
+
+  it('does not leave a snapshot row when the mutation is a no-op (identical re-submit)', () => {
+    // Create a node (no undoContext)
+    const createRes = executeMutation(db, writeLock, vaultPath, {
+      source: 'tool', node_id: null, file_path: 'noop.md',
+      title: 'NoOp', types: ['note'], fields: {}, body: 'same',
+    });
+
+    // Re-submit identical state with an undoContext — should be a no-op.
+    db.prepare("INSERT INTO undo_operations (operation_id, timestamp, source_tool, description, node_count, status) VALUES (?, ?, ?, ?, 0, 'active')")
+      .run('op-noop', Date.now(), 'update-node', 'noop');
+
+    executeMutation(db, writeLock, vaultPath, {
+      source: 'tool', node_id: createRes.node_id, file_path: 'noop.md',
+      title: 'NoOp', types: ['note'], fields: {}, body: 'same',
+    }, undefined, { operation_id: 'op-noop' });
+
+    const count = (db.prepare('SELECT COUNT(*) AS c FROM undo_snapshots WHERE operation_id = ?').get('op-noop') as { c: number }).c;
+    expect(count).toBe(0);
+  });
 });

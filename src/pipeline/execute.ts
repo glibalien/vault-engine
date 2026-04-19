@@ -79,7 +79,10 @@ export function executeMutation(
           ) VALUES (?, ?, ?, NULL, NULL, NULL, NULL, NULL, 1, NULL)
         `).run(undoContext.operation_id, `pending:${mutation.file_path}`, mutation.file_path);
       } else {
-        // Update: snapshot current DB state
+        // Update: snapshot current DB state.
+        // NB: if the node doesn't exist yet (caller-provided node_id for a
+        // future undo-restore-delete), we skip capture here. Task 5 handles
+        // the source='undo' create-with-id path explicitly.
         const nodeRow = db.prepare('SELECT file_path, title, body FROM nodes WHERE id = ?')
           .get(mutation.node_id) as { file_path: string; title: string | null; body: string | null } | undefined;
         if (nodeRow) {
@@ -278,6 +281,19 @@ export function executeMutation(
       ? (db.prepare('SELECT content_hash FROM nodes WHERE id = ?').get(mutation.node_id) as { content_hash: string } | undefined)?.content_hash
       : undefined;
     if (mutation.node_id !== null && existingContent !== null && sha256(existingContent) === renderedHash && dbHash === renderedHash) {
+      // The snapshot INSERT ran at Stage 1 before we knew this was a no-op.
+      // Delete it here so the committing txn doesn't leave an orphan row
+      // with post_mutation_hash = NULL polluting undo history.
+      if (undoContext) {
+        if (mutation.node_id === null) {
+          // Placeholder row
+          db.prepare('DELETE FROM undo_snapshots WHERE operation_id = ? AND node_id = ?')
+            .run(undoContext.operation_id, `pending:${mutation.file_path}`);
+        } else {
+          db.prepare('DELETE FROM undo_snapshots WHERE operation_id = ? AND node_id = ?')
+            .run(undoContext.operation_id, mutation.node_id);
+        }
+      }
       syncLogger?.noop(mutation.file_path, mutation.source);
       // Complete no-op: no file write, no DB changes, no edits log
       return {

@@ -1,7 +1,7 @@
 import type { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import type Database from 'better-sqlite3';
 import { z } from 'zod';
-import { toolResult, toolErrorResult } from './errors.js';
+import { ok, fail } from './errors.js';
 import { updateSchemaDefinition } from '../../schema/crud.js';
 import { diffClaims, propagateSchemaChange } from '../../schema/propagate.js';
 import { renderSchemaFile } from '../../schema/render.js';
@@ -73,9 +73,9 @@ export function registerUpdateSchema(server: McpServer, db: Database.Database, c
         // Re-render schema YAML file
         if (ctx?.vaultPath) renderSchemaFile(db, ctx.vaultPath, name);
 
-        return toolResult({ ...result, propagation });
+        return ok({ ...result, propagation });
       } catch (err) {
-        return toolErrorResult('INVALID_PARAMS', err instanceof Error ? err.message : String(err));
+        return fail('INVALID_PARAMS', err instanceof Error ? err.message : String(err));
       }
     },
   );

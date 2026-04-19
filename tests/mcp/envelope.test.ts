@@ -1,4 +1,4 @@
-import { describe, it, expect, beforeEach } from 'vitest';
+import { describe, it, expect, beforeEach, afterEach } from 'vitest';
 import { mkdtempSync, rmSync } from 'node:fs';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
@@ -63,6 +63,10 @@ describe('envelope invariant', () => {
     db = createTestDb();
   });
 
+  afterEach(() => {
+    rmSync(tmp, { recursive: true, force: true });
+  });
+
   it('list-types returns a valid success envelope', async () => {
     const handler = captureHandler(registerListTypes, db);
     const env = parse(await handler({}) as any);
@@ -101,6 +105,5 @@ describe('envelope invariant', () => {
     expect(env.error?.code).toBe('UNKNOWN_TYPE');
     expect(env.error?.details).toHaveProperty('unknown_types');
     expect(env.error?.details).toHaveProperty('available_schemas');
-    rmSync(tmp, { recursive: true, force: true });
   });
 });

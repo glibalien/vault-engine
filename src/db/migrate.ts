@@ -328,3 +328,47 @@ export function upgradeForResolvedTargetId(db: Database.Database): void {
   });
   run();
 }
+
+/**
+ * Migration: add undo_operations and undo_snapshots tables (2026-04-19).
+ *
+ * Snapshot-based operation-level undo. See
+ * docs/superpowers/specs/2026-04-19-undo-system-design.md.
+ *
+ * Idempotent — safe to run on a database that already has the tables.
+ */
+export function addUndoTables(db: Database.Database): void {
+  const run = db.transaction(() => {
+    db.prepare(`
+      CREATE TABLE IF NOT EXISTS undo_operations (
+        operation_id TEXT PRIMARY KEY,
+        timestamp    INTEGER NOT NULL,
+        source_tool  TEXT NOT NULL,
+        description  TEXT NOT NULL,
+        node_count   INTEGER NOT NULL DEFAULT 0,
+        status       TEXT NOT NULL DEFAULT 'active'
+      )
+    `).run();
+
+    db.prepare(`
+      CREATE TABLE IF NOT EXISTS undo_snapshots (
+        operation_id       TEXT NOT NULL REFERENCES undo_operations(operation_id) ON DELETE CASCADE,
+        node_id            TEXT NOT NULL,
+        file_path          TEXT NOT NULL,
+        title              TEXT,
+        body               TEXT,
+        types              TEXT,
+        fields             TEXT,
+        relationships      TEXT,
+        was_deleted        INTEGER NOT NULL,
+        post_mutation_hash TEXT,
+        PRIMARY KEY (operation_id, node_id)
+      )
+    `).run();
+
+    db.prepare('CREATE INDEX IF NOT EXISTS idx_undo_operations_timestamp ON undo_operations(timestamp)').run();
+    db.prepare('CREATE INDEX IF NOT EXISTS idx_undo_operations_status    ON undo_operations(status)').run();
+    db.prepare('CREATE INDEX IF NOT EXISTS idx_undo_snapshots_node       ON undo_snapshots(node_id)').run();
+  });
+  run();
+}

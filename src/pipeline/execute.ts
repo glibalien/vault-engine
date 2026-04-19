@@ -20,7 +20,7 @@ import { classifyValue, reconstructValue } from './classify-value.js';
 import { deriveRelationships } from './relationships.js';
 import { buildDeviationEntries, writeEditsLogEntries } from './edits-log.js';
 import { atomicWriteFile, readFileOrNull } from './file-writer.js';
-import type { ProposedMutation, PipelineResult } from './types.js';
+import type { ProposedMutation, PipelineResult, UndoContext } from './types.js';
 import { PipelineError } from './types.js';
 import type { FileContext } from '../validation/resolve-default.js';
 import { resolveTarget } from '../resolver/resolve.js';
@@ -42,6 +42,7 @@ export function executeMutation(
   vaultPath: string,
   mutation: ProposedMutation,
   syncLogger?: SyncLogger,
+  undoContext?: UndoContext,
 ): PipelineResult {
   const absPath = safeVaultPath(vaultPath, mutation.file_path);
 
@@ -66,6 +67,49 @@ export function executeMutation(
   const txn = db.transaction(() => {
     // ── Stage 1: Load schema context ────────────────────────────────
     const { claimsByType, globalFields } = loadSchemaContext(db, mutation.types);
+
+    // ── Undo snapshot capture (pre-mutation state) ──────────────────
+    if (undoContext) {
+      if (mutation.node_id === null) {
+        // Create: snapshot row with was_deleted = 1, other JSON columns null
+        db.prepare(`
+          INSERT INTO undo_snapshots (
+            operation_id, node_id, file_path, title, body, types, fields, relationships,
+            was_deleted, post_mutation_hash
+          ) VALUES (?, ?, ?, NULL, NULL, NULL, NULL, NULL, 1, NULL)
+        `).run(undoContext.operation_id, `pending:${mutation.file_path}`, mutation.file_path);
+      } else {
+        // Update: snapshot current DB state
+        const nodeRow = db.prepare('SELECT file_path, title, body FROM nodes WHERE id = ?')
+          .get(mutation.node_id) as { file_path: string; title: string | null; body: string | null } | undefined;
+        if (nodeRow) {
+          const typesArr = (db.prepare('SELECT schema_type FROM node_types WHERE node_id = ?')
+            .all(mutation.node_id) as Array<{ schema_type: string }>).map(r => r.schema_type);
+          const fieldsRows = db.prepare(
+            'SELECT field_name, value_text, value_number, value_date, value_json, value_raw_text, source FROM node_fields WHERE node_id = ?'
+          ).all(mutation.node_id);
+          const relRows = db.prepare(
+            'SELECT target, rel_type, context FROM relationships WHERE source_id = ?'
+          ).all(mutation.node_id);
+
+          db.prepare(`
+            INSERT INTO undo_snapshots (
+              operation_id, node_id, file_path, title, body, types, fields, relationships,
+              was_deleted, post_mutation_hash
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, 0, NULL)
+          `).run(
+            undoContext.operation_id,
+            mutation.node_id,
+            nodeRow.file_path,
+            nodeRow.title,
+            nodeRow.body,
+            JSON.stringify(typesArr),
+            JSON.stringify(fieldsRows),
+            JSON.stringify(relRows),
+          );
+        }
+      }
+    }
 
     // ── Stage 2: Validate and coerce ────────────────────────────────
     const validation = validateProposedState(
@@ -370,6 +414,24 @@ export function executeMutation(
         refreshOnCreate(db, nodeId);
       } else if (isRename) {
         refreshOnRename(db, nodeId);
+      }
+
+      // ── Undo snapshot finalization (post-mutation hash) ─────────────
+      if (undoContext) {
+        if (isCreate) {
+          // Swap placeholder node_id for the generated one and record hash
+          db.prepare(`
+            UPDATE undo_snapshots
+            SET node_id = ?, post_mutation_hash = ?
+            WHERE operation_id = ? AND node_id = ?
+          `).run(nodeId, contentHash, undoContext.operation_id, `pending:${mutation.file_path}`);
+        } else {
+          db.prepare(`
+            UPDATE undo_snapshots
+            SET post_mutation_hash = ?
+            WHERE operation_id = ? AND node_id = ?
+          `).run(contentHash, undoContext.operation_id, nodeId);
+        }
       }
 
       return {

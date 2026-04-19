@@ -2,6 +2,7 @@ import { describe, it, expect, beforeEach, afterEach } from 'vitest';
 import type { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import Database from 'better-sqlite3';
 import { createSchema } from '../../src/db/schema.js';
+import { addUndoTables } from '../../src/db/migrate.js';
 import { createSchemaDefinition } from '../../src/schema/crud.js';
 import { executeMutation } from '../../src/pipeline/execute.js';
 import { createTempVault } from '../helpers/vault.js';
@@ -54,6 +55,7 @@ beforeEach(() => {
   db.pragma('journal_mode = WAL');
   db.pragma('foreign_keys = ON');
   createSchema(db);
+  addUndoTables(db);
   writeLock = new WriteLockManager();
 
   createSchemaDefinition(db, { name: 'note', field_claims: [] });

@@ -2,6 +2,7 @@ import { describe, it, expect, beforeEach, afterEach } from 'vitest';
 import Database from 'better-sqlite3';
 import type { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import { createSchema } from '../../src/db/schema.js';
+import { addUndoTables } from '../../src/db/migrate.js';
 import { registerUpdateNode } from '../../src/mcp/tools/update-node.js';
 import { WriteLockManager } from '../../src/sync/write-lock.js';
 import { createTempVault } from '../helpers/vault.js';
@@ -50,6 +51,7 @@ beforeEach(() => {
   db.pragma('journal_mode = WAL');
   db.pragma('foreign_keys = ON');
   createSchema(db);
+  addUndoTables(db);
   lock = new WriteLockManager();
   // Seed schemas for all types referenced by fixture + mutations.
   const insertSchema = db.prepare('INSERT INTO schemas (name) VALUES (?)');

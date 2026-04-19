@@ -23,6 +23,7 @@ import type { NodeQueryFilter } from '../query-builder.js';
 import type { WriteLockManager } from '../../sync/write-lock.js';
 import type { SyncLogger } from '../../sync/sync-logger.js';
 import { checkTypesHaveSchemas } from '../../pipeline/check-types.js';
+import { createOperation, finalizeOperation } from '../../undo/operation.js';
 
 const _targetFilterSchema = z.object({
   types: z.array(z.string()).optional(),
@@ -276,6 +277,20 @@ export function registerUpdateNode(
         );
       }
 
+      // ── Undo operation setup (skipped for dry_run) ──────────────────
+      const operation_id = dryRun ? undefined : createOperation(db, {
+        source_tool: 'update-node',
+        description: buildSingleNodeDescription(node.title, {
+          set_title,
+          set_types,
+          add_types: params.add_types,
+          remove_types: params.remove_types,
+          set_fields,
+          set_body,
+          append_body,
+        }),
+      });
+
       try {
         if (titleChanged) {
           // Apply field/type/body changes first (with old file_path and title)
@@ -287,7 +302,7 @@ export function registerUpdateNode(
             types: finalTypes,
             fields: finalFields,
             body: finalBody,
-          }, syncLogger);
+          }, syncLogger, operation_id ? { operation_id } : undefined);
 
           // Then rename (file + DB + references)
           const { refsUpdated } = db.transaction(() => {
@@ -322,7 +337,7 @@ export function registerUpdateNode(
           types: finalTypes,
           fields: finalFields,
           body: finalBody,
-        }, syncLogger);
+        }, syncLogger, operation_id ? { operation_id } : undefined);
 
         return ok(
           {
@@ -353,6 +368,8 @@ export function registerUpdateNode(
           return fail('VALIDATION_FAILED', err.message);
         }
         return fail('INTERNAL_ERROR', err instanceof Error ? err.message : String(err));
+      } finally {
+        if (operation_id) finalizeOperation(db, operation_id);
       }
     },
   );
@@ -363,6 +380,33 @@ interface QueryModeOps {
   add_types?: string[];
   remove_types?: string[];
   set_directory?: string;
+}
+
+function buildSingleNodeDescription(
+  title: string,
+  params: {
+    set_title?: string;
+    set_types?: string[];
+    add_types?: string[];
+    remove_types?: string[];
+    set_fields?: Record<string, unknown>;
+    set_body?: string;
+    append_body?: string;
+  },
+): string {
+  const parts: string[] = [];
+  if (params.set_title !== undefined) parts.push('title');
+  if (params.set_types !== undefined) parts.push('types');
+  if (params.add_types !== undefined) parts.push('add_types');
+  if (params.remove_types !== undefined) parts.push('remove_types');
+  if (params.set_fields !== undefined) {
+    const n = Object.keys(params.set_fields).length;
+    parts.push(`${n} field${n === 1 ? '' : 's'}`);
+  }
+  if (params.set_body !== undefined) parts.push('body');
+  if (params.append_body !== undefined) parts.push('append_body');
+  const changes = parts.length > 0 ? parts.join(', ') : 'no-op';
+  return `update-node: ${changes} on '${title}'`;
 }
 
 function handleQueryMode(
@@ -412,7 +456,19 @@ function handleQueryMode(
     return handleDryRun(db, vaultPath, matchedNodes, ops, batchId, joinWarning);
   }
 
-  return handleExecution(db, writeLock, vaultPath, matchedNodes, ops, batchId, syncLogger);
+  // ── Undo operation setup (query mode) ──────────────────────────────
+  // One operation covers all matched-node mutations; finalize once in a
+  // finally so orphan snapshots still get tagged for cleanup on throw.
+  const operation_id = createOperation(db, {
+    source_tool: 'update-node',
+    description: `update-node query: updating ${matchedNodes.length} node(s)`,
+  });
+
+  try {
+    return handleExecution(db, writeLock, vaultPath, matchedNodes, ops, batchId, syncLogger, operation_id);
+  } finally {
+    finalizeOperation(db, operation_id);
+  }
 }
 
 function computeJoinWarning(
@@ -656,6 +712,7 @@ function handleExecution(
   ops: QueryModeOps,
   batchId: string,
   syncLogger?: SyncLogger,
+  operation_id?: string,
 ) {
   let updated = 0;
   let skipped = 0;
@@ -722,7 +779,7 @@ function handleExecution(
         types: newTypes,
         fields: newFields,
         body: node.body,
-      }, syncLogger);
+      }, syncLogger, operation_id ? { operation_id } : undefined);
 
       if (result.file_written) {
         updated++;

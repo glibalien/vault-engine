@@ -27,6 +27,7 @@ import { registerRenameNode } from './rename-node.js';
 import { registerBatchMutate } from './batch-mutate.js';
 import { registerReadEmbedded } from './read-embedded.js';
 import { registerQuerySyncLog } from './query-sync-log.js';
+import { registerListUndoHistory } from './list-undo-history.js';
 
 export function registerAllTools(server: McpServer, db: Database.Database, ctx?: { writeLock?: import('../../sync/write-lock.js').WriteLockManager; syncLogger?: import('../../sync/sync-logger.js').SyncLogger; vaultPath?: string; extractionCache?: import('../../extraction/cache.js').ExtractionCache; extractorRegistry?: import('../../extraction/registry.js').ExtractorRegistry; embeddingIndexer?: import('../../search/indexer.js').EmbeddingIndexer; embedder?: import('../../search/embedder.js').Embedder }): void {
   registerVaultStats(server, db, ctx?.extractorRegistry, ctx?.embeddingIndexer);
@@ -48,6 +49,7 @@ export function registerAllTools(server: McpServer, db: Database.Database, ctx?:
   registerValidateNode(server, db);
   registerInferFieldType(server, db);
   registerListFieldValues(server, db);
+  registerListUndoHistory(server, db);
 
   // Phase 6 extraction tools (require extractionCache and vaultPath)
   if (ctx?.extractionCache && ctx?.vaultPath) {

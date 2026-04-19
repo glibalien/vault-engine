@@ -310,7 +310,7 @@ export function registerUpdateNode(
               node_id: node.node_id,
               file_path: node.file_path,
               title: node.title,
-            }, finalTitle, effectiveFilePath, syncLogger);
+            }, finalTitle, effectiveFilePath, syncLogger, operation_id ? { operation_id } : undefined);
           })();
 
           const titleIssues: ToolIssue[] = checkTitleSafety(finalTitle);

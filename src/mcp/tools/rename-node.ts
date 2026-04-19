@@ -20,6 +20,7 @@ import { reconstructValue } from '../../pipeline/classify-value.js';
 import { resolveTarget } from '../../resolver/resolve.js';
 import type { WriteLockManager } from '../../sync/write-lock.js';
 import type { SyncLogger } from '../../sync/sync-logger.js';
+import { createOperation, finalizeOperation } from '../../undo/operation.js';
 
 const SKIP_TYPES = new Set(['code', 'inlineCode', 'yaml']);
 
@@ -35,6 +36,7 @@ export function executeRename(
   newTitle: string,
   newFilePath: string,
   syncLogger?: SyncLogger,
+  undoContext?: { operation_id: string },
 ): { refsUpdated: number } {
   const oldTitle = node.title;
   const oldFilePath = node.file_path;
@@ -93,7 +95,7 @@ export function executeRename(
     types,
     fields,
     body,
-  }, syncLogger);
+  }, syncLogger, undoContext);
 
   // 4. Update references in referencing nodes
   let refsUpdated = 0;
@@ -134,7 +136,7 @@ export function executeRename(
         types: refTypes,
         fields: refFields,
         body: newBody,
-      }, syncLogger);
+      }, syncLogger, undoContext);
       refsUpdated++;
     }
   }
@@ -211,17 +213,29 @@ export function registerRenameNode(
         }
       }
 
+      // ── Undo operation setup — shared id across rename + N ref updates ──
+      const operation_id = createOperation(db, {
+        source_tool: 'rename-node',
+        description: `rename-node: '${oldTitle}' -> '${params.new_title}' (references pending)`,
+      });
+
       // Execute in a single transaction
       const txn = db.transaction(() => {
         return executeRename(db, writeLock, vaultPath, {
           node_id: node.node_id,
           file_path: oldFilePath,
           title: oldTitle,
-        }, params.new_title, newFilePath, syncLogger);
+        }, params.new_title, newFilePath, syncLogger, { operation_id });
       });
 
       try {
         const { refsUpdated } = txn();
+        // Patch description now that refsUpdated is known.
+        db.prepare('UPDATE undo_operations SET description = ? WHERE operation_id = ?')
+          .run(
+            `rename-node: '${oldTitle}' -> '${params.new_title}' (${refsUpdated} references rewritten)`,
+            operation_id,
+          );
         const issues: ToolIssue[] = checkTitleSafety(params.new_title);
         return ok(
           {
@@ -236,6 +250,8 @@ export function registerRenameNode(
         );
       } catch (err) {
         return fail('INTERNAL_ERROR', err instanceof Error ? err.message : String(err));
+      } finally {
+        finalizeOperation(db, operation_id);
       }
     },
   );

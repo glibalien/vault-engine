@@ -75,7 +75,11 @@ export function startReconciler(
             processFileChange(absPath, relPath, db, writeLock, vaultPath, syncLogger);
           }
           stats.indexed++;
-        } catch {
+        } catch (err) {
+          const msg = err instanceof Error ? err.message : String(err);
+          db.prepare(
+            'INSERT INTO edits_log (node_id, timestamp, event_type, details) VALUES (?, ?, ?, ?)',
+          ).run(null, Date.now(), 'reconciler-error', `${relPath}: ${msg}`);
           stats.errors++;
         }
       }

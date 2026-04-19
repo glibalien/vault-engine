@@ -2,7 +2,7 @@ import type { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import type Database from 'better-sqlite3';
 import { z } from 'zod';
 import { join } from 'node:path';
-import { toolResult, toolErrorResult } from './errors.js';
+import { ok, fail } from './errors.js';
 import { renameGlobalField } from '../../global-fields/crud.js';
 import { rerenderNodesWithField } from '../../schema/propagate.js';
 import type { WriteLockManager } from '../../sync/write-lock.js';
@@ -26,9 +26,9 @@ export function registerRenameGlobalField(server: McpServer, db: Database.Databa
           nodes_rerendered = rerenderNodesWithField(db, ctx.writeLock, ctx.vaultPath, new_name, undefined, ctx.syncLogger);
         }
 
-        return toolResult({ ...result, nodes_rerendered });
+        return ok({ ...result, nodes_rerendered });
       } catch (err) {
-        return toolErrorResult('INVALID_PARAMS', err instanceof Error ? err.message : String(err));
+        return fail('INVALID_PARAMS', err instanceof Error ? err.message : String(err));
       }
     },
   );

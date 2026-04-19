@@ -3,11 +3,12 @@
 import type { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import type Database from 'better-sqlite3';
 import { z } from 'zod';
-import { toolResult, toolErrorResult } from './errors.js';
+import { ok, fail, adaptIssue, type Issue } from './errors.js';
 import { resolveNodeIdentity } from './resolve-identity.js';
 import { executeMutation } from '../../pipeline/execute.js';
 import { PipelineError } from '../../pipeline/types.js';
 import { reconstructValue } from '../../pipeline/classify-value.js';
+import { buildFixable } from '../../validation/fixable.js';
 import type { WriteLockManager } from '../../sync/write-lock.js';
 import type { SyncLogger } from '../../sync/sync-logger.js';
 
@@ -37,7 +38,7 @@ export function registerRemoveTypeFromNode(
         title: params.title,
       });
       if (!resolved.ok) {
-        return toolErrorResult(resolved.code, resolved.message);
+        return fail(resolved.code, resolved.message);
       }
       const { node } = resolved;
 
@@ -45,7 +46,7 @@ export function registerRemoveTypeFromNode(
         .all(node.node_id) as Array<{ schema_type: string }>).map(t => t.schema_type);
 
       if (!currentTypes.includes(params.type)) {
-        return toolErrorResult('NOT_FOUND', `Node does not have type "${params.type}"`);
+        return fail('NOT_FOUND', `Node does not have type "${params.type}"`);
       }
 
       const resultingTypes = currentTypes.filter(t => t !== params.type);
@@ -69,16 +70,26 @@ export function registerRemoveTypeFromNode(
 
       // Confirmation gate for typeless result
       if (resultingTypes.length === 0 && !params.confirm) {
-        return toolResult({
-          preview: true,
-          node_id: node.node_id,
-          file_path: node.file_path,
-          current_types: currentTypes,
-          removing_type: params.type,
-          resulting_types: [],
-          would_orphan_fields: wouldOrphanFields,
-          warning: 'Removing this type leaves the node with no types. All fields will become orphans.',
-        });
+        const warnings: Issue[] = [
+          {
+            code: 'LAST_TYPE_REMOVAL',
+            severity: 'warning',
+            message: 'Removing this type leaves the node with no types. All fields will become orphans.',
+            details: { would_orphan_fields: wouldOrphanFields },
+          },
+        ];
+        return ok(
+          {
+            preview: true,
+            node_id: node.node_id,
+            file_path: node.file_path,
+            current_types: currentTypes,
+            removing_type: params.type,
+            resulting_types: [],
+            would_orphan_fields: wouldOrphanFields,
+          },
+          warnings,
+        );
       }
 
       // Load current fields and body
@@ -116,7 +127,7 @@ export function registerRemoveTypeFromNode(
           );
         }
 
-        return toolResult({
+        return ok({
           node_id: result.node_id,
           file_path: result.file_path,
           types: resultingTypes,
@@ -124,10 +135,23 @@ export function registerRemoveTypeFromNode(
           edits_logged: result.edits_logged + (wouldOrphanFields.length > 0 ? 1 : 0),
         });
       } catch (err) {
-        if (err instanceof PipelineError) {
-          return toolErrorResult('VALIDATION_FAILED', err.message);
+        if (err instanceof PipelineError && err.validation) {
+          const errorCount = err.validation.issues.filter(i => i.severity === 'error').length;
+          return fail(
+            'VALIDATION_FAILED',
+            `Validation failed with ${errorCount} error(s)`,
+            {
+              details: {
+                issues: err.validation.issues.map(adaptIssue),
+                fixable: buildFixable(err.validation.issues, err.validation.effective_fields),
+              },
+            },
+          );
         }
-        return toolErrorResult('INTERNAL_ERROR', err instanceof Error ? err.message : String(err));
+        if (err instanceof PipelineError) {
+          return fail('VALIDATION_FAILED', err.message);
+        }
+        return fail('INTERNAL_ERROR', err instanceof Error ? err.message : String(err));
       }
     },
   );

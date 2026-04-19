@@ -1,7 +1,7 @@
 import type { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import type Database from 'better-sqlite3';
 import { z } from 'zod';
-import { toolResult } from './errors.js';
+import { ok, type Issue } from './errors.js';
 import { buildNodeQuery } from '../query-builder.js';
 import type { NodeQueryFilter } from '../query-builder.js';
 import { resolveFieldValue, type FieldRow } from '../field-value.js';
@@ -132,16 +132,16 @@ type JoinFilterParam = {
   target?: unknown;
 };
 
-function computeJoinNotice(
+function computeJoinWarning(
   db: Database.Database,
   joinFilters: JoinFilterParam[] | undefined,
   withoutJoins: JoinFilterParam[] | undefined,
-): string | undefined {
-  const needsNotice =
+): Issue | undefined {
+  const needsCheck =
     (joinFilters?.some(f => f.target !== undefined) ?? false) ||
     (withoutJoins?.some(f => f.target !== undefined) ?? false);
 
-  if (!needsNotice) return undefined;
+  if (!needsCheck) return undefined;
 
   // Collect rel_types that appeared in filters-with-target; missing rel_type means "any".
   const relTypes = new Set<string>();
@@ -162,7 +162,13 @@ function computeJoinNotice(
   }
   const { n } = db.prepare(sql).get(...p) as { n: number };
   if (n > 0) {
-    return `Cross-node join filters applied. ${n} candidate edge${n === 1 ? '' : 's'} had unresolved targets and were excluded.`;
+    const edges = anyRelType ? ['(any rel_type)'] : Array.from(relTypes);
+    return {
+      code: 'CROSS_NODE_FILTER_UNRESOLVED',
+      severity: 'warning',
+      message: `Could not resolve cross-node filter edges: ${edges.join(', ')}`,
+      details: { edges },
+    };
   }
   return undefined;
 }
@@ -175,7 +181,7 @@ export function registerQueryNodes(
 ): void {
   server.tool(
     'query-nodes',
-    'Query nodes with filtering by type, fields, semantic search, references, path, date, and cross-node join filters. Use the query param for full-text and semantic (vector) search with ranked results. Scores use Reciprocal Rank Fusion (RRF) — absolute values are not meaningful, only relative ordering matters. match_sources indicates retrieval method: "fts" (full-text match), "semantic" (vector/embedding match), or both. Returns paginated results. Use include_fields to return field values inline (e.g. ["project","status"] or ["*"] for all). When you know the exact title, prefer get-node with title param. For partial title matching, use title_contains. For exact title filtering combined with other constraints, use title_eq. Cross-node filtering: join_filters narrows results to nodes linked to a target matching a nested filter; without_joins excludes them. Each filter has optional direction ("outgoing" default, or "incoming"), optional rel_type (string or array for OR), and optional target (nested NodeQueryFilter without its own join_filters). Example — open tasks whose linked project is done: {"types":["task"],"fields":{"status":{"eq":"open"}},"join_filters":[{"rel_type":"project","target":{"types":["project"],"fields":{"status":{"eq":"done"}}}}]}. Differs from references: references matches by identity (a specific target), join_filters matches by pattern (any node matching the target filter). When a join filter has a target, unresolved edges are invisible to it; a "notice" field surfaces in the result if such edges existed and could have affected the answer.',
+    'Query nodes with filtering by type, fields, semantic search, references, path, date, and cross-node join filters. Use the query param for full-text and semantic (vector) search with ranked results. Scores use Reciprocal Rank Fusion (RRF) — absolute values are not meaningful, only relative ordering matters. match_sources indicates retrieval method: "fts" (full-text match), "semantic" (vector/embedding match), or both. Returns paginated results. Use include_fields to return field values inline (e.g. ["project","status"] or ["*"] for all). When you know the exact title, prefer get-node with title param. For partial title matching, use title_contains. For exact title filtering combined with other constraints, use title_eq. Cross-node filtering: join_filters narrows results to nodes linked to a target matching a nested filter; without_joins excludes them. Each filter has optional direction ("outgoing" default, or "incoming"), optional rel_type (string or array for OR), and optional target (nested NodeQueryFilter without its own join_filters). Example — open tasks whose linked project is done: {"types":["task"],"fields":{"status":{"eq":"open"}},"join_filters":[{"rel_type":"project","target":{"types":["project"],"fields":{"status":{"eq":"done"}}}}]}. Differs from references: references matches by identity (a specific target), join_filters matches by pattern (any node matching the target filter). When a join filter has a target, unresolved edges are invisible to it; a CROSS_NODE_FILTER_UNRESOLVED warning surfaces in the envelope warnings array if such edges existed and could have affected the answer.',
     paramsShape,
     async (params) => {
       const sortBy = params.sort_by ?? 'title';
@@ -264,10 +270,10 @@ export function registerQueryNodes(
           return node;
         });
 
-        const response: Record<string, unknown> = { nodes, total };
-        const notice = computeJoinNotice(db, params.join_filters, params.without_joins);
-        if (notice) response.notice = notice;
-        return toolResult(response);
+        const warnings: Issue[] = [];
+        const joinWarning = computeJoinWarning(db, params.join_filters, params.without_joins);
+        if (joinWarning) warnings.push(joinWarning);
+        return ok({ nodes, total }, warnings);
       }
 
       // Standard structured query path (no query param, or no embedder)
@@ -300,10 +306,10 @@ export function registerQueryNodes(
 
       const nodes = enrichRows(db, rows, includeFields);
 
-      const response: Record<string, unknown> = { nodes, total };
-      const notice = computeJoinNotice(db, params.join_filters, params.without_joins);
-      if (notice) response.notice = notice;
-      return toolResult(response);
+      const warnings: Issue[] = [];
+      const joinWarning = computeJoinWarning(db, params.join_filters, params.without_joins);
+      if (joinWarning) warnings.push(joinWarning);
+      return ok({ nodes, total }, warnings);
     },
   );
 }

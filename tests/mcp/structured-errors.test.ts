@@ -3,7 +3,9 @@ import Database from 'better-sqlite3';
 import { createSchema } from '../../src/db/schema.js';
 import { executeMutation } from '../../src/pipeline/execute.js';
 import { PipelineError } from '../../src/pipeline/types.js';
-import { toolValidationErrorResult } from '../../src/mcp/tools/errors.js';
+import { fail, adaptIssue } from '../../src/mcp/tools/errors.js';
+import { buildFixable } from '../../src/validation/fixable.js';
+import type { ValidationResult } from '../../src/validation/types.js';
 import { createGlobalField } from '../../src/global-fields/crud.js';
 import { createSchemaDefinition } from '../../src/schema/crud.js';
 import { createTempVault } from '../helpers/vault.js';
@@ -16,6 +18,19 @@ const writeLock = {
 function parseResult(result: unknown): Record<string, unknown> {
   const r = result as { content: Array<{ type: string; text: string }> };
   return JSON.parse(r.content[0].text);
+}
+
+function renderValidationEnvelope(validation: ValidationResult) {
+  return fail(
+    'VALIDATION_FAILED',
+    `Validation failed with ${validation.issues.filter(i => i.severity === 'error').length} error(s)`,
+    {
+      details: {
+        issues: validation.issues.map(adaptIssue),
+        fixable: buildFixable(validation.issues, validation.effective_fields),
+      },
+    },
+  );
 }
 
 describe('structured validation error responses', () => {
@@ -78,22 +93,24 @@ describe('structured validation error responses', () => {
     expect(caughtError).toBeDefined();
     expect(caughtError!.validation).toBeDefined();
 
-    const result = parseResult(toolValidationErrorResult(caughtError!.validation!));
+    const result = parseResult(renderValidationEnvelope(caughtError!.validation!));
 
-    expect(result.code).toBe('VALIDATION_FAILED');
+    const error = result.error as Record<string, unknown>;
+    expect(error.code).toBe('VALIDATION_FAILED');
 
-    const issues = result.issues as Array<Record<string, unknown>>;
+    const details = error.details as Record<string, unknown>;
+    const issues = details.issues as Array<Record<string, unknown>>;
     const enumIssue = issues.find(i => i.code === 'ENUM_MISMATCH');
     expect(enumIssue).toBeDefined();
     expect(enumIssue!.field).toBe('status');
 
-    const details = enumIssue!.details as Record<string, unknown>;
-    expect(details.provided).toBe('opne');
-    expect(Array.isArray(details.allowed_values)).toBe(true);
-    expect(details.allowed_values).toEqual(expect.arrayContaining(['open', 'in-progress', 'done', 'dropped']));
-    expect(details.closest_match).toBe('open');
+    const enumDetails = enumIssue!.details as Record<string, unknown>;
+    expect(enumDetails.provided).toBe('opne');
+    expect(Array.isArray(enumDetails.allowed_values)).toBe(true);
+    expect(enumDetails.allowed_values).toEqual(expect.arrayContaining(['open', 'in-progress', 'done', 'dropped']));
+    expect(enumDetails.closest_match).toBe('open');
 
-    const fixable = result.fixable as Array<Record<string, unknown>>;
+    const fixable = details.fixable as Array<Record<string, unknown>>;
     const statusFix = fixable.find(f => f.field === 'status');
     expect(statusFix).toBeDefined();
     expect(statusFix!.suggestion).toBe('open');
@@ -119,15 +136,17 @@ describe('structured validation error responses', () => {
     expect(caughtError).toBeDefined();
     expect(caughtError!.validation).toBeDefined();
 
-    const result = parseResult(toolValidationErrorResult(caughtError!.validation!));
+    const result = parseResult(renderValidationEnvelope(caughtError!.validation!));
 
-    expect(result.code).toBe('VALIDATION_FAILED');
+    const error = result.error as Record<string, unknown>;
+    expect(error.code).toBe('VALIDATION_FAILED');
 
-    const issues = result.issues as Array<Record<string, unknown>>;
+    const details = error.details as Record<string, unknown>;
+    const issues = details.issues as Array<Record<string, unknown>>;
     const missingIssue = issues.find(i => i.code === 'REQUIRED_MISSING' && i.field === 'status');
     expect(missingIssue).toBeDefined();
 
-    const fixable = result.fixable as Array<Record<string, unknown>> | undefined;
+    const fixable = details.fixable as Array<Record<string, unknown>> | undefined;
     expect(fixable).toBeDefined();
     const statusFix = fixable!.find(f => f.field === 'status');
     expect(statusFix).toBeDefined();
@@ -156,19 +175,21 @@ describe('structured validation error responses', () => {
     expect(caughtError).toBeDefined();
     expect(caughtError!.validation).toBeDefined();
 
-    const result = parseResult(toolValidationErrorResult(caughtError!.validation!));
+    const result = parseResult(renderValidationEnvelope(caughtError!.validation!));
 
-    expect(result.code).toBe('VALIDATION_FAILED');
+    const error = result.error as Record<string, unknown>;
+    expect(error.code).toBe('VALIDATION_FAILED');
 
-    const issues = result.issues as Array<Record<string, unknown>>;
+    const details = error.details as Record<string, unknown>;
+    const issues = details.issues as Array<Record<string, unknown>>;
     const typeMismatch = issues.find(i => i.code === 'TYPE_MISMATCH' && i.field === 'priority');
     expect(typeMismatch).toBeDefined();
 
-    const details = typeMismatch!.details as Record<string, unknown>;
-    expect(details.expected_type).toBe('number');
+    const tmDetails = typeMismatch!.details as Record<string, unknown>;
+    expect(tmDetails.expected_type).toBe('number');
 
     // priority should NOT be in fixable (type mismatches are not fixable)
-    const fixable = result.fixable as Array<Record<string, unknown>> | undefined;
+    const fixable = details.fixable as Array<Record<string, unknown>> | undefined;
     if (fixable) {
       const priorityFix = fixable.find(f => f.field === 'priority');
       expect(priorityFix).toBeUndefined();

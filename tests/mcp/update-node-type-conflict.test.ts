@@ -78,9 +78,10 @@ describe('update-node type-op conflict', () => {
       dry_run: true,
     });
 
-    const payload = parseResult(result);
-    const issues = (payload.preview as Record<string, unknown>)?.issues as Array<{ code: string; message: string }> ?? [];
-    const conflict = issues.find((i) => i.code === 'TYPE_OP_CONFLICT');
+    const body = parseResult(result);
+    expect(body.ok).toBe(true);
+    const warnings = body.warnings as Array<{ code: string; message: string }>;
+    const conflict = warnings.find((i) => i.code === 'TYPE_OP_CONFLICT');
     expect(conflict).toBeDefined();
     expect(conflict!.message).toMatch(/set_types/);
   });
@@ -95,9 +96,10 @@ describe('update-node type-op conflict', () => {
       dry_run: true,
     });
 
-    const payload = parseResult(result);
-    const issues = (payload.preview as Record<string, unknown>)?.issues as Array<{ code: string; message: string }> ?? [];
-    const conflict = issues.find((i) => i.code === 'TYPE_OP_CONFLICT');
+    const body = parseResult(result);
+    expect(body.ok).toBe(true);
+    const warnings = body.warnings as Array<{ code: string; message: string }>;
+    const conflict = warnings.find((i) => i.code === 'TYPE_OP_CONFLICT');
     expect(conflict).toBeDefined();
     expect(conflict!.message).toMatch(/set_types/);
   });
@@ -111,9 +113,10 @@ describe('update-node type-op conflict', () => {
       dry_run: true,
     });
 
-    const payload = parseResult(result);
-    const issues = (payload.preview as Record<string, unknown>)?.issues as Array<{ code: string; message: string }> ?? [];
-    expect(issues.find((i) => i.code === 'TYPE_OP_CONFLICT')).toBeUndefined();
+    const body = parseResult(result);
+    expect(body.ok).toBe(true);
+    const warnings = body.warnings as Array<{ code: string; message: string }>;
+    expect(warnings.find((i) => i.code === 'TYPE_OP_CONFLICT')).toBeUndefined();
   });
 
   it('does not emit TYPE_OP_CONFLICT when only add_types is provided', async () => {
@@ -125,9 +128,10 @@ describe('update-node type-op conflict', () => {
       dry_run: true,
     });
 
-    const payload = parseResult(result);
-    const issues = (payload.preview as Record<string, unknown>)?.issues as Array<{ code: string; message: string }> ?? [];
-    expect(issues.find((i) => i.code === 'TYPE_OP_CONFLICT')).toBeUndefined();
+    const body = parseResult(result);
+    expect(body.ok).toBe(true);
+    const warnings = body.warnings as Array<{ code: string; message: string }>;
+    expect(warnings.find((i) => i.code === 'TYPE_OP_CONFLICT')).toBeUndefined();
   });
 
   it('emits TYPE_OP_CONFLICT on live (non-dry-run) write when set_types combined with add_types, and set_types wins', async () => {
@@ -140,9 +144,10 @@ describe('update-node type-op conflict', () => {
       dry_run: false,
     });
 
-    const payload = parseResult(result);
-    const issues = payload.issues as Array<{ code: string; message: string }> ?? [];
-    const conflict = issues.find((i) => i.code === 'TYPE_OP_CONFLICT');
+    const body = parseResult(result);
+    expect(body.ok).toBe(true);
+    const warnings = body.warnings as Array<{ code: string; message: string }>;
+    const conflict = warnings.find((i) => i.code === 'TYPE_OP_CONFLICT');
     expect(conflict).toBeDefined();
     expect(conflict!.message).toMatch(/set_types/);
 
@@ -161,8 +166,10 @@ describe('update-node type-op conflict', () => {
       set_types: ['task'],
     });
 
-    const payload = parseResult(result);
-    expect(payload.error).toBeDefined();
-    expect(payload.error).toMatch(/set_types is not supported in query mode/);
+    const body = parseResult(result);
+    expect(body.ok).toBe(false);
+    const error = body.error as { code: string; message: string };
+    expect(error.code).toBe('INVALID_PARAMS');
+    expect(error.message).toMatch(/set_types is not supported in query mode/);
   });
 });

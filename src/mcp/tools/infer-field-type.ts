@@ -1,7 +1,7 @@
 import type { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import type Database from 'better-sqlite3';
 import { z } from 'zod';
-import { toolResult, toolErrorResult } from './errors.js';
+import { ok, fail } from './errors.js';
 import { inferFieldType } from '../../discovery/infer-field-type.js';
 
 export function registerInferFieldType(server: McpServer, db: Database.Database): void {
@@ -14,9 +14,9 @@ export function registerInferFieldType(server: McpServer, db: Database.Database)
     async ({ field_name }) => {
       try {
         const result = inferFieldType(db, field_name);
-        return toolResult(result);
+        return ok(result);
       } catch (err) {
-        return toolErrorResult('INTERNAL_ERROR', err instanceof Error ? err.message : String(err));
+        return fail('INTERNAL_ERROR', err instanceof Error ? err.message : String(err));
       }
     },
   );

@@ -63,13 +63,15 @@ describe('read-embedded', () => {
     const cache = new ExtractionCache(db, registry);
 
     const handler = getReadEmbeddedHandler(cache, tmpDir);
-    const result = parseResult(await handler({ file_path: 'data.csv' }) as any) as any;
+    const body = parseResult(await handler({ file_path: 'data.csv' }) as any) as any;
 
-    expect(result.text).toBe('col1,col2\nval1,val2');
-    expect(result.media_type).toBe('text/csv');
-    expect(result.extractor_id).toBe('mock-csv');
-    expect(result.content_hash).toBeDefined();
-    expect(typeof result.content_hash).toBe('string');
+    expect(body.ok).toBe(true);
+    expect(body.warnings).toEqual([]);
+    expect(body.data.text).toBe('col1,col2\nval1,val2');
+    expect(body.data.media_type).toBe('text/csv');
+    expect(body.data.extractor_id).toBe('mock-csv');
+    expect(body.data.content_hash).toBeDefined();
+    expect(typeof body.data.content_hash).toBe('string');
   });
 
   it('resolves filename to unique node match', async () => {
@@ -84,10 +86,12 @@ describe('read-embedded', () => {
     const cache = new ExtractionCache(db, registry);
 
     const handler = getReadEmbeddedHandler(cache, tmpDir);
-    const result = parseResult(await handler({ filename: 'data.csv' }) as any) as any;
+    const body = parseResult(await handler({ filename: 'data.csv' }) as any) as any;
 
-    expect(result.text).toBe('col1,col2\nval1,val2');
-    expect(result.extractor_id).toBe('mock-csv');
+    expect(body.ok).toBe(true);
+    expect(body.warnings).toEqual([]);
+    expect(body.data.text).toBe('col1,col2\nval1,val2');
+    expect(body.data.extractor_id).toBe('mock-csv');
   });
 
   it('returns AMBIGUOUS_FILENAME when multiple nodes share the same basename', async () => {
@@ -99,14 +103,15 @@ describe('read-embedded', () => {
     const cache = new ExtractionCache(db, registry);
 
     const handler = getReadEmbeddedHandler(cache, tmpDir);
-    const result = parseResult(await handler({ filename: 'data.csv' }) as any) as any;
+    const body = parseResult(await handler({ filename: 'data.csv' }) as any) as any;
 
-    expect(result.code).toBe('AMBIGUOUS_FILENAME');
-    expect(result.error).toMatch(/Multiple files match/);
-    expect(Array.isArray(result.matches)).toBe(true);
-    expect(result.matches).toHaveLength(2);
-    expect(result.matches).toContain('folderA/data.csv');
-    expect(result.matches).toContain('folderB/data.csv');
+    expect(body.ok).toBe(false);
+    expect(body.error.code).toBe('AMBIGUOUS_FILENAME');
+    expect(body.error.message).toMatch(/Multiple files match/);
+    expect(Array.isArray(body.error.details.matches)).toBe(true);
+    expect(body.error.details.matches).toHaveLength(2);
+    expect(body.error.details.matches).toContain('folderA/data.csv');
+    expect(body.error.details.matches).toContain('folderB/data.csv');
   });
 
   it('returns INVALID_PARAMS when neither file_path nor filename is provided', async () => {
@@ -114,10 +119,11 @@ describe('read-embedded', () => {
     const cache = new ExtractionCache(db, registry);
 
     const handler = getReadEmbeddedHandler(cache, tmpDir);
-    const result = parseResult(await handler({}) as any) as any;
+    const body = parseResult(await handler({}) as any) as any;
 
-    expect(result.code).toBe('INVALID_PARAMS');
-    expect(result.error).toMatch(/file_path or filename/);
+    expect(body.ok).toBe(false);
+    expect(body.error.code).toBe('INVALID_PARAMS');
+    expect(body.error.message).toMatch(/file_path or filename/);
   });
 
   it('returns INVALID_PARAMS when both file_path and filename are provided', async () => {
@@ -125,10 +131,11 @@ describe('read-embedded', () => {
     const cache = new ExtractionCache(db, registry);
 
     const handler = getReadEmbeddedHandler(cache, tmpDir);
-    const result = parseResult(await handler({ file_path: 'x.csv', filename: 'x.csv' }) as any) as any;
+    const body = parseResult(await handler({ file_path: 'x.csv', filename: 'x.csv' }) as any) as any;
 
-    expect(result.code).toBe('INVALID_PARAMS');
-    expect(result.error).toMatch(/only one/);
+    expect(body.ok).toBe(false);
+    expect(body.error.code).toBe('INVALID_PARAMS');
+    expect(body.error.message).toMatch(/only one/);
   });
 
   it('returns EXTRACTOR_UNAVAILABLE for missing API key extractor', async () => {
@@ -139,9 +146,10 @@ describe('read-embedded', () => {
     const cache = new ExtractionCache(db, registry);
 
     const handler = getReadEmbeddedHandler(cache, tmpDir);
-    const result = parseResult(await handler({ file_path: 'audio.m4a' }) as any) as any;
+    const body = parseResult(await handler({ file_path: 'audio.m4a' }) as any) as any;
 
-    expect(result.code).toBe('EXTRACTOR_UNAVAILABLE');
-    expect(result.error).toMatch(/EXTRACTOR_UNAVAILABLE/);
+    expect(body.ok).toBe(false);
+    expect(body.error.code).toBe('EXTRACTOR_UNAVAILABLE');
+    expect(body.error.message).toMatch(/EXTRACTOR_UNAVAILABLE/);
   });
 });

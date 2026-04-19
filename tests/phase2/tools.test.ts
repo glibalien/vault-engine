@@ -76,7 +76,9 @@ beforeEach(() => {
 describe('get-node conformance', () => {
   it('includes conformance block with claimed, orphan, and unfilled fields', async () => {
     const handler = getToolHandler('get-node');
-    const result = parseResult(await handler({ node_id: 'n1' }));
+    const body = parseResult(await handler({ node_id: 'n1' }));
+    expect(body.ok).toBe(true);
+    const result = body.data;
 
     expect(result.conformance).toBeDefined();
     const c = result.conformance;
@@ -101,7 +103,9 @@ describe('get-node conformance', () => {
 describe('describe-schema enrichments', () => {
   it('returns node_count, field_coverage, orphan_field_names, and inlined global_field', async () => {
     const handler = getToolHandler('describe-schema');
-    const result = parseResult(await handler({ name: 'task' }));
+    const body = parseResult(await handler({ name: 'task' }));
+    expect(body.ok).toBe(true);
+    const result = body.data;
 
     expect(result.node_count).toBe(1);
 
@@ -122,8 +126,9 @@ describe('describe-schema enrichments', () => {
 describe('list-types enrichments', () => {
   it('marks task with has_schema:true and claim_count:3', async () => {
     const handler = getToolHandler('list-types');
-    const result = parseResult(await handler({}));
-    const task = result.find((t: any) => t.type === 'task');
+    const body = parseResult(await handler({}));
+    expect(body.ok).toBe(true);
+    const task = body.data.find((t: any) => t.type === 'task');
 
     expect(task).toBeDefined();
     expect(task.has_schema).toBe(true);
@@ -134,7 +139,9 @@ describe('list-types enrichments', () => {
 describe('describe-global-field enrichments', () => {
   it('returns claimed_by_types, node_count, and required', async () => {
     const handler = getToolHandler('describe-global-field');
-    const result = parseResult(await handler({ name: 'status' }));
+    const body = parseResult(await handler({ name: 'status' }));
+    expect(body.ok).toBe(true);
+    const result = body.data;
 
     expect(result.claimed_by_types).toContain('task');
     expect(result.node_count).toBe(1);
@@ -145,7 +152,9 @@ describe('describe-global-field enrichments', () => {
 describe('validate-node', () => {
   it('validates existing node by node_id', async () => {
     const handler = getToolHandler('validate-node');
-    const result = parseResult(await handler({ node_id: 'n1' }));
+    const body = parseResult(await handler({ node_id: 'n1' }));
+    expect(body.ok).toBe(true);
+    const result = body.data;
 
     expect(result.valid).toBe(true);
     expect(result.effective_fields).toBeDefined();
@@ -154,9 +163,11 @@ describe('validate-node', () => {
 
   it('validates proposed state with coercion', async () => {
     const handler = getToolHandler('validate-node');
-    const result = parseResult(await handler({
+    const body = parseResult(await handler({
       proposed: { types: ['task'], fields: { status: 'open', priority: '5' } },
     }));
+    expect(body.ok).toBe(true);
+    const result = body.data;
 
     expect(result.valid).toBe(true);
 
@@ -175,15 +186,17 @@ describe('vault-stats orphan_count lifecycle', () => {
     // seedData created: 1 node (n1) with 3 fields (status, priority, custom_field)
     // and a 'task' schema claiming status + priority + due_date.
     // So: status and priority are claimed (2), custom_field is orphan (1).
-    const stats1 = parseResult(await statsHandler({}) as any) as any;
-    expect(stats1.orphan_count).toBe(1); // only custom_field
+    const body1 = parseResult(await statsHandler({}) as any) as any;
+    expect(body1.ok).toBe(true);
+    expect(body1.data.orphan_count).toBe(1); // only custom_field
 
     // Delete the schema — all 3 fields become orphans
     const deleteHandler = getToolHandler('delete-schema');
     await deleteHandler({ name: 'task' });
 
-    const stats2 = parseResult(await statsHandler({}) as any) as any;
-    expect(stats2.orphan_count).toBe(3); // all fields are orphans now
+    const body2 = parseResult(await statsHandler({}) as any) as any;
+    expect(body2.ok).toBe(true);
+    expect(body2.data.orphan_count).toBe(3); // all fields are orphans now
 
     // Re-create the schema — orphan count drops back
     createSchemaDefinition(db, {
@@ -192,7 +205,8 @@ describe('vault-stats orphan_count lifecycle', () => {
       field_claims: [{ field: 'status' }, { field: 'priority' }, { field: 'due_date' }],
     });
 
-    const stats3 = parseResult(await statsHandler({}) as any) as any;
-    expect(stats3.orphan_count).toBe(1); // custom_field is orphan again
+    const body3 = parseResult(await statsHandler({}) as any) as any;
+    expect(body3.ok).toBe(true);
+    expect(body3.data.orphan_count).toBe(1); // custom_field is orphan again
   });
 });

@@ -66,23 +66,25 @@ describe('create-node type enforcement', () => {
   it('succeeds with valid types', async () => {
     const handler = getToolHandler(registerCreateNode);
     const result = parseResult(await handler({ title: 'Test', types: ['note'], fields: {}, body: '' }) as any);
-    expect(result.node_id).toBeDefined();
-    expect(result.error).toBeUndefined();
+    expect(result.ok).toBe(true);
+    expect(result.data.node_id).toBeDefined();
   });
 
   it('succeeds with empty types', async () => {
     const handler = getToolHandler(registerCreateNode);
     const result = parseResult(await handler({ title: 'Typeless', types: [], fields: {}, body: '' }) as any);
-    expect(result.node_id).toBeDefined();
+    expect(result.ok).toBe(true);
+    expect(result.data.node_id).toBeDefined();
   });
 
   it('rejects unknown type with UNKNOWN_TYPE error', async () => {
     const handler = getToolHandler(registerCreateNode);
     const result = parseResult(await handler({ title: 'Bad', types: ['reference'], fields: {}, body: '' }) as any);
-    expect(result.error).toBe('UNKNOWN_TYPE');
-    expect(result.unknown_types).toEqual(['reference']);
-    expect(result.available_schemas).toContain('note');
-    expect(result.available_schemas).toContain('task');
+    expect(result.ok).toBe(false);
+    expect(result.error.code).toBe('UNKNOWN_TYPE');
+    expect(result.error.details.unknown_types).toEqual(['reference']);
+    expect(result.error.details.available_schemas).toContain('note');
+    expect(result.error.details.available_schemas).toContain('task');
     // Verify no file was created
     expect(existsSync(join(vaultPath, 'Bad.md'))).toBe(false);
   });
@@ -90,8 +92,9 @@ describe('create-node type enforcement', () => {
   it('rejects mixed valid/unknown types, lists only unknown', async () => {
     const handler = getToolHandler(registerCreateNode);
     const result = parseResult(await handler({ title: 'Mixed', types: ['note', 'reference'], fields: {}, body: '' }) as any);
-    expect(result.error).toBe('UNKNOWN_TYPE');
-    expect(result.unknown_types).toEqual(['reference']);
+    expect(result.ok).toBe(false);
+    expect(result.error.code).toBe('UNKNOWN_TYPE');
+    expect(result.error.details.unknown_types).toEqual(['reference']);
   });
 });
 
@@ -107,9 +110,10 @@ describe('create-node dry_run', () => {
       body: '',
       dry_run: true,
     }) as any);
-    expect(result.dry_run).toBe(true);
-    expect(result.would_create.file_path).toBe('Notes/Preview Note.md');
-    expect(result.would_create.types).toEqual(['note']);
+    expect(result.ok).toBe(true);
+    expect(result.data.dry_run).toBe(true);
+    expect(result.data.would_create.file_path).toBe('Notes/Preview Note.md');
+    expect(result.data.would_create.types).toEqual(['note']);
     // Verify nothing was written
     expect(existsSync(join(vaultPath, 'Notes/Preview Note.md'))).toBe(false);
     const dbNode = db.prepare('SELECT id FROM nodes WHERE title = ?').get('Preview Note');
@@ -125,7 +129,8 @@ describe('create-node dry_run', () => {
       body: '',
       dry_run: true,
     }) as any);
-    expect(result.error).toBe('UNKNOWN_TYPE');
+    expect(result.ok).toBe(false);
+    expect(result.error.code).toBe('UNKNOWN_TYPE');
   });
 
   it('reports path conflict on dry_run', async () => {
@@ -140,8 +145,9 @@ describe('create-node dry_run', () => {
       body: '',
       dry_run: true,
     }) as any);
-    expect(result.dry_run).toBe(true);
-    expect(result.would_create.conflict).toBeDefined();
+    expect(result.ok).toBe(true);
+    expect(result.data.dry_run).toBe(true);
+    expect(result.data.would_create.conflict).toBeDefined();
   });
 });
 
@@ -167,8 +173,9 @@ describe('update-node type enforcement', () => {
       node_id: seed.node_id,
       set_types: ['reference'],
     }) as any);
-    expect(result.error).toBe('UNKNOWN_TYPE');
-    expect(result.unknown_types).toEqual(['reference']);
+    expect(result.ok).toBe(false);
+    expect(result.error.code).toBe('UNKNOWN_TYPE');
+    expect(result.error.details.unknown_types).toEqual(['reference']);
   });
 
   it('allows set_types with valid types', async () => {
@@ -178,8 +185,8 @@ describe('update-node type enforcement', () => {
       node_id: seed.node_id,
       set_types: ['task'],
     }) as any);
-    expect(result.error).toBeUndefined();
-    expect(result.types).toEqual(['task']);
+    expect(result.ok).toBe(true);
+    expect(result.data.types).toEqual(['task']);
   });
 
   it('does not check types when set_types is absent', async () => {
@@ -189,7 +196,7 @@ describe('update-node type enforcement', () => {
       node_id: seed.node_id,
       set_fields: { project: 'X' },
     }) as any);
-    expect(result.error).toBeUndefined();
+    expect(result.ok).toBe(true);
   });
 
   it('dry_run in single-node mode returns preview without writing', async () => {
@@ -200,8 +207,9 @@ describe('update-node type enforcement', () => {
       set_fields: { project: 'Preview' },
       dry_run: true,
     }) as any);
-    expect(result.dry_run).toBe(true);
-    expect(result.preview).toBeDefined();
+    expect(result.ok).toBe(true);
+    expect(result.data.dry_run).toBe(true);
+    expect(result.data.preview).toBeDefined();
     // Verify DB was not mutated
     const fields = db.prepare('SELECT value_text FROM node_fields WHERE node_id = ? AND field_name = ?')
       .get(seed.node_id, 'project') as { value_text: string } | undefined;
@@ -215,8 +223,8 @@ describe('update-node type enforcement', () => {
       node_id: seed.node_id,
       add_types: ['task'],
     }) as any);
-    expect(result.error).toBeUndefined();
-    expect(result.types).toEqual(expect.arrayContaining(['note', 'task']));
+    expect(result.ok).toBe(true);
+    expect(result.data.types).toEqual(expect.arrayContaining(['note', 'task']));
     // Verify DB was mutated
     const types = (db.prepare('SELECT schema_type FROM node_types WHERE node_id = ?')
       .all(seed.node_id) as Array<{ schema_type: string }>).map(t => t.schema_type);
@@ -239,8 +247,8 @@ describe('update-node type enforcement', () => {
       node_id: seed.node_id,
       remove_types: ['task'],
     }) as any);
-    expect(result.error).toBeUndefined();
-    expect(result.types).toEqual(['note']);
+    expect(result.ok).toBe(true);
+    expect(result.data.types).toEqual(['note']);
   });
 
   it('applies add_types + remove_types together in single-node mode', async () => {
@@ -251,8 +259,8 @@ describe('update-node type enforcement', () => {
       add_types: ['task'],
       remove_types: ['note'],
     }) as any);
-    expect(result.error).toBeUndefined();
-    expect(result.types).toEqual(['task']);
+    expect(result.ok).toBe(true);
+    expect(result.data.types).toEqual(['task']);
   });
 
   it('rejects unknown type in single-node add_types', async () => {
@@ -262,8 +270,9 @@ describe('update-node type enforcement', () => {
       node_id: seed.node_id,
       add_types: ['reference'],
     }) as any);
-    expect(result.error).toBe('UNKNOWN_TYPE');
-    expect(result.unknown_types).toEqual(['reference']);
+    expect(result.ok).toBe(false);
+    expect(result.error.code).toBe('UNKNOWN_TYPE');
+    expect(result.error.details.unknown_types).toEqual(['reference']);
   });
 
   it('rejects unknown type in query mode add_types', async () => {
@@ -273,7 +282,8 @@ describe('update-node type enforcement', () => {
       query: { types: ['note'] },
       add_types: ['reference'],
     }) as any);
-    expect(result.error).toBe('UNKNOWN_TYPE');
+    expect(result.ok).toBe(false);
+    expect(result.error.code).toBe('UNKNOWN_TYPE');
   });
 });
 
@@ -299,8 +309,9 @@ describe('add-type-to-node type enforcement', () => {
       node_id: seed.node_id,
       type: 'reference',
     }) as any);
-    expect(result.error).toBe('UNKNOWN_TYPE');
-    expect(result.unknown_types).toEqual(['reference']);
+    expect(result.ok).toBe(false);
+    expect(result.error.code).toBe('UNKNOWN_TYPE');
+    expect(result.error.details.unknown_types).toEqual(['reference']);
   });
 
   it('allows valid type', async () => {
@@ -310,8 +321,8 @@ describe('add-type-to-node type enforcement', () => {
       node_id: seed.node_id,
       type: 'task',
     }) as any);
-    expect(result.error).toBeUndefined();
-    expect(result.types).toContain('task');
+    expect(result.ok).toBe(true);
+    expect(result.data.types).toContain('task');
   });
 });
 
@@ -326,8 +337,12 @@ describe('batch-mutate type enforcement', () => {
         { op: 'create', params: { title: 'Bad', types: ['reference'], fields: {}, body: '' } },
       ],
     }) as any);
-    expect(result.applied).toBe(false);
+    expect(result.ok).toBe(false);
+    expect(result.error.code).toBe('BATCH_FAILED');
     expect(result.error.message).toContain('reference');
+    expect(result.error.details.failed_at).toBe(1);
+    expect(result.error.details.op).toBe('create');
+    expect(result.warnings).toEqual([]);
     // First op should have been rolled back
     const node = db.prepare('SELECT id FROM nodes WHERE title = ?').get('Good');
     expect(node).toBeUndefined();
@@ -342,8 +357,10 @@ describe('batch-mutate type enforcement', () => {
         { op: 'create', params: { title: 'Two', types: ['task'], fields: {}, body: '' } },
       ],
     }) as any);
-    expect(result.applied).toBe(true);
-    expect(result.results).toHaveLength(2);
+    expect(result.ok).toBe(true);
+    expect(result.data.applied).toBe(true);
+    expect(result.data.results).toHaveLength(2);
+    expect(result.warnings).toEqual([]);
   });
 });
 
@@ -358,7 +375,8 @@ describe('batch-mutate update operations', () => {
       types: ['note'],
       body: 'Original content',
     }) as any);
-    expect(created.node_id).toBeDefined();
+    expect(created.ok).toBe(true);
+    expect(created.data.node_id).toBeDefined();
 
     // Now batch-mutate with append_body
     const handler = getToolHandler(registerBatchMutate);
@@ -367,7 +385,8 @@ describe('batch-mutate update operations', () => {
         { op: 'update', params: { title: 'Append Target', append_body: 'Appended section' } },
       ],
     }) as any);
-    expect(result.applied).toBe(true);
+    expect(result.ok).toBe(true);
+    expect(result.data.applied).toBe(true);
 
     // Verify the body was appended
     const row = db.prepare('SELECT body FROM nodes WHERE title = ?').get('Append Target') as { body: string };
@@ -384,7 +403,8 @@ describe('batch-mutate update operations', () => {
         { op: 'update', params: { title: 'Empty Body', append_body: 'First content' } },
       ],
     }) as any);
-    expect(result.applied).toBe(true);
+    expect(result.ok).toBe(true);
+    expect(result.data.applied).toBe(true);
 
     const row = db.prepare('SELECT body FROM nodes WHERE title = ?').get('Empty Body') as { body: string };
     expect(row.body).toBe('First content');
@@ -400,8 +420,11 @@ describe('batch-mutate update operations', () => {
         { op: 'update', params: { title: 'Both Body', set_body: 'A', append_body: 'B' } },
       ],
     }) as any);
-    expect(result.applied).toBe(false);
+    expect(result.ok).toBe(false);
+    expect(result.error.code).toBe('BATCH_FAILED');
     expect(result.error.message).toContain('mutually exclusive');
+    expect(result.error.details.failed_at).toBe(0);
+    expect(result.error.details.op).toBe('update');
   });
 
   it('add_types appends types without replacing', async () => {
@@ -414,7 +437,8 @@ describe('batch-mutate update operations', () => {
         { op: 'update', params: { title: 'Type Target', add_types: ['task'] } },
       ],
     }) as any);
-    expect(result.applied).toBe(true);
+    expect(result.ok).toBe(true);
+    expect(result.data.applied).toBe(true);
 
     const types = (db.prepare('SELECT schema_type FROM node_types WHERE node_id = (SELECT id FROM nodes WHERE title = ?)').all('Type Target') as Array<{ schema_type: string }>).map(t => t.schema_type);
     expect(types).toContain('note');
@@ -424,7 +448,7 @@ describe('batch-mutate update operations', () => {
   it('remove_types removes without replacing', async () => {
     // Create with two types
     const createHandler = getToolHandler(registerCreateNode);
-    const created = parseResult(await createHandler({ title: 'Remove Target', types: ['note'], body: '' }) as any);
+    await createHandler({ title: 'Remove Target', types: ['note'], body: '' });
 
     // Add task type
     const handler = getToolHandler(registerBatchMutate);
@@ -440,7 +464,8 @@ describe('batch-mutate update operations', () => {
         { op: 'update', params: { title: 'Remove Target', remove_types: ['note'] } },
       ],
     }) as any);
-    expect(result.applied).toBe(true);
+    expect(result.ok).toBe(true);
+    expect(result.data.applied).toBe(true);
 
     const types = (db.prepare('SELECT schema_type FROM node_types WHERE node_id = (SELECT id FROM nodes WHERE title = ?)').all('Remove Target') as Array<{ schema_type: string }>).map(t => t.schema_type);
     expect(types).toEqual(['task']);
@@ -458,8 +483,9 @@ describe('batch-mutate update operations', () => {
         { op: 'update', params: { title: 'Daily Note', append_body: '## Reading\n- [[New Clipping]]' } },
       ],
     }) as any);
-    expect(result.applied).toBe(true);
-    expect(result.results).toHaveLength(2);
+    expect(result.ok).toBe(true);
+    expect(result.data.applied).toBe(true);
+    expect(result.data.results).toHaveLength(2);
 
     const row = db.prepare('SELECT body FROM nodes WHERE title = ?').get('Daily Note') as { body: string };
     expect(row.body).toBe('## Morning\n\n## Reading\n- [[New Clipping]]');

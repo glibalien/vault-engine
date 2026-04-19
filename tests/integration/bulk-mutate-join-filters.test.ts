@@ -71,8 +71,11 @@ afterEach(() => {
 });
 
 describe('update-node query mode with join_filters', () => {
-  it('dry_run with join_filters returns correct affected set + notice', async () => {
-    const r = parseResult(await handler({
+  it('dry_run with join_filters returns correct affected set + CROSS_NODE_FILTER_UNRESOLVED warning', async () => {
+    // Seed an unresolved edge on the rel_type we filter by so the warning fires.
+    seedRel('t1', 'Missing', 'project', null);
+
+    const body = parseResult(await handler({
       query: {
         types: ['task'],
         join_filters: [{ rel_type: 'project', target: { fields: { status: { eq: 'done' } } } }],
@@ -80,15 +83,22 @@ describe('update-node query mode with join_filters', () => {
       add_types: ['urgent'],
       dry_run: true,
     }));
-    expect(r.dry_run).toBe(true);
-    expect(r.matched).toBe(1);
-    const preview = r.preview as Array<{ node_id: string }>;
+    expect(body.ok).toBe(true);
+    const data = body.data as Record<string, unknown>;
+    expect(data.dry_run).toBe(true);
+    expect(data.matched).toBe(1);
+    const preview = data.preview as Array<{ node_id: string }>;
     expect(preview.map(p => p.node_id)).toEqual(['t1']);
-    expect(r.notice).toMatch(/cross-node join filters/i);
+    const warnings = body.warnings as Array<{ code: string; severity: string; message: string; details: { edges: string[] } }>;
+    const warn = warnings.find(w => w.code === 'CROSS_NODE_FILTER_UNRESOLVED');
+    expect(warn).toBeDefined();
+    expect(warn!.severity).toBe('warning');
+    expect(warn!.message).toBe('Could not resolve cross-node filter edges: project');
+    expect(warn!.details.edges).toEqual(['project']);
   });
 
   it('without_joins query mode returns correct affected set', async () => {
-    const r = parseResult(await handler({
+    const body = parseResult(await handler({
       query: {
         types: ['task'],
         without_joins: [{ rel_type: 'project', target: { fields: { status: { eq: 'done' } } } }],
@@ -96,13 +106,15 @@ describe('update-node query mode with join_filters', () => {
       add_types: ['deprioritized'],
       dry_run: true,
     }));
-    expect(r.matched).toBe(1);
-    expect((r.preview as Array<{ node_id: string }>).map(p => p.node_id)).toEqual(['t2']);
+    expect(body.ok).toBe(true);
+    const data = body.data as Record<string, unknown>;
+    expect(data.matched).toBe(1);
+    expect((data.preview as Array<{ node_id: string }>).map(p => p.node_id)).toEqual(['t2']);
   });
 
   it('dry_run: false applies mutation to exactly the previewed set', async () => {
     // First, check what dry_run returns.
-    const dry = parseResult(await handler({
+    const dryBody = parseResult(await handler({
       query: {
         types: ['task'],
         join_filters: [{ rel_type: 'project', target: { fields: { status: { eq: 'done' } } } }],
@@ -110,7 +122,9 @@ describe('update-node query mode with join_filters', () => {
       add_types: ['urgent'],
       dry_run: true,
     }));
-    expect(dry.matched).toBe(1);
+    expect(dryBody.ok).toBe(true);
+    const dryData = dryBody.data as Record<string, unknown>;
+    expect(dryData.matched).toBe(1);
 
     // Apply.
     parseResult(await handler({

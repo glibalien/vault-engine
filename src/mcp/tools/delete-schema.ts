@@ -1,7 +1,7 @@
 import type { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import type Database from 'better-sqlite3';
 import { z } from 'zod';
-import { toolResult, toolErrorResult } from './errors.js';
+import { ok, fail } from './errors.js';
 import { deleteSchemaDefinition } from '../../schema/crud.js';
 import { deleteSchemaFile } from '../../schema/render.js';
 
@@ -16,9 +16,9 @@ export function registerDeleteSchema(server: McpServer, db: Database.Database, c
       try {
         const result = deleteSchemaDefinition(db, name);
         if (ctx?.vaultPath) deleteSchemaFile(db, ctx.vaultPath, name);
-        return toolResult(result);
+        return ok(result);
       } catch (err) {
-        return toolErrorResult('INVALID_PARAMS', err instanceof Error ? err.message : String(err));
+        return fail('INVALID_PARAMS', err instanceof Error ? err.message : String(err));
       }
     },
   );

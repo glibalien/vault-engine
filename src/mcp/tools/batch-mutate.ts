@@ -6,7 +6,7 @@ import { z } from 'zod';
 import { existsSync, unlinkSync } from 'node:fs';
 import { join } from 'node:path';
 import { safeVaultPath } from '../../pipeline/safe-path.js';
-import { toolResult, toolErrorResult } from './errors.js';
+import { ok, fail, adaptIssue } from './errors.js';
 import { resolveNodeIdentity } from './resolve-identity.js';
 import { executeMutation } from '../../pipeline/execute.js';
 import { PipelineError } from '../../pipeline/types.js';
@@ -79,7 +79,7 @@ export function registerBatchMutate(
       // Track node IDs deleted in this batch so we can clean up vec rows after commit.
       const deletedNodeIds: string[] = [];
 
-      let batchError: { failed_at: number; error: Record<string, unknown> } | null = null as { failed_at: number; error: Record<string, unknown> } | null;
+      let batchError: { failed_at: number; op: string; message: string; details: Record<string, unknown> } | null = null as { failed_at: number; op: string; message: string; details: Record<string, unknown> } | null;
 
       const txn = db.transaction(() => {
         for (let i = 0; i < params.operations.length; i++) {
@@ -225,15 +225,15 @@ export function registerBatchMutate(
             }
           } catch (err) {
             if (err instanceof PipelineError) {
-              const errObj: Record<string, unknown> = { op, message: err.message };
+              const details: Record<string, unknown> = {};
               if (err.validation) {
-                errObj.issues = err.validation.issues;
+                details.issues = err.validation.issues.map(adaptIssue);
                 const fixable = buildFixable(err.validation.issues, err.validation.effective_fields);
-                if (fixable.length > 0) errObj.fixable = fixable;
+                if (fixable.length > 0) details.fixable = fixable;
               }
-              batchError = { failed_at: i, error: errObj };
+              batchError = { failed_at: i, op, message: err.message, details };
             } else {
-              batchError = { failed_at: i, error: { op, message: err instanceof Error ? err.message : String(err) } };
+              batchError = { failed_at: i, op, message: err instanceof Error ? err.message : String(err), details: {} };
             }
             // Throw to trigger SQLite transaction rollback
             throw err;
@@ -250,7 +250,7 @@ export function registerBatchMutate(
         for (const nodeId of deletedNodeIds) {
           embeddingIndexer?.removeNode(nodeId);
         }
-        return toolResult({ applied: true, results: applied });
+        return ok({ applied: true, results: applied });
       } catch {
         // DB transaction rolled back. Now revert file writes.
         const rollbackFailures: string[] = [];
@@ -277,17 +277,17 @@ export function registerBatchMutate(
         }
 
         if (batchError) {
-          const result: Record<string, unknown> = {
-            applied: false,
+          const details: Record<string, unknown> = {
             failed_at: batchError.failed_at,
-            error: batchError.error,
+            op: batchError.op,
+            ...batchError.details,
           };
           if (rollbackFailures.length > 0) {
-            result.rollback_failures = rollbackFailures;
+            details.rollback_failures = rollbackFailures;
           }
-          return toolResult(result);
+          return fail('BATCH_FAILED', batchError.message, { details });
         }
-        return toolErrorResult('INTERNAL_ERROR', 'Batch operation failed');
+        return fail('INTERNAL_ERROR', 'Batch operation failed');
       }
     },
   );

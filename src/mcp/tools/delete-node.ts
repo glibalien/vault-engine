@@ -3,7 +3,7 @@
 import type { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import type Database from 'better-sqlite3';
 import { z } from 'zod';
-import { toolResult, toolErrorResult } from './errors.js';
+import { ok, fail, type Issue } from './errors.js';
 import { resolveNodeIdentity } from './resolve-identity.js';
 import type { WriteLockManager } from '../../sync/write-lock.js';
 import type { SyncLogger } from '../../sync/sync-logger.js';
@@ -37,7 +37,7 @@ export function registerDeleteNode(
         title: params.title,
       });
       if (!resolved.ok) {
-        return toolErrorResult(resolved.code, resolved.message);
+        return fail(resolved.code, resolved.message);
       }
       const { node } = resolved;
 
@@ -65,22 +65,34 @@ export function registerDeleteNode(
         .all(node.node_id) as Array<{ schema_type: string }>).map(t => t.schema_type);
 
       if (!params.confirm) {
-        return toolResult({
-          preview: true,
-          node_id: node.node_id,
-          file_path: node.file_path,
-          title: node.title,
-          types,
-          field_count: fieldCount,
-          relationship_count: outRels,
-          incoming_reference_count: incomingCount.c,
-          referencing_nodes: incomingRels.slice(0, params.referencing_nodes_limit).map(r => ({
-            node_id: r.source_id,
-            title: r.title,
-            field: r.rel_type,
-          })),
-          warning: incomingCount.c > 0 ? `${incomingCount.c} other node(s) reference this node. Deleting will create dangling references.` : null,
-        });
+        const referencing_nodes = incomingRels.slice(0, params.referencing_nodes_limit).map(r => ({
+          node_id: r.source_id,
+          title: r.title,
+          field: r.rel_type,
+        }));
+        const warnings: Issue[] = [];
+        if (incomingCount.c > 0) {
+          warnings.push({
+            code: 'PENDING_REFERENCES',
+            severity: 'warning',
+            message: `${incomingCount.c} other node(s) reference this node. Deletion will leave dangling references.`,
+            details: { incoming_reference_count: incomingCount.c, referencing_nodes },
+          });
+        }
+        return ok(
+          {
+            preview: true,
+            node_id: node.node_id,
+            file_path: node.file_path,
+            title: node.title,
+            types,
+            field_count: fieldCount,
+            relationship_count: outRels,
+            incoming_reference_count: incomingCount.c,
+            referencing_nodes,
+          },
+          warnings,
+        );
       }
 
       // Confirmed deletion
@@ -93,7 +105,7 @@ export function registerDeleteNode(
 
       embeddingIndexer?.removeNode(result.node_id);
 
-      return toolResult({
+      return ok({
         deleted: true,
         node_id: node.node_id,
         file_path: node.file_path,

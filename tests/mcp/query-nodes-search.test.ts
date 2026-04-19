@@ -91,8 +91,10 @@ describe('query-nodes with query param (hybrid search)', () => {
 
     handler = captureHandler(indexer, embedder);
     const result = await handler({ query: 'machine learning' });
-    const parsed = parseResult(result);
+    const envelope = parseResult(result) as any;
 
+    expect(envelope.ok).toBe(true);
+    const parsed = envelope.data;
     expect(Array.isArray(parsed.nodes)).toBe(true);
     const nodes = parsed.nodes as Array<Record<string, unknown>>;
     expect(nodes.length).toBeGreaterThan(0);
@@ -112,8 +114,10 @@ describe('query-nodes with query param (hybrid search)', () => {
 
     handler = captureHandler(indexer, embedder);
     const result = await handler({ types: ['article'] });
-    const parsed = parseResult(result);
+    const envelope = parseResult(result) as any;
 
+    expect(envelope.ok).toBe(true);
+    const parsed = envelope.data;
     const nodes = parsed.nodes as Array<Record<string, unknown>>;
     expect(nodes).toHaveLength(2);
     const ids = nodes.map(n => n.id).sort();
@@ -135,8 +139,10 @@ describe('query-nodes with query param (hybrid search)', () => {
 
     handler = captureHandler(indexer, embedder);
     const result = await handler({ query: 'machine learning', types: ['article'] });
-    const parsed = parseResult(result);
+    const envelope = parseResult(result) as any;
 
+    expect(envelope.ok).toBe(true);
+    const parsed = envelope.data;
     const nodes = parsed.nodes as Array<Record<string, unknown>>;
     const ids = nodes.map(n => n.id);
 
@@ -156,8 +162,10 @@ describe('query-nodes with query param (hybrid search)', () => {
 
     handler = captureHandler(indexer, embedder);
     const result = await handler({ query: 'machine learning' });
-    const parsed = parseResult(result);
+    const envelope = parseResult(result) as any;
 
+    expect(envelope.ok).toBe(true);
+    const parsed = envelope.data;
     // total should match how many search hits came back
     const nodes = parsed.nodes as Array<Record<string, unknown>>;
     expect(typeof parsed.total).toBe('number');
@@ -171,8 +179,10 @@ describe('query-nodes with query param (hybrid search)', () => {
     // Register without embedder
     handler = captureHandler(undefined, undefined);
     const result = await handler({ query: 'anything' });
-    const parsed = parseResult(result);
+    const envelope = parseResult(result) as any;
 
+    expect(envelope.ok).toBe(true);
+    const parsed = envelope.data;
     // Standard path — returns all nodes (no filter)
     const nodes = parsed.nodes as Array<Record<string, unknown>>;
     expect(nodes).toHaveLength(2);
@@ -190,8 +200,10 @@ describe('query-nodes with query param (hybrid search)', () => {
 
     handler = captureHandler(indexer, embedder);
     const result = await handler({ query: 'machine learning', include_fields: ['status'] });
-    const parsed = parseResult(result);
+    const envelope = parseResult(result) as any;
 
+    expect(envelope.ok).toBe(true);
+    const parsed = envelope.data;
     const nodes = parsed.nodes as Array<Record<string, unknown>>;
     const n1 = nodes.find(n => n.id === 'n1');
     expect(n1).toBeDefined();

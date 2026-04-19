@@ -3,7 +3,7 @@
 import type { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import type Database from 'better-sqlite3';
 import { z } from 'zod';
-import { toolResult, toolErrorResult, toolValidationErrorResult } from './errors.js';
+import { ok, fail, adaptIssue } from './errors.js';
 import { resolveNodeIdentity } from './resolve-identity.js';
 import { executeMutation } from '../../pipeline/execute.js';
 import { PipelineError } from '../../pipeline/types.js';
@@ -14,6 +14,7 @@ import type { EditsLogEntry } from '../../pipeline/edits-log.js';
 import type { WriteLockManager } from '../../sync/write-lock.js';
 import type { SyncLogger } from '../../sync/sync-logger.js';
 import { checkTypesHaveSchemas } from '../../pipeline/check-types.js';
+import { buildFixable } from '../../validation/fixable.js';
 
 const paramsShape = {
   node_id: z.string().optional(),
@@ -40,20 +41,24 @@ export function registerAddTypeToNode(
         title: params.title,
       });
       if (!resolved.ok) {
-        return toolErrorResult(resolved.code, resolved.message);
+        return fail(resolved.code, resolved.message);
       }
       const { node } = resolved;
 
       // Type-schema check
       const typeCheck = checkTypesHaveSchemas(db, [params.type]);
       if (!typeCheck.valid) {
-        return toolResult({
-          error: 'UNKNOWN_TYPE',
-          unknown_types: typeCheck.unknown,
-          message: `Cannot add type '${params.type}' — no schema exists. Use list-schemas to see available types, or use create-schema to define a new type first.`,
-          available_schemas: typeCheck.available,
-          suggestion: 'For general-purpose notes and reference material, use type \'note\'.',
-        });
+        return fail(
+          'UNKNOWN_TYPE',
+          `Unknown type(s): ${typeCheck.unknown.join(', ')}`,
+          {
+            details: {
+              unknown_types: typeCheck.unknown,
+              available_schemas: typeCheck.available,
+              suggestion: `Cannot add type '${params.type}' — no schema exists. Use list-schemas to see available types, or use create-schema to define a new type first. For general-purpose notes and reference material, use type 'note'.`,
+            },
+          },
+        );
       }
 
       // Load current state
@@ -61,13 +66,12 @@ export function registerAddTypeToNode(
         .all(node.node_id) as Array<{ schema_type: string }>).map(t => t.schema_type);
 
       if (currentTypes.includes(params.type)) {
-        return toolResult({
+        return ok({
           node_id: node.node_id,
           file_path: node.file_path,
           types: currentTypes,
           added_fields: [],
           readopted_fields: [],
-          issues: [],
           already_present: true,
         });
       }
@@ -128,23 +132,35 @@ export function registerAddTypeToNode(
           writeEditsLogEntries(db, entries);
         }
 
-        return toolResult({
-          node_id: result.node_id,
-          file_path: result.file_path,
-          types: newTypes,
-          added_fields: populated.map(p => p.field),
-          readopted_fields: readoptedFields,
-          issues: result.validation.issues,
-          already_present: false,
-        });
+        return ok(
+          {
+            node_id: result.node_id,
+            file_path: result.file_path,
+            types: newTypes,
+            added_fields: populated.map(p => p.field),
+            readopted_fields: readoptedFields,
+            already_present: false,
+          },
+          result.validation.issues.map(adaptIssue),
+        );
       } catch (err) {
         if (err instanceof PipelineError && err.validation) {
-          return toolValidationErrorResult(err.validation);
+          const errorCount = err.validation.issues.filter(i => i.severity === 'error').length;
+          return fail(
+            'VALIDATION_FAILED',
+            `Validation failed with ${errorCount} error(s)`,
+            {
+              details: {
+                issues: err.validation.issues.map(adaptIssue),
+                fixable: buildFixable(err.validation.issues, err.validation.effective_fields),
+              },
+            },
+          );
         }
         if (err instanceof PipelineError) {
-          return toolErrorResult('VALIDATION_FAILED', err.message);
+          return fail('VALIDATION_FAILED', err.message);
         }
-        return toolErrorResult('INTERNAL_ERROR', err instanceof Error ? err.message : String(err));
+        return fail('INTERNAL_ERROR', err instanceof Error ? err.message : String(err));
       }
     },
   );

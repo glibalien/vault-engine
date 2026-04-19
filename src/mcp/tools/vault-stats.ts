@@ -1,6 +1,6 @@
 import type { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import type Database from 'better-sqlite3';
-import { toolResult } from './errors.js';
+import { ok } from './errors.js';
 import type { ExtractorRegistry } from '../../extraction/registry.js';
 import type { EmbeddingIndexer } from '../../search/indexer.js';
 
@@ -54,7 +54,7 @@ export function registerVaultStats(server: McpServer, db: Database.Database, ext
         resultObj.search_index = embeddingIndexer.getStatus();
       }
 
-      return toolResult(resultObj);
+      return ok(resultObj);
     },
   );
 }

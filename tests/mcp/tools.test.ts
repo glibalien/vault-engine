@@ -67,7 +67,10 @@ describe('vault-stats', () => {
   it('returns correct counts with data', async () => {
     seedTestData();
     const handler = getToolHandler(registerVaultStats);
-    const result = parseResult(await handler({}) as any) as any;
+    const body = parseResult(await handler({}) as any) as any;
+    expect(body.ok).toBe(true);
+    expect(body.warnings).toEqual([]);
+    const result = body.data;
     expect(result.node_count).toBe(3);
     expect(result.type_counts).toEqual(
       expect.arrayContaining([
@@ -85,7 +88,9 @@ describe('vault-stats', () => {
 
   it('returns zero counts on empty db', async () => {
     const handler = getToolHandler(registerVaultStats);
-    const result = parseResult(await handler({}) as any) as any;
+    const body = parseResult(await handler({}) as any) as any;
+    expect(body.ok).toBe(true);
+    const result = body.data;
     expect(result.node_count).toBe(0);
     expect(result.type_counts).toEqual([]);
     expect(result.field_count).toBe(0);
@@ -99,8 +104,9 @@ describe('list-types', () => {
   it('returns types with counts', async () => {
     seedTestData();
     const handler = getToolHandler(registerListTypes);
-    const result = parseResult(await handler({}) as any) as any;
-    expect(result).toEqual(
+    const body = parseResult(await handler({}) as any) as any;
+    expect(body.ok).toBe(true);
+    expect(body.data).toEqual(
       expect.arrayContaining([
         { type: 'note', count: 2, has_schema: false, claim_count: null },
         { type: 'meeting', count: 1, has_schema: false, claim_count: null },
@@ -111,24 +117,27 @@ describe('list-types', () => {
 
   it('returns empty array on empty db', async () => {
     const handler = getToolHandler(registerListTypes);
-    const result = parseResult(await handler({}) as any) as any;
-    expect(result).toEqual([]);
+    const body = parseResult(await handler({}) as any) as any;
+    expect(body.ok).toBe(true);
+    expect(body.data).toEqual([]);
   });
 });
 
 describe('list-schemas', () => {
   it('returns empty array in Phase 1', async () => {
     const handler = getToolHandler(registerListSchemas);
-    const result = parseResult(await handler({}) as any) as any;
-    expect(result).toEqual([]);
+    const body = parseResult(await handler({}) as any) as any;
+    expect(body.ok).toBe(true);
+    expect(body.data).toEqual([]);
   });
 });
 
 describe('describe-schema', () => {
   it('returns NOT_FOUND for nonexistent schema', async () => {
     const handler = getToolHandler(registerDescribeSchema);
-    const result = parseResult(await handler({ name: 'nonexistent' }) as any) as any;
-    expect(result.code).toBe('NOT_FOUND');
+    const body = parseResult(await handler({ name: 'nonexistent' }) as any) as any;
+    expect(body.ok).toBe(false);
+    expect(body.error.code).toBe('NOT_FOUND');
   });
 
   it('returns full schema row with parsed JSON fields', async () => {
@@ -151,7 +160,9 @@ describe('describe-schema', () => {
     ).run('meeting', 'attendees', 2);
 
     const handler = getToolHandler(registerDescribeSchema);
-    const result = parseResult(await handler({ name: 'meeting' }) as any) as any;
+    const body = parseResult(await handler({ name: 'meeting' }) as any) as any;
+    expect(body.ok).toBe(true);
+    const result = body.data;
     expect(result.name).toBe('meeting');
     expect(result.display_name).toBe('Meeting');
     expect(result.field_claims).toHaveLength(2);
@@ -170,16 +181,18 @@ describe('describe-schema', () => {
 describe('list-global-fields', () => {
   it('returns empty array in Phase 1', async () => {
     const handler = getToolHandler(registerListGlobalFields);
-    const result = parseResult(await handler({}) as any) as any;
-    expect(result).toEqual([]);
+    const body = parseResult(await handler({}) as any) as any;
+    expect(body.ok).toBe(true);
+    expect(body.data).toEqual([]);
   });
 });
 
 describe('describe-global-field', () => {
   it('returns NOT_FOUND for nonexistent field', async () => {
     const handler = getToolHandler(registerDescribeGlobalField);
-    const result = parseResult(await handler({ name: 'nonexistent' }) as any) as any;
-    expect(result.code).toBe('NOT_FOUND');
+    const body = parseResult(await handler({ name: 'nonexistent' }) as any) as any;
+    expect(body.ok).toBe(false);
+    expect(body.error.code).toBe('NOT_FOUND');
   });
 
   it('returns full field row with parsed JSON', async () => {
@@ -188,7 +201,9 @@ describe('describe-global-field', () => {
     ).run('status', 'enum', '["open","closed","in-progress"]', null, 'Task status', '"open"');
 
     const handler = getToolHandler(registerDescribeGlobalField);
-    const result = parseResult(await handler({ name: 'status' }) as any) as any;
+    const body = parseResult(await handler({ name: 'status' }) as any) as any;
+    expect(body.ok).toBe(true);
+    const result = body.data;
     expect(result.name).toBe('status');
     expect(result.field_type).toBe('enum');
     expect(result.enum_values).toEqual(['open', 'closed', 'in-progress']);
@@ -203,7 +218,9 @@ describe('query-nodes', () => {
 
   it('returns all nodes with no filters', async () => {
     const handler = getToolHandler(registerQueryNodes);
-    const result = parseResult(await handler({}) as any) as any;
+    const body = parseResult(await handler({}) as any) as any;
+    expect(body.ok).toBe(true);
+    const result = body.data;
     expect(result.total).toBe(3);
     expect(result.nodes).toHaveLength(3);
     // Default sort by title asc
@@ -214,49 +231,63 @@ describe('query-nodes', () => {
 
   it('filters by single type', async () => {
     const handler = getToolHandler(registerQueryNodes);
-    const result = parseResult(await handler({ types: ['note'] }) as any) as any;
+    const body = parseResult(await handler({ types: ['note'] }) as any) as any;
+    expect(body.ok).toBe(true);
+    const result = body.data;
     expect(result.total).toBe(2);
     expect(result.nodes.map((n: any) => n.id).sort()).toEqual(['n1', 'n2']);
   });
 
   it('filters by multi-type intersection', async () => {
     const handler = getToolHandler(registerQueryNodes);
-    const result = parseResult(await handler({ types: ['meeting', 'note'] }) as any) as any;
+    const body = parseResult(await handler({ types: ['meeting', 'note'] }) as any) as any;
+    expect(body.ok).toBe(true);
+    const result = body.data;
     expect(result.total).toBe(1);
     expect(result.nodes[0].id).toBe('n1');
   });
 
   it('filters by field equality (text)', async () => {
     const handler = getToolHandler(registerQueryNodes);
-    const result = parseResult(await handler({ fields: { project: { eq: 'Vault Engine' } } }) as any) as any;
+    const body = parseResult(await handler({ fields: { project: { eq: 'Vault Engine' } } }) as any) as any;
+    expect(body.ok).toBe(true);
+    const result = body.data;
     expect(result.total).toBe(1);
     expect(result.nodes[0].id).toBe('n1');
   });
 
   it('filters by numeric comparison (lte)', async () => {
     const handler = getToolHandler(registerQueryNodes);
-    const result = parseResult(await handler({ fields: { priority: { lte: 5 } } }) as any) as any;
+    const body = parseResult(await handler({ fields: { priority: { lte: 5 } } }) as any) as any;
+    expect(body.ok).toBe(true);
+    const result = body.data;
     expect(result.total).toBe(1);
     expect(result.nodes[0].id).toBe('n3');
   });
 
   it('filters by field exists', async () => {
     const handler = getToolHandler(registerQueryNodes);
-    const result = parseResult(await handler({ fields: { project: { exists: true } } }) as any) as any;
+    const body = parseResult(await handler({ fields: { project: { exists: true } } }) as any) as any;
+    expect(body.ok).toBe(true);
+    const result = body.data;
     expect(result.total).toBe(1);
     expect(result.nodes[0].id).toBe('n1');
   });
 
   it('filters by field not exists', async () => {
     const handler = getToolHandler(registerQueryNodes);
-    const result = parseResult(await handler({ fields: { project: { exists: false } } }) as any) as any;
+    const body = parseResult(await handler({ fields: { project: { exists: false } } }) as any) as any;
+    expect(body.ok).toBe(true);
+    const result = body.data;
     expect(result.total).toBe(2);
     expect(result.nodes.map((n: any) => n.id).sort()).toEqual(['n2', 'n3']);
   });
 
   it('supports pagination', async () => {
     const handler = getToolHandler(registerQueryNodes);
-    const result = parseResult(await handler({ limit: 1, offset: 1 }) as any) as any;
+    const body = parseResult(await handler({ limit: 1, offset: 1 }) as any) as any;
+    expect(body.ok).toBe(true);
+    const result = body.data;
     expect(result.total).toBe(3);
     expect(result.nodes).toHaveLength(1);
     expect(result.nodes[0].title).toBe('Quick Note');
@@ -264,28 +295,36 @@ describe('query-nodes', () => {
 
   it('supports sorting', async () => {
     const handler = getToolHandler(registerQueryNodes);
-    const result = parseResult(await handler({ sort_by: 'file_mtime', sort_order: 'desc' }) as any) as any;
+    const body = parseResult(await handler({ sort_by: 'file_mtime', sort_order: 'desc' }) as any) as any;
+    expect(body.ok).toBe(true);
+    const result = body.data;
     expect(result.nodes[0].id).toBe('n3');
     expect(result.nodes[2].id).toBe('n1');
   });
 
   it('filters by path_prefix', async () => {
     const handler = getToolHandler(registerQueryNodes);
-    const result = parseResult(await handler({ path_prefix: 'meetings/' }) as any) as any;
+    const body = parseResult(await handler({ path_prefix: 'meetings/' }) as any) as any;
+    expect(body.ok).toBe(true);
+    const result = body.data;
     expect(result.total).toBe(1);
     expect(result.nodes[0].id).toBe('n1');
   });
 
   it('filters by type (meeting)', async () => {
     const handler = getToolHandler(registerQueryNodes);
-    const result = parseResult(await handler({ types: ['meeting'] }) as any) as any;
+    const body = parseResult(await handler({ types: ['meeting'] }) as any) as any;
+    expect(body.ok).toBe(true);
+    const result = body.data;
     expect(result.total).toBe(1);
     expect(result.nodes[0].id).toBe('n1');
   });
 
   it('filters by outgoing reference', async () => {
     const handler = getToolHandler(registerQueryNodes);
-    const result = parseResult(await handler({ references: { target: 'Quick Note' } }) as any) as any;
+    const body = parseResult(await handler({ references: { target: 'Quick Note' } }) as any) as any;
+    expect(body.ok).toBe(true);
+    const result = body.data;
     expect(result.total).toBe(1);
     expect(result.nodes[0].id).toBe('n1');
   });
@@ -294,9 +333,11 @@ describe('query-nodes', () => {
     const handler = getToolHandler(registerQueryNodes);
     // n1 has a wiki-link to 'Quick Note', which is n2's title.
     // Incoming to 'Quick Note' should return n1 (the source of the link).
-    const result = parseResult(await handler({
+    const body = parseResult(await handler({
       references: { target: 'Quick Note', direction: 'incoming' },
     }) as any) as any;
+    expect(body.ok).toBe(true);
+    const result = body.data;
     expect(result.total).toBe(1);
     expect(result.nodes[0].id).toBe('n1');
   });
@@ -305,59 +346,68 @@ describe('query-nodes', () => {
     const handler = getToolHandler(registerQueryNodes);
     // limit > 200 should be clamped by zod validation
     // Since zod max(200) throws, we pass 200 and it works
-    const result = parseResult(await handler({ limit: 200 }) as any) as any;
-    expect(result.total).toBe(3);
+    const body = parseResult(await handler({ limit: 200 }) as any) as any;
+    expect(body.ok).toBe(true);
+    expect(body.data.total).toBe(3);
   });
 
   it('enriches results with types and field_count', async () => {
     const handler = getToolHandler(registerQueryNodes);
-    const result = parseResult(await handler({ types: ['meeting'] }) as any) as any;
-    const node = result.nodes[0];
+    const body = parseResult(await handler({ types: ['meeting'] }) as any) as any;
+    expect(body.ok).toBe(true);
+    const node = body.data.nodes[0];
     expect(node.types).toEqual(expect.arrayContaining(['meeting', 'note']));
     expect(node.field_count).toBe(1);
   });
 
   it('filters by without_types (negation)', async () => {
     const handler = getToolHandler(registerQueryNodes);
-    const result = parseResult(await handler({ without_types: ['meeting'] }) as any) as any;
+    const body = parseResult(await handler({ without_types: ['meeting'] }) as any) as any;
+    expect(body.ok).toBe(true);
     // n1 is meeting+note, n2 is note, n3 is task
-    expect((result as any).nodes.every((n: any) => !n.types.includes('meeting'))).toBe(true);
-    expect((result as any).nodes.length).toBe(2);
+    expect(body.data.nodes.every((n: any) => !n.types.includes('meeting'))).toBe(true);
+    expect(body.data.nodes.length).toBe(2);
   });
 
   it('filters by without_fields (negation)', async () => {
     const handler = getToolHandler(registerQueryNodes);
-    const result = parseResult(await handler({ without_fields: ['project'] }) as any) as any;
+    const body = parseResult(await handler({ without_fields: ['project'] }) as any) as any;
+    expect(body.ok).toBe(true);
     // n1 has project, n2 and n3 don't
-    expect((result as any).nodes.length).toBe(2);
-    expect((result as any).nodes.every((n: any) => n.id !== 'n1')).toBe(true);
+    expect(body.data.nodes.length).toBe(2);
+    expect(body.data.nodes.every((n: any) => n.id !== 'n1')).toBe(true);
   });
 
   it('returns field values when include_fields is specified', async () => {
     const handler = getToolHandler(registerQueryNodes);
-    const result = parseResult(await handler({ types: ['meeting'], include_fields: ['project'] }) as any) as any;
+    const body = parseResult(await handler({ types: ['meeting'], include_fields: ['project'] }) as any) as any;
+    expect(body.ok).toBe(true);
+    const result = body.data;
     expect(result.total).toBe(1);
     expect(result.nodes[0].fields).toEqual({ project: 'Vault Engine' });
   });
 
   it('omits fields key when include_fields is not specified', async () => {
     const handler = getToolHandler(registerQueryNodes);
-    const result = parseResult(await handler({ types: ['meeting'] }) as any) as any;
-    expect(result.nodes[0].fields).toBeUndefined();
+    const body = parseResult(await handler({ types: ['meeting'] }) as any) as any;
+    expect(body.ok).toBe(true);
+    expect(body.data.nodes[0].fields).toBeUndefined();
   });
 
   it('returns empty fields object when requested field does not exist on node', async () => {
     const handler = getToolHandler(registerQueryNodes);
-    const result = parseResult(await handler({ types: ['task'], include_fields: ['project'] }) as any) as any;
+    const body = parseResult(await handler({ types: ['task'], include_fields: ['project'] }) as any) as any;
+    expect(body.ok).toBe(true);
     // n3 (task) has no project field
-    expect(result.nodes[0].fields).toEqual({});
+    expect(body.data.nodes[0].fields).toEqual({});
   });
 
   it('wildcard include_fields returns all fields', async () => {
     const handler = getToolHandler(registerQueryNodes);
-    const result = parseResult(await handler({ types: ['task'], include_fields: ['*'] }) as any) as any;
+    const body = parseResult(await handler({ types: ['task'], include_fields: ['*'] }) as any) as any;
+    expect(body.ok).toBe(true);
     // n3 has only 'priority' field with value 1
-    expect(result.nodes[0].fields).toEqual({ priority: 1 });
+    expect(body.data.nodes[0].fields).toEqual({ priority: 1 });
   });
 
   it('include_fields resolves JSON values correctly', async () => {
@@ -371,8 +421,9 @@ describe('query-nodes', () => {
     ).run('n_json', 'tags', null, null, null, '["design","spec"]', 'frontmatter');
 
     const handler = getToolHandler(registerQueryNodes);
-    const result = parseResult(await handler({ types: ['json-test-type'], include_fields: ['tags'] }) as any) as any;
-    expect(result.nodes[0].fields).toEqual({ tags: ['design', 'spec'] });
+    const body = parseResult(await handler({ types: ['json-test-type'], include_fields: ['tags'] }) as any) as any;
+    expect(body.ok).toBe(true);
+    expect(body.data.nodes[0].fields).toEqual({ tags: ['design', 'spec'] });
   });
 
   it('include_fields with multiple specific fields', async () => {
@@ -382,16 +433,18 @@ describe('query-nodes', () => {
     ).run('n1', 'status', 'active', null, null, null, 'frontmatter');
 
     const handler = getToolHandler(registerQueryNodes);
-    const result = parseResult(await handler({ types: ['meeting'], include_fields: ['project', 'status'] }) as any) as any;
-    expect(result.nodes[0].fields).toEqual({ project: 'Vault Engine', status: 'active' });
+    const body = parseResult(await handler({ types: ['meeting'], include_fields: ['project', 'status'] }) as any) as any;
+    expect(body.ok).toBe(true);
+    expect(body.data.nodes[0].fields).toEqual({ project: 'Vault Engine', status: 'active' });
   });
 
   it('field_count is unaffected by include_fields', async () => {
     const handler = getToolHandler(registerQueryNodes);
-    const result = parseResult(await handler({ types: ['meeting'], include_fields: ['project'] }) as any) as any;
+    const body = parseResult(await handler({ types: ['meeting'], include_fields: ['project'] }) as any) as any;
+    expect(body.ok).toBe(true);
     // n1 has 1 field (project). field_count should still be 1.
-    expect(result.nodes[0].field_count).toBe(1);
-    expect(result.nodes[0].fields).toEqual({ project: 'Vault Engine' });
+    expect(body.data.nodes[0].field_count).toBe(1);
+    expect(body.data.nodes[0].fields).toEqual({ project: 'Vault Engine' });
   });
 });
 
@@ -402,7 +455,9 @@ describe('get-node', () => {
 
   it('retrieves node by node_id', async () => {
     const handler = getToolHandler(registerGetNode);
-    const result = parseResult(await handler({ node_id: 'n1' }) as any) as any;
+    const body = parseResult(await handler({ node_id: 'n1' }) as any) as any;
+    expect(body.ok).toBe(true);
+    const result = body.data;
     expect(result.id).toBe('n1');
     expect(result.title).toBe('Team Meeting');
     expect(result.file_path).toBe('meetings/meeting.md');
@@ -410,39 +465,46 @@ describe('get-node', () => {
 
   it('retrieves node by file_path', async () => {
     const handler = getToolHandler(registerGetNode);
-    const result = parseResult(await handler({ file_path: 'notes/note.md' }) as any) as any;
+    const body = parseResult(await handler({ file_path: 'notes/note.md' }) as any) as any;
+    expect(body.ok).toBe(true);
+    const result = body.data;
     expect(result.id).toBe('n2');
     expect(result.title).toBe('Quick Note');
   });
 
   it('retrieves node by title (uses resolveTarget)', async () => {
     const handler = getToolHandler(registerGetNode);
-    const result = parseResult(await handler({ title: 'Fix Bug' }) as any) as any;
-    expect(result.id).toBe('n3');
+    const body = parseResult(await handler({ title: 'Fix Bug' }) as any) as any;
+    expect(body.ok).toBe(true);
+    expect(body.data.id).toBe('n3');
   });
 
   it('returns INVALID_PARAMS when no params provided', async () => {
     const handler = getToolHandler(registerGetNode);
-    const result = parseResult(await handler({}) as any) as any;
-    expect(result.code).toBe('INVALID_PARAMS');
+    const body = parseResult(await handler({}) as any) as any;
+    expect(body.ok).toBe(false);
+    expect(body.error.code).toBe('INVALID_PARAMS');
   });
 
   it('returns INVALID_PARAMS when multiple params provided', async () => {
     const handler = getToolHandler(registerGetNode);
-    const result = parseResult(await handler({ node_id: 'n1', title: 'Team Meeting' }) as any) as any;
-    expect(result.code).toBe('INVALID_PARAMS');
+    const body = parseResult(await handler({ node_id: 'n1', title: 'Team Meeting' }) as any) as any;
+    expect(body.ok).toBe(false);
+    expect(body.error.code).toBe('INVALID_PARAMS');
   });
 
   it('returns NOT_FOUND for nonexistent node', async () => {
     const handler = getToolHandler(registerGetNode);
-    const result = parseResult(await handler({ node_id: 'nonexistent' }) as any) as any;
-    expect(result.code).toBe('NOT_FOUND');
+    const body = parseResult(await handler({ node_id: 'nonexistent' }) as any) as any;
+    expect(body.ok).toBe(false);
+    expect(body.error.code).toBe('NOT_FOUND');
   });
 
   it('returns fields with types', async () => {
     const handler = getToolHandler(registerGetNode);
-    const result = parseResult(await handler({ node_id: 'n1' }) as any) as any;
-    expect(result.fields.project).toEqual({
+    const body = parseResult(await handler({ node_id: 'n1' }) as any) as any;
+    expect(body.ok).toBe(true);
+    expect(body.data.fields.project).toEqual({
       value: 'Vault Engine',
       type: 'text',
       source: 'frontmatter',
@@ -451,8 +513,9 @@ describe('get-node', () => {
 
   it('returns numeric fields correctly', async () => {
     const handler = getToolHandler(registerGetNode);
-    const result = parseResult(await handler({ node_id: 'n3' }) as any) as any;
-    expect(result.fields.priority).toEqual({
+    const body = parseResult(await handler({ node_id: 'n3' }) as any) as any;
+    expect(body.ok).toBe(true);
+    expect(body.data.fields.priority).toEqual({
       value: 1,
       type: 'number',
       source: 'frontmatter',
@@ -461,14 +524,18 @@ describe('get-node', () => {
 
   it('returns types array', async () => {
     const handler = getToolHandler(registerGetNode);
-    const result = parseResult(await handler({ node_id: 'n1' }) as any) as any;
+    const body = parseResult(await handler({ node_id: 'n1' }) as any) as any;
+    expect(body.ok).toBe(true);
+    const result = body.data;
     expect(result.types).toEqual(expect.arrayContaining(['meeting', 'note']));
     expect(result.types).toHaveLength(2);
   });
 
   it('returns grouped outgoing relationships', async () => {
     const handler = getToolHandler(registerGetNode);
-    const result = parseResult(await handler({ node_id: 'n1' }) as any) as any;
+    const body = parseResult(await handler({ node_id: 'n1' }) as any) as any;
+    expect(body.ok).toBe(true);
+    const result = body.data;
     expect(result.relationships.outgoing['wiki-link']).toBeDefined();
     expect(result.relationships.outgoing['wiki-link']).toHaveLength(1);
     expect(result.relationships.outgoing['wiki-link'][0].target_title).toBe('Quick Note');
@@ -477,7 +544,9 @@ describe('get-node', () => {
 
   it('returns incoming relationships on target node', async () => {
     const handler = getToolHandler(registerGetNode);
-    const result = parseResult(await handler({ node_id: 'n2' }) as any) as any;
+    const body = parseResult(await handler({ node_id: 'n2' }) as any) as any;
+    expect(body.ok).toBe(true);
+    const result = body.data;
     expect(result.relationships.incoming['wiki-link']).toBeDefined();
     expect(result.relationships.incoming['wiki-link']).toHaveLength(1);
     expect(result.relationships.incoming['wiki-link'][0].source_id).toBe('n1');
@@ -485,7 +554,9 @@ describe('get-node', () => {
 
   it('returns body and metadata', async () => {
     const handler = getToolHandler(registerGetNode);
-    const result = parseResult(await handler({ node_id: 'n1' }) as any) as any;
+    const body = parseResult(await handler({ node_id: 'n1' }) as any) as any;
+    expect(body.ok).toBe(true);
+    const result = body.data;
     expect(result.body).toBe('Meeting body text');
     expect(result.metadata.content_hash).toBe('h1');
     expect(result.metadata.file_mtime).toBe(1000);

@@ -7,7 +7,7 @@ import { nanoid } from 'nanoid';
 import { dirname, join } from 'node:path';
 import { existsSync, renameSync, mkdirSync } from 'node:fs';
 import { safeVaultPath } from '../../pipeline/safe-path.js';
-import { toolResult, toolErrorResult, toolValidationErrorResult } from './errors.js';
+import { ok, fail, adaptIssue, type Issue } from './errors.js';
 import { resolveNodeIdentity } from './resolve-identity.js';
 import { executeRename } from './rename-node.js';
 import { checkTitleSafety, type ToolIssue } from './title-warnings.js';
@@ -101,39 +101,41 @@ export function registerUpdateNode(
 ): void {
   server.tool(
     'update-node',
-    'Update an existing node (single or query-mode bulk). Patch semantics for fields (null removes a field). set_body and append_body are mutually exclusive. Types can be changed with set_types (replace all), add_types (append), or remove_types (remove). All type changes require defined schemas — use list-schemas to see available types. set_title renames the file and rewrites wiki-link references vault-wide. For query mode, provide query instead of node identity. Query mode supports set_directory to move files to a target directory (title unchanged, no reference rewriting). Query mode accepts join_filters and without_joins (same shape as query-nodes) for cross-node filtering — e.g. bump priority on all tasks whose project is done: {"query":{"types":["task"],"join_filters":[{"rel_type":"project","target":{"fields":{"status":{"eq":"done"}}}}]},"set_fields":{"priority":"high"},"dry_run":true}. Dry-run responses include a notice when join filters are present, flagging the caller to review the affected set. Dry-run defaults to true in query mode.',
+    'Update an existing node (single or query-mode bulk). Patch semantics for fields (null removes a field). set_body and append_body are mutually exclusive. Types can be changed with set_types (replace all), add_types (append), or remove_types (remove). All type changes require defined schemas — use list-schemas to see available types. set_title renames the file and rewrites wiki-link references vault-wide. For query mode, provide query instead of node identity. Query mode supports set_directory to move files to a target directory (title unchanged, no reference rewriting). Query mode accepts join_filters and without_joins (same shape as query-nodes) for cross-node filtering — e.g. bump priority on all tasks whose project is done: {"query":{"types":["task"],"join_filters":[{"rel_type":"project","target":{"fields":{"status":{"eq":"done"}}}}]},"set_fields":{"priority":"high"},"dry_run":true}. When join filters have targets but unresolved edges exist, a `CROSS_NODE_FILTER_UNRESOLVED` warning surfaces in the envelope `warnings` array. Dry-run defaults to true in query mode.',
     paramsShape,
     async (params) => {
       const hasIdentity = params.node_id !== undefined || params.file_path !== undefined || params.title !== undefined;
       const hasQuery = params.query !== undefined;
 
       if (hasIdentity && hasQuery) {
-        return toolErrorResult('INVALID_PARAMS', 'Cannot provide both node identity and query parameters');
+        return fail('INVALID_PARAMS', 'Cannot provide both node identity and query parameters');
       }
       if (!hasIdentity && !hasQuery) {
-        return toolErrorResult('INVALID_PARAMS', 'Must provide either node identity (node_id/file_path/title) or query');
+        return fail('INVALID_PARAMS', 'Must provide either node identity (node_id/file_path/title) or query');
       }
 
       if (hasIdentity && params.set_directory !== undefined) {
-        return toolErrorResult('INVALID_PARAMS', 'set_directory is not supported in single-node mode. Use rename-node to move individual files.');
+        return fail('INVALID_PARAMS', 'set_directory is not supported in single-node mode. Use rename-node to move individual files.');
       }
 
       // ── Query mode ──────────────────────────────────────────────────
       if (hasQuery) {
         if (params.set_types !== undefined) {
-          return toolErrorResult(
+          return fail(
             'INVALID_PARAMS',
             'set_types is not supported in query mode. Use add_types/remove_types for bulk type changes across filtered nodes.',
           );
         }
         const hasOp = params.set_fields !== undefined || params.add_types !== undefined || params.remove_types !== undefined || params.set_directory !== undefined;
         if (!hasOp) {
-          return toolErrorResult('INVALID_PARAMS', 'Query mode requires at least one operation: set_fields, add_types, remove_types, or set_directory');
+          return fail('INVALID_PARAMS', 'Query mode requires at least one operation: set_fields, add_types, remove_types, or set_directory');
         }
 
         if (params.set_directory !== undefined && params.set_directory.endsWith('.md')) {
-          return toolErrorResult('INVALID_PARAMS',
-            '"set_directory" must be a folder path, not a filename. The filename is always derived from the node title.');
+          return fail(
+            'INVALID_PARAMS',
+            '"set_directory" must be a folder path, not a filename. The filename is always derived from the node title.',
+          );
         }
         const dryRun = params.dry_run ?? true; // default true in query mode
         return handleQueryMode(db, writeLock, vaultPath, params.query!, {
@@ -149,7 +151,7 @@ export function registerUpdateNode(
       const { set_title, set_types, set_fields, set_body, append_body } = params;
 
       if (set_body !== undefined && append_body !== undefined) {
-        return toolErrorResult('INVALID_PARAMS', 'set_body and append_body are mutually exclusive');
+        return fail('INVALID_PARAMS', 'set_body and append_body are mutually exclusive');
       }
 
       const resolved = resolveNodeIdentity(db, {
@@ -158,7 +160,7 @@ export function registerUpdateNode(
         title: params.title,
       });
       if (!resolved.ok) {
-        return toolErrorResult(resolved.code, resolved.message);
+        return fail(resolved.code, resolved.message);
       }
       const { node } = resolved;
 
@@ -188,11 +190,11 @@ export function registerUpdateNode(
         if (effectiveFilePath !== node.file_path) {
           const conflict = db.prepare('SELECT id, title FROM nodes WHERE file_path = ?').get(effectiveFilePath) as { id: string; title: string } | undefined;
           if (conflict) {
-            return toolErrorResult('CONFLICT', `Cannot rename — file "${effectiveFilePath}" already exists (node: ${conflict.title}). Use rename-node with a different directory to resolve.`);
+            return fail('CONFLICT', `Cannot rename — file "${effectiveFilePath}" already exists (node: ${conflict.title}). Use rename-node with a different directory to resolve.`);
           }
           safeVaultPath(vaultPath, effectiveFilePath); // throws on path traversal
           if (existsSync(join(vaultPath, effectiveFilePath))) {
-            return toolErrorResult('CONFLICT', `Cannot rename — file "${effectiveFilePath}" already exists on disk.`);
+            return fail('CONFLICT', `Cannot rename — file "${effectiveFilePath}" already exists on disk.`);
           }
         }
       }
@@ -223,13 +225,17 @@ export function registerUpdateNode(
       if (hasTypeOp) {
         const typeCheck = checkTypesHaveSchemas(db, finalTypes);
         if (!typeCheck.valid) {
-          return toolResult({
-            error: 'UNKNOWN_TYPE',
-            unknown_types: typeCheck.unknown,
-            message: `Cannot set types ${typeCheck.unknown.map(t => `'${t}'`).join(', ')} — no schema exists. Use list-schemas to see available types, or use create-schema to define a new type first.`,
-            available_schemas: typeCheck.available,
-            suggestion: 'For general-purpose notes and reference material, use type \'note\'.',
-          });
+          return fail(
+            'UNKNOWN_TYPE',
+            `Unknown type(s): ${typeCheck.unknown.join(', ')}`,
+            {
+              details: {
+                unknown_types: typeCheck.unknown,
+                available_schemas: typeCheck.available,
+                suggestion: `Cannot set types ${typeCheck.unknown.map(t => `'${t}'`).join(', ')} — no schema exists. Use list-schemas to see available types, or use create-schema to define a new type first. For general-purpose notes and reference material, use type 'note'.`,
+              },
+            },
+          );
         }
       }
 
@@ -252,19 +258,22 @@ export function registerUpdateNode(
         const { claimsByType, globalFields } = loadSchemaContext(db, finalTypes);
         const validation = validateProposedState(finalFields, finalTypes, claimsByType, globalFields);
         const titleIssues: ToolIssue[] = titleChanged ? checkTitleSafety(finalTitle) : [];
-        return toolResult({
-          dry_run: true,
-          preview: {
-            node_id: node.node_id,
-            file_path: effectiveFilePath,
-            title: finalTitle,
-            types: finalTypes,
-            coerced_state: validation.coerced_state,
-            issues: [...validation.issues, ...titleIssues, ...typeOpConflict],
-            fixable: buildFixable(validation.issues, validation.effective_fields),
-            orphan_fields: validation.orphan_fields,
+        const allIssues = [...validation.issues, ...titleIssues, ...typeOpConflict];
+        return ok(
+          {
+            dry_run: true,
+            preview: {
+              node_id: node.node_id,
+              file_path: effectiveFilePath,
+              title: finalTitle,
+              types: finalTypes,
+              coerced_state: validation.coerced_state,
+              fixable: buildFixable(validation.issues, validation.effective_fields),
+              orphan_fields: validation.orphan_fields,
+            },
           },
-        });
+          allIssues.map(adaptIssue),
+        );
       }
 
       try {
@@ -290,16 +299,18 @@ export function registerUpdateNode(
           })();
 
           const titleIssues: ToolIssue[] = checkTitleSafety(finalTitle);
-          return toolResult({
-            node_id: node.node_id,
-            file_path: effectiveFilePath,
-            title: finalTitle,
-            types: finalTypes,
-            references_updated: refsUpdated,
-            coerced_state: mutResult.validation.coerced_state,
-            issues: [...mutResult.validation.issues, ...titleIssues, ...typeOpConflict],
-            orphan_fields: mutResult.validation.orphan_fields,
-          });
+          return ok(
+            {
+              node_id: node.node_id,
+              file_path: effectiveFilePath,
+              title: finalTitle,
+              types: finalTypes,
+              references_updated: refsUpdated,
+              coerced_state: mutResult.validation.coerced_state,
+              orphan_fields: mutResult.validation.orphan_fields,
+            },
+            [...mutResult.validation.issues, ...titleIssues, ...typeOpConflict].map(adaptIssue),
+          );
         }
 
         // No title change — standard mutation
@@ -313,23 +324,35 @@ export function registerUpdateNode(
           body: finalBody,
         }, syncLogger);
 
-        return toolResult({
-          node_id: result.node_id,
-          file_path: result.file_path,
-          title: finalTitle,
-          types: finalTypes,
-          coerced_state: result.validation.coerced_state,
-          issues: [...result.validation.issues, ...typeOpConflict],
-          orphan_fields: result.validation.orphan_fields,
-        });
+        return ok(
+          {
+            node_id: result.node_id,
+            file_path: result.file_path,
+            title: finalTitle,
+            types: finalTypes,
+            coerced_state: result.validation.coerced_state,
+            orphan_fields: result.validation.orphan_fields,
+          },
+          [...result.validation.issues, ...typeOpConflict].map(adaptIssue),
+        );
       } catch (err) {
         if (err instanceof PipelineError && err.validation) {
-          return toolValidationErrorResult(err.validation);
+          const errorCount = err.validation.issues.filter(i => i.severity === 'error').length;
+          return fail(
+            'VALIDATION_FAILED',
+            `Validation failed with ${errorCount} error(s)`,
+            {
+              details: {
+                issues: err.validation.issues.map(adaptIssue),
+                fixable: buildFixable(err.validation.issues, err.validation.effective_fields),
+              },
+            },
+          );
         }
         if (err instanceof PipelineError) {
-          return toolErrorResult('VALIDATION_FAILED', err.message);
+          return fail('VALIDATION_FAILED', err.message);
         }
-        return toolErrorResult('INTERNAL_ERROR', err instanceof Error ? err.message : String(err));
+        return fail('INTERNAL_ERROR', err instanceof Error ? err.message : String(err));
       }
     },
   );
@@ -360,33 +383,77 @@ function handleQueryMode(
 
   // Batch size guard
   if (matchedNodes.length > 1000 && !confirmLargeBatch) {
-    return toolErrorResult('INVALID_PARAMS', `Query matched ${matchedNodes.length} nodes (>1000). Set confirm_large_batch: true to proceed.`);
+    return fail('INVALID_PARAMS', `Query matched ${matchedNodes.length} nodes (>1000). Set confirm_large_batch: true to proceed.`);
   }
 
   // Type-schema check on add_types
   if (ops.add_types && ops.add_types.length > 0) {
     const typeCheck = checkTypesHaveSchemas(db, ops.add_types);
     if (!typeCheck.valid) {
-      return toolResult({
-        error: 'UNKNOWN_TYPE',
-        unknown_types: typeCheck.unknown,
-        message: `Cannot add types ${typeCheck.unknown.map(t => `'${t}'`).join(', ')} — no schema exists. Use list-schemas to see available types, or use create-schema to define a new type first.`,
-        available_schemas: typeCheck.available,
-        suggestion: 'For general-purpose notes and reference material, use type \'note\'.',
-      });
+      return fail(
+        'UNKNOWN_TYPE',
+        `Unknown type(s): ${typeCheck.unknown.join(', ')}`,
+        {
+          details: {
+            unknown_types: typeCheck.unknown,
+            available_schemas: typeCheck.available,
+            suggestion: `Cannot add types ${typeCheck.unknown.map(t => `'${t}'`).join(', ')} — no schema exists. Use list-schemas to see available types, or use create-schema to define a new type first. For general-purpose notes and reference material, use type 'note'.`,
+          },
+        },
+      );
     }
   }
 
   const batchId = nanoid();
 
-  const hasJoinFilters =
-    (query.join_filters?.length ?? 0) > 0 || (query.without_joins?.length ?? 0) > 0;
+  const joinWarning = computeJoinWarning(db, query.join_filters, query.without_joins);
 
   if (dryRun) {
-    return handleDryRun(db, vaultPath, matchedNodes, ops, batchId, hasJoinFilters);
+    return handleDryRun(db, vaultPath, matchedNodes, ops, batchId, joinWarning);
   }
 
   return handleExecution(db, writeLock, vaultPath, matchedNodes, ops, batchId, syncLogger);
+}
+
+function computeJoinWarning(
+  db: Database.Database,
+  joinFilters: NodeQueryFilter['join_filters'] | undefined,
+  withoutJoins: NodeQueryFilter['without_joins'] | undefined,
+): Issue | undefined {
+  const needsCheck =
+    (joinFilters?.some(f => f.target !== undefined) ?? false) ||
+    (withoutJoins?.some(f => f.target !== undefined) ?? false);
+
+  if (!needsCheck) return undefined;
+
+  // Collect rel_types that appeared in filters-with-target; missing rel_type means "any".
+  const relTypes = new Set<string>();
+  let anyRelType = false;
+  for (const f of [...(joinFilters ?? []), ...(withoutJoins ?? [])]) {
+    if (f.target === undefined) continue;
+    if (f.rel_type === undefined) { anyRelType = true; break; }
+    const types = Array.isArray(f.rel_type) ? f.rel_type : [f.rel_type];
+    for (const t of types) relTypes.add(t);
+  }
+
+  let sql = 'SELECT COUNT(*) AS n FROM relationships WHERE resolved_target_id IS NULL';
+  const p: unknown[] = [];
+  if (!anyRelType && relTypes.size > 0) {
+    const placeholders = Array.from(relTypes, () => '?').join(', ');
+    sql += ` AND rel_type IN (${placeholders})`;
+    p.push(...relTypes);
+  }
+  const { n } = db.prepare(sql).get(...p) as { n: number };
+  if (n > 0) {
+    const edges = anyRelType ? ['(any rel_type)'] : Array.from(relTypes);
+    return {
+      code: 'CROSS_NODE_FILTER_UNRESOLVED',
+      severity: 'warning',
+      message: `Could not resolve cross-node filter edges: ${edges.join(', ')}`,
+      details: { edges },
+    };
+  }
+  return undefined;
 }
 
 function loadNodeState(db: Database.Database, nodeId: string) {
@@ -486,7 +553,7 @@ function handleDryRun(
   matchedNodes: Array<{ id: string; file_path: string; title: string; body: string }>,
   ops: QueryModeOps,
   batchId: string,
-  hasJoinFilters: boolean = false,
+  joinWarning?: Issue,
 ) {
   const preview: Array<{
     node_id: string;
@@ -565,19 +632,20 @@ function handleDryRun(
     }
   }
 
-  const response: Record<string, unknown> = {
-    dry_run: true,
-    batch_id: batchId,
-    matched: matchedNodes.length,
-    would_update: wouldUpdate,
-    would_skip: wouldSkip,
-    would_fail: wouldFail,
-    preview,
-  };
-  if (hasJoinFilters) {
-    response.notice = 'Bulk mutation via cross-node join filters — review affected set carefully.';
-  }
-  return toolResult(response);
+  const warnings: Issue[] = [];
+  if (joinWarning) warnings.push(joinWarning);
+  return ok(
+    {
+      dry_run: true,
+      batch_id: batchId,
+      matched: matchedNodes.length,
+      would_update: wouldUpdate,
+      would_skip: wouldSkip,
+      would_fail: wouldFail,
+      preview,
+    },
+    warnings,
+  );
 }
 
 function handleExecution(
@@ -678,7 +746,7 @@ function handleExecution(
     }
   }
 
-  return toolResult({
+  return ok({
     dry_run: false,
     batch_id: batchId,
     matched: matchedNodes.length,

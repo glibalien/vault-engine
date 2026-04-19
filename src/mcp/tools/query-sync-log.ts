@@ -1,7 +1,7 @@
 import type { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import type Database from 'better-sqlite3';
 import { z } from 'zod';
-import { toolResult } from './errors.js';
+import { ok, type Issue } from './errors.js';
 
 const paramsShape = {
   file_path: z.string().optional().describe('Filter to a single file path'),
@@ -82,11 +82,18 @@ export function registerQuerySyncLog(server: McpServer, db: Database.Database): 
         details: row.details ? JSON.parse(row.details) : {},
       }));
 
-      return toolResult({
-        rows: parsed,
-        count: parsed.length,
-        truncated: parsed.length === limit,
-      });
+      const count = parsed.length;
+      const truncated = count === limit;
+      const warnings: Issue[] = [];
+      if (truncated) {
+        warnings.push({
+          code: 'RESULT_TRUNCATED',
+          severity: 'warning',
+          message: `Result truncated at limit (${count} rows)`,
+          details: { count, limit },
+        });
+      }
+      return ok({ rows: parsed, count, truncated }, warnings);
     },
   );
 }

@@ -80,16 +80,18 @@ describe('update-node query mode — add_types', () => {
     createNode({ file_path: 'b.md', title: 'B', types: ['note'] });
     createNode({ file_path: 'c.md', title: 'C', types: ['task'] });
 
-    const result = parseResult(await handler({
+    const body = parseResult(await handler({
       query: { types: ['note'] },
       add_types: ['clippings'],
       dry_run: false,
     }));
 
-    expect(result.dry_run).toBe(false);
-    expect(result.matched).toBe(2);
-    expect(result.updated).toBe(2);
-    expect(result.skipped).toBe(0);
+    expect(body.ok).toBe(true);
+    const data = body.data as Record<string, unknown>;
+    expect(data.dry_run).toBe(false);
+    expect(data.matched).toBe(2);
+    expect(data.updated).toBe(2);
+    expect(data.skipped).toBe(0);
 
     // Verify DB: both note nodes now have 'clippings' type
     const types = db.prepare("SELECT DISTINCT schema_type FROM node_types WHERE schema_type = 'clippings'").all() as Array<{ schema_type: string }>;
@@ -102,16 +104,18 @@ describe('update-node query mode — add_types', () => {
     createNode({ file_path: 'a.md', title: 'A', types: ['note', 'clippings'] });
     createNode({ file_path: 'b.md', title: 'B', types: ['note'] });
 
-    const result = parseResult(await handler({
+    const body = parseResult(await handler({
       query: { types: ['note'] },
       add_types: ['clippings'],
       dry_run: false,
     }));
 
-    expect(result.matched).toBe(2);
+    expect(body.ok).toBe(true);
+    const data = body.data as Record<string, unknown>;
+    expect(data.matched).toBe(2);
     // Node A already has clippings, so it's a no-op
-    expect(result.updated).toBe(1);
-    expect(result.skipped).toBe(1);
+    expect(data.updated).toBe(1);
+    expect(data.skipped).toBe(1);
   });
 });
 
@@ -120,14 +124,16 @@ describe('update-node query mode — remove_types', () => {
     createNode({ file_path: 'a.md', title: 'A', types: ['note', 'clippings'] });
     createNode({ file_path: 'b.md', title: 'B', types: ['note', 'clippings'] });
 
-    const result = parseResult(await handler({
+    const body = parseResult(await handler({
       query: { types: ['note'] },
       remove_types: ['clippings'],
       dry_run: false,
     }));
 
-    expect(result.matched).toBe(2);
-    expect(result.updated).toBe(2);
+    expect(body.ok).toBe(true);
+    const data = body.data as Record<string, unknown>;
+    expect(data.matched).toBe(2);
+    expect(data.updated).toBe(2);
 
     // Verify clippings type removed
     const clippingsCount = (db.prepare("SELECT COUNT(*) as cnt FROM node_types WHERE schema_type = 'clippings'").get() as { cnt: number }).cnt;
@@ -141,15 +147,17 @@ describe('update-node query mode — without_types filter + add_types', () => {
     createNode({ file_path: 'b.md', title: 'B', types: ['note', 'clippings'] });
     createNode({ file_path: 'c.md', title: 'C', types: ['note'] });
 
-    const result = parseResult(await handler({
+    const body = parseResult(await handler({
       query: { types: ['note'], without_types: ['clippings'] },
       add_types: ['clippings'],
       dry_run: false,
     }));
 
+    expect(body.ok).toBe(true);
+    const data = body.data as Record<string, unknown>;
     // Only A and C matched (B has clippings, excluded by without_types)
-    expect(result.matched).toBe(2);
-    expect(result.updated).toBe(2);
+    expect(data.matched).toBe(2);
+    expect(data.updated).toBe(2);
 
     // All three note nodes now have clippings
     const clippingsCount = (db.prepare("SELECT COUNT(*) as cnt FROM node_types WHERE schema_type = 'clippings'").get() as { cnt: number }).cnt;
@@ -161,15 +169,17 @@ describe('update-node query mode — dry_run', () => {
   it('defaults dry_run to true in query mode (no changes made)', async () => {
     createNode({ file_path: 'a.md', title: 'A', types: ['note'] });
 
-    const result = parseResult(await handler({
+    const body = parseResult(await handler({
       query: { types: ['note'] },
       add_types: ['clippings'],
       // dry_run not specified — should default to true
     }));
 
-    expect(result.dry_run).toBe(true);
-    expect(result.matched).toBe(1);
-    expect(result.would_update).toBe(1);
+    expect(body.ok).toBe(true);
+    const data = body.data as Record<string, unknown>;
+    expect(data.dry_run).toBe(true);
+    expect(data.matched).toBe(1);
+    expect(data.would_update).toBe(1);
 
     // Verify no actual change
     const clippingsCount = (db.prepare("SELECT COUNT(*) as cnt FROM node_types WHERE schema_type = 'clippings'").get() as { cnt: number }).cnt;
@@ -180,20 +190,22 @@ describe('update-node query mode — dry_run', () => {
     createNode({ file_path: 'a.md', title: 'A', types: ['note'] });
     createNode({ file_path: 'b.md', title: 'B', types: ['note'] });
 
-    const result = parseResult(await handler({
+    const body = parseResult(await handler({
       query: { types: ['note'] },
       add_types: ['clippings'],
       dry_run: true,
     }));
 
-    expect(result.dry_run).toBe(true);
-    expect(result.matched).toBe(2);
-    expect(result.would_update).toBe(2);
-    expect(result.would_skip).toBe(0);
-    expect(result.would_fail).toBe(0);
-    expect(result.batch_id).toBeTruthy();
+    expect(body.ok).toBe(true);
+    const data = body.data as Record<string, unknown>;
+    expect(data.dry_run).toBe(true);
+    expect(data.matched).toBe(2);
+    expect(data.would_update).toBe(2);
+    expect(data.would_skip).toBe(0);
+    expect(data.would_fail).toBe(0);
+    expect(data.batch_id).toBeTruthy();
 
-    const preview = result.preview as Array<{ node_id: string; file_path: string; title: string; changes: { types_added: string[]; types_removed: string[]; fields_set: Record<string, unknown>; would_fail: boolean } }>;
+    const preview = data.preview as Array<{ node_id: string; file_path: string; title: string; changes: { types_added: string[]; types_removed: string[]; fields_set: Record<string, unknown>; would_fail: boolean } }>;
     expect(preview.length).toBe(2);
     for (const p of preview) {
       expect(p.changes.types_added).toEqual(['clippings']);
@@ -214,25 +226,27 @@ describe('update-node query mode — best-effort', () => {
     createNode({ file_path: 'plain.md', title: 'Plain', types: [] });
 
     // Set status to invalid value across all nodes. The strict node will fail validation.
-    const result = parseResult(await handler({
+    const body = parseResult(await handler({
       query: {},
       set_fields: { status: 'invalid-value' },
       dry_run: false,
     }));
 
+    expect(body.ok).toBe(true);
+    const data = body.data as Record<string, unknown>;
     // We expect: strict node errors, plain node succeeds
-    expect(result.dry_run).toBe(false);
+    expect(data.dry_run).toBe(false);
     // matched includes all nodes in DB (including any from fixture vault)
-    const matched = result.matched as number;
+    const matched = data.matched as number;
     expect(matched).toBeGreaterThanOrEqual(2);
 
-    const errors = result.errors as Array<{ node_id: string; error: string }>;
+    const errors = data.errors as Array<{ node_id: string; file_path: string; error: string }>;
     // At least the strict node should have errored
     expect(errors.length).toBeGreaterThanOrEqual(1);
     expect(errors.some(e => e.file_path === 'strict.md')).toBe(true);
 
     // The non-strict node should have been updated despite the error on strict
-    const updated = result.updated as number;
+    const updated = data.updated as number;
     expect(updated).toBeGreaterThanOrEqual(1);
   });
 });
@@ -241,15 +255,17 @@ describe('update-node query mode — batch size guard', () => {
   it('accepts confirm_large_batch param (guard logic)', async () => {
     // We can't easily create >1000 nodes in a test, but we can verify
     // the param is accepted and doesn't error when not needed
-    const result = parseResult(await handler({
+    const body = parseResult(await handler({
       query: { types: ['nonexistent'] },
       add_types: ['tag'],
       dry_run: false,
       confirm_large_batch: true,
     }));
 
-    expect(result.matched).toBe(0);
-    expect(result.updated).toBe(0);
+    expect(body.ok).toBe(true);
+    const data = body.data as Record<string, unknown>;
+    expect(data.matched).toBe(0);
+    expect(data.updated).toBe(0);
   });
 });
 
@@ -257,13 +273,15 @@ describe('update-node query mode — set_fields', () => {
   it('patches fields with merge semantics', async () => {
     createNode({ file_path: 'a.md', title: 'A', types: [], fields: { color: 'red', size: 'large' } });
 
-    const result = parseResult(await handler({
+    const body = parseResult(await handler({
       query: { path_prefix: 'a.md' },
       set_fields: { color: 'blue', shape: 'round' },
       dry_run: false,
     }));
 
-    expect(result.updated).toBe(1);
+    expect(body.ok).toBe(true);
+    const data = body.data as Record<string, unknown>;
+    expect(data.updated).toBe(1);
 
     // Verify DB: color changed, size preserved, shape added
     const fields = db.prepare('SELECT field_name, value_text FROM node_fields WHERE node_id = (SELECT id FROM nodes WHERE file_path = ?)').all('a.md') as Array<{ field_name: string; value_text: string }>;
@@ -276,13 +294,15 @@ describe('update-node query mode — set_fields', () => {
   it('null removes a field', async () => {
     createNode({ file_path: 'a.md', title: 'A', types: [], fields: { color: 'red', size: 'large' } });
 
-    const result = parseResult(await handler({
+    const body = parseResult(await handler({
       query: { path_prefix: 'a.md' },
       set_fields: { color: null },
       dry_run: false,
     }));
 
-    expect(result.updated).toBe(1);
+    expect(body.ok).toBe(true);
+    const data = body.data as Record<string, unknown>;
+    expect(data.updated).toBe(1);
 
     // Verify DB: color removed, size preserved
     const fields = db.prepare('SELECT field_name FROM node_fields WHERE node_id = (SELECT id FROM nodes WHERE file_path = ?)').all('a.md') as Array<{ field_name: string }>;
@@ -294,11 +314,14 @@ describe('update-node query mode — set_fields', () => {
 
 describe('update-node query mode — requires operation', () => {
   it('errors when no operation provided', async () => {
-    const result = parseResult(await handler({
+    const body = parseResult(await handler({
       query: { types: ['note'] },
     }));
 
-    expect(result.error).toContain('requires at least one operation');
+    expect(body.ok).toBe(false);
+    const error = body.error as { code: string; message: string };
+    expect(error.code).toBe('INVALID_PARAMS');
+    expect(error.message).toContain('requires at least one operation');
   });
 });
 
@@ -306,12 +329,14 @@ describe('update-node query mode — set_directory', () => {
   it('rejects set_directory in single-node mode', async () => {
     createNode({ file_path: 'a.md', title: 'A', types: [] });
 
-    const result = parseResult(await handler({
+    const body = parseResult(await handler({
       title: 'A',
       set_directory: 'Persons',
     }));
 
-    expect(result.error).toContain('rename-node');
+    expect(body.ok).toBe(false);
+    const error = body.error as { code: string; message: string };
+    expect(error.message).toContain('rename-node');
   });
 
   it('dry-run preview shows path_changed for moved nodes', async () => {
@@ -319,18 +344,20 @@ describe('update-node query mode — set_directory', () => {
     createNode({ file_path: 'Bob.md', title: 'Bob', types: ['person'] });
     createNode({ file_path: 'Persons/Charlie.md', title: 'Charlie', types: ['person'] });
 
-    const result = parseResult(await handler({
+    const body = parseResult(await handler({
       query: { types: ['person'] },
       set_directory: 'Persons',
       dry_run: true,
     }));
 
-    expect(result.dry_run).toBe(true);
-    expect(result.matched).toBe(3);
-    expect(result.would_update).toBe(2); // Alice, Bob move
-    expect(result.would_skip).toBe(1);   // Charlie already there
+    expect(body.ok).toBe(true);
+    const data = body.data as Record<string, unknown>;
+    expect(data.dry_run).toBe(true);
+    expect(data.matched).toBe(3);
+    expect(data.would_update).toBe(2); // Alice, Bob move
+    expect(data.would_skip).toBe(1);   // Charlie already there
 
-    const preview = result.preview as Array<{
+    const preview = data.preview as Array<{
       node_id: string; file_path: string; title: string;
       changes: { path_changed?: { from: string; to: string }; types_added: string[]; types_removed: string[]; fields_set: Record<string, unknown>; would_fail: boolean };
     }>;
@@ -346,16 +373,18 @@ describe('update-node query mode — set_directory', () => {
     createNode({ file_path: 'Alice.md', title: 'Alice', types: ['person'] });
     createNode({ file_path: 'Persons/Alice.md', title: 'Alice Duplicate', types: ['person'] });
 
-    const result = parseResult(await handler({
+    const body = parseResult(await handler({
       query: { path_prefix: 'Alice.md' },
       set_directory: 'Persons',
       dry_run: true,
     }));
 
-    expect(result.matched).toBe(1);
-    expect(result.would_fail).toBe(1);
+    expect(body.ok).toBe(true);
+    const data = body.data as Record<string, unknown>;
+    expect(data.matched).toBe(1);
+    expect(data.would_fail).toBe(1);
 
-    const preview = result.preview as Array<{
+    const preview = data.preview as Array<{
       changes: { would_fail: boolean };
     }>;
     expect(preview[0].changes.would_fail).toBe(true);
@@ -365,14 +394,16 @@ describe('update-node query mode — set_directory', () => {
     createNode({ file_path: 'Alice.md', title: 'Alice', types: ['person'] });
     createNode({ file_path: 'Bob.md', title: 'Bob', types: ['person'] });
 
-    const result = parseResult(await handler({
+    const body = parseResult(await handler({
       query: { types: ['person'] },
       set_directory: 'Persons',
       dry_run: false,
     }));
 
-    expect(result.updated).toBe(2);
-    expect(result.errors).toEqual([]);
+    expect(body.ok).toBe(true);
+    const data = body.data as Record<string, unknown>;
+    expect(data.updated).toBe(2);
+    expect(data.errors).toEqual([]);
 
     const alice = db.prepare("SELECT file_path FROM nodes WHERE title = 'Alice'").get() as { file_path: string };
     expect(alice.file_path).toBe('Persons/Alice.md');
@@ -384,15 +415,17 @@ describe('update-node query mode — set_directory', () => {
   it('skips nodes already at target path', async () => {
     createNode({ file_path: 'Persons/Alice.md', title: 'Alice', types: ['person'] });
 
-    const result = parseResult(await handler({
+    const body = parseResult(await handler({
       query: { types: ['person'] },
       set_directory: 'Persons',
       dry_run: false,
     }));
 
-    expect(result.matched).toBe(1);
-    expect(result.skipped).toBe(1);
-    expect(result.updated).toBe(0);
+    expect(body.ok).toBe(true);
+    const data = body.data as Record<string, unknown>;
+    expect(data.matched).toBe(1);
+    expect(data.skipped).toBe(1);
+    expect(data.updated).toBe(0);
   });
 
   it('reports conflict errors and continues', async () => {
@@ -400,14 +433,16 @@ describe('update-node query mode — set_directory', () => {
     createNode({ file_path: 'Persons/Alice.md', title: 'Alice Dup', types: ['person'] });
     createNode({ file_path: 'Bob.md', title: 'Bob', types: ['person'] });
 
-    const result = parseResult(await handler({
+    const body = parseResult(await handler({
       query: { path_prefix: '' },
       set_directory: 'Persons',
       add_types: ['person'],
       dry_run: false,
     }));
 
-    const errors = result.errors as Array<{ node_id: string; file_path: string; error: string }>;
+    expect(body.ok).toBe(true);
+    const data = body.data as Record<string, unknown>;
+    const errors = data.errors as Array<{ node_id: string; file_path: string; error: string }>;
     expect(errors.some(e => e.file_path === 'Alice.md')).toBe(true);
 
     const bob = db.prepare("SELECT file_path FROM nodes WHERE title = 'Bob'").get() as { file_path: string };
@@ -417,14 +452,16 @@ describe('update-node query mode — set_directory', () => {
   it('combines set_directory with add_types', async () => {
     createNode({ file_path: 'Alice.md', title: 'Alice', types: [] });
 
-    const result = parseResult(await handler({
+    const body = parseResult(await handler({
       query: { path_prefix: 'Alice.md' },
       set_directory: 'Persons',
       add_types: ['person'],
       dry_run: false,
     }));
 
-    expect(result.updated).toBe(1);
+    expect(body.ok).toBe(true);
+    const data = body.data as Record<string, unknown>;
+    expect(data.updated).toBe(1);
 
     const alice = db.prepare("SELECT file_path FROM nodes WHERE title = 'Alice'").get() as { file_path: string };
     expect(alice.file_path).toBe('Persons/Alice.md');
@@ -436,13 +473,15 @@ describe('update-node query mode — set_directory', () => {
   it('moves to vault root with set_directory empty string', async () => {
     createNode({ file_path: 'Persons/Alice.md', title: 'Alice', types: ['person'] });
 
-    const result = parseResult(await handler({
+    const body = parseResult(await handler({
       query: { types: ['person'] },
       set_directory: '',
       dry_run: false,
     }));
 
-    expect(result.updated).toBe(1);
+    expect(body.ok).toBe(true);
+    const data = body.data as Record<string, unknown>;
+    expect(data.updated).toBe(1);
 
     const alice = db.prepare("SELECT file_path FROM nodes WHERE title = 'Alice'").get() as { file_path: string };
     expect(alice.file_path).toBe('Alice.md');
@@ -454,17 +493,19 @@ describe('update-node query mode — edits_log', () => {
   it('writes bulk-mutate entries with batch_id', async () => {
     createNode({ file_path: 'a.md', title: 'A', types: ['note'] });
 
-    const result = parseResult(await handler({
+    const body = parseResult(await handler({
       query: { types: ['note'] },
       add_types: ['clippings'],
       dry_run: false,
     }));
 
-    expect(result.batch_id).toBeTruthy();
+    expect(body.ok).toBe(true);
+    const data = body.data as Record<string, unknown>;
+    expect(data.batch_id).toBeTruthy();
 
     const logs = db.prepare("SELECT details FROM edits_log WHERE event_type = 'bulk-mutate'").all() as Array<{ details: string }>;
     expect(logs.length).toBeGreaterThanOrEqual(1);
     const details = JSON.parse(logs[0].details);
-    expect(details.batch_id).toBe(result.batch_id);
+    expect(details.batch_id).toBe(data.batch_id);
   });
 });

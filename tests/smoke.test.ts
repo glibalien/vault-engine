@@ -81,7 +81,9 @@ describe('Phase 0 smoke test', () => {
     expect(content).toHaveLength(1);
     expect(content[0].type).toBe('text');
 
-    const parsed = JSON.parse(content[0].text);
+    const envelope = JSON.parse(content[0].text);
+    expect(envelope.ok).toBe(true);
+    const parsed = envelope.data;
     expect(parsed.node_count).toBe(0);
     expect(parsed.type_counts).toEqual([]);
     expect(parsed.schema_count).toBe(0);

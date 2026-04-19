@@ -1,7 +1,7 @@
 import type { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import type Database from 'better-sqlite3';
 import { z } from 'zod';
-import { toolResult, toolErrorResult } from './errors.js';
+import { ok, fail } from './errors.js';
 import { deleteGlobalField } from '../../global-fields/crud.js';
 import { renderFieldsFile, renderSchemaFile } from '../../schema/render.js';
 
@@ -29,9 +29,9 @@ export function registerDeleteGlobalField(server: McpServer, db: Database.Databa
           }
         }
 
-        return toolResult(result);
+        return ok(result);
       } catch (err) {
-        return toolErrorResult('INVALID_PARAMS', err instanceof Error ? err.message : String(err));
+        return fail('INVALID_PARAMS', err instanceof Error ? err.message : String(err));
       }
     },
   );

@@ -72,6 +72,23 @@ function filterCandidatesByType(
   return candidateIds.filter(id => matched.has(id));
 }
 
+function rankAndTruncate(
+  db: Database.Database,
+  filteredIds: string[],
+  maxNodes: number,
+): { ordered: NodeRow[]; truncated: boolean } {
+  if (filteredIds.length === 0) return { ordered: [], truncated: false };
+  const placeholders = filteredIds.map(() => '?').join(',');
+  const rows = db.prepare(
+    `SELECT id, file_path, title, body, file_mtime FROM nodes
+     WHERE id IN (${placeholders})
+     ORDER BY file_mtime IS NULL, file_mtime DESC, id ASC
+     LIMIT ?`
+  ).all(...filteredIds, maxNodes + 1) as NodeRow[];
+  const truncated = rows.length > maxNodes;
+  return { ordered: rows.slice(0, maxNodes), truncated };
+}
+
 export function performExpansion(
   db: Database.Database,
   rootId: string,
@@ -101,8 +118,19 @@ export function performExpansion(
   }
 
   const considered = filtered.length;
+  const { ordered, truncated } = rankAndTruncate(db, filtered, options.max_nodes);
+  const expanded: Record<string, ExpandedNode> = {};
+  for (const row of ordered) {
+    expanded[row.id] = {
+      id: row.id,
+      title: row.title,
+      types: [],
+      fields: {},
+      body: row.body,
+    };
+  }
   return {
-    expanded: {},
-    stats: { returned: 0, considered, truncated: false },
+    expanded,
+    stats: { returned: ordered.length, considered, truncated },
   };
 }

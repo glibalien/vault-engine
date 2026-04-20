@@ -149,3 +149,63 @@ describe('performExpansion — type filter', () => {
     expect(result.stats).toEqual({ returned: 0, considered: 0, truncated: false });
   });
 });
+
+describe('performExpansion — ranking and truncation', () => {
+  it('sorts candidates by file_mtime DESC', () => {
+    seedNode('root', 'notes/root.md', 'Root', 'body');
+    seedNode('old', 'notes/old.md', 'Old', 'old body', 500);
+    seedNode('new', 'notes/new.md', 'New', 'new body', 2000);
+    seedNode('mid', 'notes/mid.md', 'Mid', 'mid body', 1000);
+    seedType('old', 'note');
+    seedType('new', 'note');
+    seedType('mid', 'note');
+    seedRel('root', 'Old', 'wiki-link');
+    seedRel('root', 'New', 'wiki-link');
+    seedRel('root', 'Mid', 'wiki-link');
+
+    const result = performExpansion(db, 'root', { types: ['note'], direction: 'outgoing', max_nodes: 2 });
+    // Top 2 by mtime desc: new (2000), mid (1000)
+    const ids = Object.keys(result.expanded);
+    expect(ids.sort()).toEqual(['mid', 'new']);
+    expect(result.stats).toEqual({ returned: 2, considered: 3, truncated: true });
+  });
+
+  it('sorts null file_mtime last', () => {
+    seedNode('root', 'notes/root.md', 'Root', 'body');
+    seedNode('hasmtime', 'notes/h.md', 'H', 'h body', 1000);
+    db.prepare(
+      'INSERT INTO nodes (id, file_path, title, body, content_hash, file_mtime, indexed_at) VALUES (?, ?, ?, ?, ?, ?, ?)'
+    ).run('nullmtime', 'notes/nm.md', 'NM', 'nm body', 'hash-nm', null, 2000);
+    seedType('hasmtime', 'note');
+    seedType('nullmtime', 'note');
+    seedRel('root', 'H', 'wiki-link');
+    seedRel('root', 'NM', 'wiki-link');
+
+    const result = performExpansion(db, 'root', { types: ['note'], direction: 'outgoing', max_nodes: 1 });
+    expect(Object.keys(result.expanded)).toEqual(['hasmtime']);
+    expect(result.stats).toEqual({ returned: 1, considered: 2, truncated: true });
+  });
+
+  it('breaks mtime ties by id ASC deterministically', () => {
+    seedNode('root', 'notes/root.md', 'Root', 'body');
+    seedNode('zzz', 'notes/zzz.md', 'Zzz', 'z body', 1000);
+    seedNode('aaa', 'notes/aaa.md', 'Aaa', 'a body', 1000);
+    seedType('zzz', 'note');
+    seedType('aaa', 'note');
+    seedRel('root', 'Zzz', 'wiki-link');
+    seedRel('root', 'Aaa', 'wiki-link');
+
+    const result = performExpansion(db, 'root', { types: ['note'], direction: 'outgoing', max_nodes: 1 });
+    expect(Object.keys(result.expanded)).toEqual(['aaa']);
+  });
+
+  it('truncated=false when candidates fit under max_nodes', () => {
+    seedNode('root', 'notes/root.md', 'Root', 'body');
+    seedNode('a', 'notes/a.md', 'A', 'a body', 1000);
+    seedType('a', 'note');
+    seedRel('root', 'A', 'wiki-link');
+
+    const result = performExpansion(db, 'root', { types: ['note'], direction: 'outgoing', max_nodes: 10 });
+    expect(result.stats).toEqual({ returned: 1, considered: 1, truncated: false });
+  });
+});

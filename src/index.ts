@@ -17,6 +17,7 @@ import { setExcludeDirs } from './indexer/ignore.js';
 import { startWatcher } from './sync/watcher.js';
 import { startReconciler } from './sync/reconciler.js';
 import { startNormalizer, runNormalizerSweep } from './sync/normalizer.js';
+import { startUndoCleanup } from './undo/cleanup.js';
 import { IndexMutex } from './sync/mutex.js';
 import { WriteLockManager } from './sync/write-lock.js';
 import { SyncLogger } from './sync/sync-logger.js';
@@ -162,6 +163,7 @@ const normalizer = startNormalizer(vaultPath, db, writeLock, syncLogger, {
   cronExpression: process.env.NORMALIZE_CRON ?? '',
   quiescenceMinutes: parseInt(process.env.NORMALIZE_QUIESCENCE_MINUTES ?? '60', 10) || 60,
 });
+const undoCleanup = startUndoCleanup(db);
 
 const serverFactory = () => createServer(db, { writeLock, syncLogger, vaultPath, extractorRegistry, extractionCache, embeddingIndexer, embedder: embedderRef });
 
@@ -185,6 +187,7 @@ async function shutdown(): Promise<void> {
   console.log('Shutting down...');
   reconciler.stop();
   normalizer.stop();
+  undoCleanup.stop();
   await embedderRef?.shutdown();
   await mutex.onIdle();
   await watcher.close();

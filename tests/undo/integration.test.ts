@@ -12,6 +12,8 @@ import { registerRemoveTypeFromNode } from '../../src/mcp/tools/remove-type-from
 import { registerRenameNode } from '../../src/mcp/tools/rename-node.js';
 import { registerDeleteNode } from '../../src/mcp/tools/delete-node.js';
 import { registerBatchMutate } from '../../src/mcp/tools/batch-mutate.js';
+import { registerListUndoHistory } from '../../src/mcp/tools/list-undo-history.js';
+import { registerUndoOperations } from '../../src/mcp/tools/undo-operations.js';
 import { fullIndex } from '../../src/indexer/indexer.js';
 import { WriteLockManager } from '../../src/sync/write-lock.js';
 import { restoreOperation } from '../../src/undo/restore.js';
@@ -320,5 +322,93 @@ describe('undo integration — batch-mutate', () => {
     // The immediate state after tool return should have no *active-with-snapshots* op
     const withSnaps = list.operations.filter(o => o.node_count > 0);
     expect(withSnaps.length).toBe(0);
+  });
+});
+
+describe('undo end-to-end', () => {
+  let vaultPath: string;
+  let cleanup: () => void;
+  let db: Database.Database;
+  let writeLock: WriteLockManager;
+  let server: McpServer;
+
+  beforeEach(() => {
+    const v = createTempVault();
+    vaultPath = v.vaultPath;
+    cleanup = v.cleanup;
+    db = createTestDb();
+    addUndoTables(db);
+    db.prepare("INSERT INTO schemas (name, display_name, field_claims) VALUES ('note', 'Note', '[]')").run();
+    writeLock = new WriteLockManager();
+    server = new McpServer({ name: 'test', version: '0' });
+    registerCreateNode(server, db, writeLock, vaultPath);
+    registerUpdateNode(server, db, writeLock, vaultPath);
+    registerDeleteNode(server, db, writeLock, vaultPath);
+    registerListUndoHistory(server, db);
+    registerUndoOperations(server, db, writeLock, vaultPath);
+  });
+  afterEach(() => { db.close(); cleanup(); });
+
+  it('create → update → delete, then undo all three in reverse order', async () => {
+    // 1. create
+    const createResp = await callTool(server, 'create-node', { title: 'E2E', types: ['note'], body: 'v1' });
+    const nodeId = JSON.parse(createResp.content[0].text).data.node_id;
+
+    // 2. update
+    await callTool(server, 'update-node', { node_id: nodeId, set_body: 'v2' });
+
+    // 3. delete
+    await callTool(server, 'delete-node', { node_id: nodeId, confirm: true, referencing_nodes_limit: 20 });
+
+    // Verify three operations in history
+    const listResp = await callTool(server, 'list-undo-history', {});
+    const list = JSON.parse(listResp.content[0].text).data;
+    expect(list.operations.length).toBe(3);
+
+    // Undo all via time range
+    const undoResp = await callTool(server, 'undo-operations', {
+      since: new Date(0).toISOString(),
+      dry_run: false,
+    });
+    const undoPayload = JSON.parse(undoResp.content[0].text).data;
+    expect(undoPayload.total_undone).toBe(3);
+
+    // Node is gone (undoing the create removes it)
+    const row = db.prepare('SELECT 1 FROM nodes WHERE id = ?').get(nodeId);
+    expect(row).toBeUndefined();
+
+    // Observability: at least one undo-restore edits_log entry exists
+    const undoEvents = db.prepare("SELECT event_type FROM edits_log WHERE event_type LIKE '%undo%' OR details LIKE '%undo%'").all();
+    expect(undoEvents.length).toBeGreaterThan(0);
+  });
+
+  it('surfaces modified_after_operation conflict and resolves via revert', async () => {
+    const createResp = await callTool(server, 'create-node', { title: 'Conf', types: ['note'], body: 'v1' });
+    const nodeId = JSON.parse(createResp.content[0].text).data.node_id;
+    await callTool(server, 'update-node', { node_id: nodeId, set_body: 'v2' });
+    const opToUndo = JSON.parse((await callTool(server, 'list-undo-history', {})).content[0].text).data.operations.find(
+      (o: { source_tool: string }) => o.source_tool === 'update-node',
+    ).operation_id;
+
+    // External drift
+    await callTool(server, 'update-node', { node_id: nodeId, set_body: 'v3' });
+
+    // Try to undo — should report conflict
+    const dryResp = await callTool(server, 'undo-operations', { operation_ids: [opToUndo], dry_run: true });
+    const dryPayload = JSON.parse(dryResp.content[0].text).data;
+    expect(dryPayload.conflicts.length).toBeGreaterThan(0);
+    expect(dryPayload.conflicts[0].reason).toBe('modified_after_operation');
+
+    // Resolve via revert
+    const resolveResp = await callTool(server, 'undo-operations', {
+      operation_ids: [opToUndo],
+      dry_run: false,
+      resolve_conflicts: [{ node_id: nodeId, action: 'revert' }],
+    });
+    const resolvePayload = JSON.parse(resolveResp.content[0].text).data;
+    expect(resolvePayload.total_undone).toBe(1);
+
+    const body = (db.prepare('SELECT body FROM nodes WHERE id = ?').get(nodeId) as { body: string }).body;
+    expect(body).toBe('v1');
   });
 });

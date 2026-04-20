@@ -8,6 +8,7 @@ import { resolveTarget } from '../../resolver/resolve.js';
 import { getNodeConformance } from '../../validation/conformance.js';
 import type { ExtractionCache } from '../../extraction/cache.js';
 import { assemble } from '../../extraction/assembler.js';
+import { performExpansion } from '../expand.js';
 
 const paramsShape = {
   node_id: z.string().optional(),
@@ -169,6 +170,16 @@ export function registerGetNode(
         },
         conformance: getNodeConformance(db, node.id, types),
       };
+
+      if (params.expand) {
+        const { expanded, stats } = performExpansion(db, node.id, {
+          types: params.expand.types,
+          direction: params.expand.direction,
+          max_nodes: params.expand.max_nodes,
+        });
+        resultObj.expanded = expanded;
+        resultObj.expand_stats = stats;
+      }
 
       const includeEmbeds = params.include_embeds ?? true;
       const maxEmbeds = params.max_embeds ?? 20;

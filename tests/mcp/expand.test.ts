@@ -81,5 +81,34 @@ describe('performExpansion — outgoing candidates', () => {
   });
 });
 
+describe('performExpansion — direction', () => {
+  it('direction=incoming collects sources that link to the root', () => {
+    seedNode('root', 'notes/root.md', 'Root', 'body');
+    seedNode('x', 'notes/x.md', 'X', 'x body');
+    seedNode('y', 'notes/y.md', 'Y', 'y body');
+    seedType('x', 'note');
+    seedType('y', 'note');
+    seedRel('x', 'Root', 'wiki-link');
+    seedRel('y', 'root', 'wiki-link'); // basename of notes/root.md
+
+    const result = performExpansion(db, 'root', { types: ['note'], direction: 'incoming', max_nodes: 10 });
+    expect(result.stats.considered).toBe(2);
+  });
+
+  it('direction=both unions and dedupes', () => {
+    seedNode('root', 'notes/root.md', 'Root', 'body');
+    seedNode('a', 'notes/a.md', 'A', 'a body');
+    seedNode('b', 'notes/b.md', 'B', 'b body');
+    seedType('a', 'note');
+    seedType('b', 'note');
+    seedRel('root', 'A', 'wiki-link'); // outgoing
+    seedRel('b', 'Root', 'wiki-link'); // incoming
+    seedRel('a', 'Root', 'wiki-link'); // also incoming — dedupe with outgoing 'a'
+
+    const result = performExpansion(db, 'root', { types: ['note'], direction: 'both', max_nodes: 10 });
+    expect(result.stats.considered).toBe(2); // a and b — not 3
+  });
+});
+
 // Note: these tests intentionally assert only on stats.considered at this stage.
 // Task 7 adds tests that verify the populated `expanded` map for the same fixtures.

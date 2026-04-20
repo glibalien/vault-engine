@@ -56,6 +56,22 @@ function collectIncomingCandidates(db: Database.Database, rootNode: NodeRow): Se
   return ids;
 }
 
+function filterCandidatesByType(
+  db: Database.Database,
+  candidateIds: string[],
+  allowedTypes: string[],
+): string[] {
+  if (candidateIds.length === 0 || allowedTypes.length === 0) return [];
+  const idPlaceholders = candidateIds.map(() => '?').join(',');
+  const typePlaceholders = allowedTypes.map(() => '?').join(',');
+  const rows = db.prepare(
+    `SELECT DISTINCT node_id FROM node_types
+     WHERE node_id IN (${idPlaceholders}) AND schema_type IN (${typePlaceholders})`
+  ).all(...candidateIds, ...allowedTypes) as Array<{ node_id: string }>;
+  const matched = new Set(rows.map(r => r.node_id));
+  return candidateIds.filter(id => matched.has(id));
+}
+
 export function performExpansion(
   db: Database.Database,
   rootId: string,
@@ -79,8 +95,12 @@ export function performExpansion(
     return { expanded: {}, stats: { returned: 0, considered: 0, truncated: false } };
   }
 
-  const considered = candidates.size;
-  // Payload enrichment happens in later tasks (5, 6, 7). For now, return the considered count.
+  const filtered = filterCandidatesByType(db, Array.from(candidates), options.types);
+  if (filtered.length === 0) {
+    return { expanded: {}, stats: { returned: 0, considered: 0, truncated: false } };
+  }
+
+  const considered = filtered.length;
   return {
     expanded: {},
     stats: { returned: 0, considered, truncated: false },

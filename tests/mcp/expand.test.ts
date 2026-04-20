@@ -112,3 +112,40 @@ describe('performExpansion — direction', () => {
 
 // Note: these tests intentionally assert only on stats.considered at this stage.
 // Task 7 adds tests that verify the populated `expanded` map for the same fixtures.
+
+describe('performExpansion — type filter', () => {
+  it('drops candidates without a matching type', () => {
+    seedNode('root', 'notes/root.md', 'Root', 'body');
+    seedNode('p', 'notes/p.md', 'P', 'person body');
+    seedNode('m', 'notes/m.md', 'M', 'M body');
+    seedType('p', 'person');
+    seedType('m', 'meeting');
+    seedRel('root', 'P', 'wiki-link');
+    seedRel('root', 'M', 'wiki-link');
+
+    const result = performExpansion(db, 'root', { types: ['meeting'], direction: 'outgoing', max_nodes: 10 });
+    expect(result.stats.considered).toBe(1); // p filtered out pre-sort
+  });
+
+  it('keeps candidates whose types intersect the filter', () => {
+    seedNode('root', 'notes/root.md', 'Root', 'body');
+    seedNode('mt', 'notes/mt.md', 'MT', 'multi-typed body');
+    seedType('mt', 'person');
+    seedType('mt', 'meeting');
+    seedRel('root', 'MT', 'wiki-link');
+
+    const result = performExpansion(db, 'root', { types: ['meeting'], direction: 'outgoing', max_nodes: 10 });
+    expect(result.stats.considered).toBe(1);
+  });
+
+  it('returns empty when no candidate matches any requested type', () => {
+    seedNode('root', 'notes/root.md', 'Root', 'body');
+    seedNode('p', 'notes/p.md', 'P', 'person body');
+    seedType('p', 'person');
+    seedRel('root', 'P', 'wiki-link');
+
+    const result = performExpansion(db, 'root', { types: ['meeting'], direction: 'outgoing', max_nodes: 10 });
+    expect(result.expanded).toEqual({});
+    expect(result.stats).toEqual({ returned: 0, considered: 0, truncated: false });
+  });
+});

@@ -12,11 +12,12 @@ function parseResult(result: { content: Array<{ type: string; text: string }> })
 }
 
 function getHandler() {
-  let capturedSchema: any;
   let capturedHandler: (params: Record<string, unknown>) => unknown;
   const fakeServer = {
     tool: (_name: string, _desc: string, schema: unknown, handler: (...args: unknown[]) => unknown) => {
-      capturedSchema = schema;
+      // Unlike sibling MCP tests that just pass params through, we validate here via
+      // z.object(schema).parse() because the MCP SDK's own validation layer is not
+      // invoked by this fake server — and the validation tests below need it to run.
       capturedHandler = (params: Record<string, unknown>) => {
         // Manually validate params with the captured zod schema
         // schema is an object where each property is a zod schema
@@ -89,7 +90,7 @@ describe('get-node expand parameter — validation', () => {
     expect(env.error.code).toBe('INVALID_PARAMS');
   });
 
-  it('accepts valid expand with defaults applied', async () => {
+  it('accepts valid expand', async () => {
     seedNode('n1', 'notes/n1.md', 'Root', 'body');
     const handler = getHandler();
     const env = parseResult(await handler({ node_id: 'n1', expand: { types: ['note'] } }) as any);

@@ -3,7 +3,7 @@ import type Database from 'better-sqlite3';
 import { z } from 'zod';
 import { ok, type Issue } from './errors.js';
 import { buildNodeQuery } from '../query-builder.js';
-import type { NodeQueryFilter } from '../query-builder.js';
+import type { FieldFilter, NodeQueryFilter } from '../query-builder.js';
 import { resolveFieldValue, type FieldRow } from '../field-value.js';
 import type { EmbeddingIndexer } from '../../search/indexer.js';
 import type { Embedder } from '../../search/embedder.js';
@@ -174,6 +174,60 @@ function computeJoinWarning(
   return undefined;
 }
 
+/**
+ * Validates that each field filter uses operators compatible with the field's
+ * declared global type. Emits non-fatal warnings for common silent-mismatch
+ * traps (e.g. `includes` on a scalar, `eq` on a list). Unknown fields are
+ * skipped silently — they may be newly added ones not yet in global_fields.
+ */
+export function checkFieldOperators(
+  db: Database.Database,
+  fields: Record<string, FieldFilter> | undefined,
+): Issue[] {
+  if (!fields) return [];
+  const names = Object.keys(fields);
+  if (names.length === 0) return [];
+
+  const placeholders = names.map(() => '?').join(', ');
+  const rows = db
+    .prepare(`SELECT name, field_type FROM global_fields WHERE name IN (${placeholders})`)
+    .all(...names) as Array<{ name: string; field_type: string }>;
+  const typeMap = new Map(rows.map(r => [r.name, r.field_type]));
+
+  const warnings: Issue[] = [];
+  for (const [fieldName, ops] of Object.entries(fields)) {
+    const fieldType = typeMap.get(fieldName);
+    if (!fieldType) continue;
+    for (const op of Object.keys(ops)) {
+      const advice = opIncompatibility(op, fieldType);
+      if (!advice) continue;
+      warnings.push({
+        code: 'FIELD_OPERATOR_MISMATCH',
+        severity: 'warning',
+        message: `Field '${fieldName}' has type '${fieldType}'. ${advice}`,
+        field: fieldName,
+        details: { field: fieldName, field_type: fieldType, operator: op },
+      });
+    }
+  }
+  return warnings;
+}
+
+function opIncompatibility(op: string, fieldType: string): string | undefined {
+  const isList = fieldType === 'list';
+  const isNumericOrDate = fieldType === 'number' || fieldType === 'date';
+  if (op === 'includes' && !isList) {
+    return `'includes' matches list elements; use 'eq' or 'one_of' on scalar fields.`;
+  }
+  if ((op === 'eq' || op === 'ne' || op === 'one_of') && isList) {
+    return `'${op}' compares scalar values; use 'includes' to match list elements.`;
+  }
+  if ((op === 'gt' || op === 'gte' || op === 'lt' || op === 'lte') && !isNumericOrDate) {
+    return `Comparison operators ('gt', 'gte', 'lt', 'lte') apply to number/date fields only.`;
+  }
+  return undefined;
+}
+
 export function registerQueryNodes(
   server: McpServer,
   db: Database.Database,
@@ -272,6 +326,7 @@ export function registerQueryNodes(
         });
 
         const warnings: Issue[] = [];
+        warnings.push(...checkFieldOperators(db, params.fields as Record<string, FieldFilter> | undefined));
         const joinWarning = computeJoinWarning(db, params.join_filters, params.without_joins);
         if (joinWarning) warnings.push(joinWarning);
         return ok({ nodes, total }, warnings);
@@ -308,6 +363,7 @@ export function registerQueryNodes(
       const nodes = enrichRows(db, rows, includeFields);
 
       const warnings: Issue[] = [];
+      warnings.push(...checkFieldOperators(db, params.fields as Record<string, FieldFilter> | undefined));
       const joinWarning = computeJoinWarning(db, params.join_filters, params.without_joins);
       if (joinWarning) warnings.push(joinWarning);
       return ok({ nodes, total }, warnings);

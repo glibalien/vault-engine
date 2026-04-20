@@ -49,7 +49,7 @@ export function registerGetNode(
 ): void {
   server.tool(
     'get-node',
-    'Returns full details for a single node. Specify exactly one of: node_id, file_path, or title.',
+    'Returns full details for a single node. Specify exactly one of: node_id, file_path, or title. Optional expand={types, direction?, max_nodes?} fetches one-hop neighbor nodes matching the given types, ranked by file_mtime DESC, capped at max_nodes (default 10, hard max 25). direction is "outgoing" (default), "incoming", or "both". When provided, the response includes expanded (map keyed by node_id with {id,title,types,fields,body}) and expand_stats ({returned,considered,truncated}).',
     paramsShape,
     async (params) => {
       const { node_id, file_path, title } = params;

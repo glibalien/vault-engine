@@ -310,6 +310,39 @@ describe('buildNodeQuery', () => {
     });
   });
 
+  describe('one_of operator', () => {
+    it('matches any of the given text values', () => {
+      const { rows, total } = runQuery({ fields: { status: { one_of: ['open', 'pending'] } } });
+      // n1=open, n2=done, n3=open — one_of ['open','pending'] returns n1 and n3
+      expect(total).toBe(2);
+      const ids = rows.map(r => r.id).sort();
+      expect(ids).toEqual(['n1', 'n3']);
+    });
+
+    it('matches any of the given numeric values', () => {
+      const { rows, total } = runQuery({ fields: { priority: { one_of: [1, 2, 3] } } });
+      // Only n3 has priority (=1)
+      expect(total).toBe(1);
+      expect(rows[0].id).toBe('n3');
+    });
+
+    it('single-value array behaves like eq', () => {
+      const { rows, total } = runQuery({ fields: { status: { one_of: ['done'] } } });
+      expect(total).toBe(1);
+      expect(rows[0].id).toBe('n2');
+    });
+
+    it('returns empty when no values match', () => {
+      const { rows, total } = runQuery({ fields: { status: { one_of: ['archived', 'cancelled'] } } });
+      expect(total).toBe(0);
+      expect(rows).toHaveLength(0);
+    });
+
+    it('throws on empty array', () => {
+      expect(() => buildNodeQuery({ fields: { status: { one_of: [] } } })).toThrow(/INVALID_PARAMS/);
+    });
+  });
+
   describe('includes operator (JSON array membership)', () => {
     it('returns nodes whose list field contains the value', () => {
       const { rows, total } = runQuery({ fields: { context: { includes: 'personal' } } });

@@ -10,6 +10,7 @@ export interface FieldFilter {
   lte?: unknown;
   contains?: string;
   includes?: unknown;
+  one_of?: unknown[];
   exists?: boolean;
 }
 
@@ -127,6 +128,14 @@ export function buildFilterClauses(
             `EXISTS (SELECT 1 FROM json_each(${a}.value_json) WHERE json_each.value = ?)`
           );
           whereParams.push(value);
+        } else if (op === 'one_of') {
+          if (!Array.isArray(value) || value.length === 0) {
+            throw new Error('INVALID_PARAMS: one_of requires a non-empty array');
+          }
+          const col = typeof value[0] === 'number' ? 'value_number' : 'value_text';
+          const placeholders = value.map(() => '?').join(', ');
+          whereClauses.push(`${a}.${col} IN (${placeholders})`);
+          whereParams.push(...value);
         } else if (op === 'eq') {
           if (typeof value === 'number') {
             whereClauses.push(`${a}.value_number = ?`);

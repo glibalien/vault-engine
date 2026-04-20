@@ -18,6 +18,7 @@ const fieldFilterSchema = z.object({
   lte: z.unknown().optional(),
   contains: z.string().optional(),
   includes: z.unknown().optional(),
+  one_of: z.array(z.unknown()).min(1).optional(),
   exists: z.boolean().optional(),
 }).strict();
 

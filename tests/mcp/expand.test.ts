@@ -2,6 +2,7 @@ import { describe, it, expect, beforeEach } from 'vitest';
 import type Database from 'better-sqlite3';
 import { createTestDb } from '../helpers/db.js';
 import { performExpansion, type ExpandOptions } from '../../src/mcp/expand.js';
+import { resolveTarget } from '../../src/resolver/resolve.js';
 
 let db: Database.Database;
 
@@ -12,9 +13,10 @@ function seedNode(id: string, filePath: string, title: string, body: string, mti
 }
 
 function seedRel(sourceId: string, target: string, relType: string, context: string | null = null) {
+  const resolved = resolveTarget(db, target);
   db.prepare(
-    'INSERT INTO relationships (source_id, target, rel_type, context) VALUES (?, ?, ?, ?)'
-  ).run(sourceId, target, relType, context);
+    'INSERT INTO relationships (source_id, target, rel_type, context, resolved_target_id) VALUES (?, ?, ?, ?, ?)'
+  ).run(sourceId, target, relType, context, resolved?.id ?? null);
 }
 
 function seedType(nodeId: string, schemaType: string) {

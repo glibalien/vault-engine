@@ -4,6 +4,7 @@ import type Database from 'better-sqlite3';
 import { z } from 'zod';
 import { createTestDb } from '../helpers/db.js';
 import { registerGetNode } from '../../src/mcp/tools/get-node.js';
+import { resolveTarget } from '../../src/resolver/resolve.js';
 
 let db: Database.Database;
 
@@ -53,9 +54,10 @@ function seedNode(id: string, filePath: string, title: string, body: string, mti
   ).run(id, filePath, title, body, `hash-${id}`, mtime, 2000);
 }
 function seedRel(sourceId: string, target: string, relType: string) {
+  const resolved = resolveTarget(db, target);
   db.prepare(
-    'INSERT INTO relationships (source_id, target, rel_type, context) VALUES (?, ?, ?, ?)'
-  ).run(sourceId, target, relType, null);
+    'INSERT INTO relationships (source_id, target, rel_type, context, resolved_target_id) VALUES (?, ?, ?, ?, ?)'
+  ).run(sourceId, target, relType, null, resolved?.id ?? null);
 }
 function seedType(nodeId: string, schemaType: string) {
   db.prepare('INSERT INTO node_types (node_id, schema_type) VALUES (?, ?)').run(nodeId, schemaType);

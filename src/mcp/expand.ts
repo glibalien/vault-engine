@@ -1,6 +1,7 @@
 import type Database from 'better-sqlite3';
 import { basename } from 'node:path';
 import { resolveTarget } from '../resolver/resolve.js';
+import { resolveFieldValue, type FieldRow } from './field-value.js';
 
 export interface ExpandOptions {
   types: string[];
@@ -89,6 +90,41 @@ function rankAndTruncate(
   return { ordered: rows.slice(0, maxNodes), truncated };
 }
 
+function fetchTypesByNode(db: Database.Database, nodeIds: string[]): Record<string, string[]> {
+  if (nodeIds.length === 0) return {};
+  const placeholders = nodeIds.map(() => '?').join(',');
+  const rows = db.prepare(
+    `SELECT node_id, schema_type FROM node_types WHERE node_id IN (${placeholders}) ORDER BY rowid`
+  ).all(...nodeIds) as Array<{ node_id: string; schema_type: string }>;
+  const out: Record<string, string[]> = {};
+  for (const id of nodeIds) out[id] = [];
+  for (const row of rows) out[row.node_id].push(row.schema_type);
+  return out;
+}
+
+function fetchFieldsByNode(
+  db: Database.Database,
+  nodeIds: string[],
+): Record<string, Record<string, { value: unknown; type: string; source: string }>> {
+  if (nodeIds.length === 0) return {};
+  const placeholders = nodeIds.map(() => '?').join(',');
+  const rows = db.prepare(
+    `SELECT node_id, field_name, value_text, value_number, value_date, value_json, source
+     FROM node_fields WHERE node_id IN (${placeholders})`
+  ).all(...nodeIds) as Array<FieldRow & { node_id: string }>;
+  const out: Record<string, Record<string, { value: unknown; type: string; source: string }>> = {};
+  for (const id of nodeIds) out[id] = {};
+  for (const row of rows) {
+    const value = resolveFieldValue(row);
+    const type = row.value_json !== null ? 'json'
+      : row.value_number !== null ? 'number'
+      : row.value_date !== null ? 'date'
+      : 'text';
+    out[row.node_id][row.field_name] = { value, type, source: row.source };
+  }
+  return out;
+}
+
 export function performExpansion(
   db: Database.Database,
   rootId: string,
@@ -119,13 +155,16 @@ export function performExpansion(
 
   const considered = filtered.length;
   const { ordered, truncated } = rankAndTruncate(db, filtered, options.max_nodes);
+  const orderedIds = ordered.map(r => r.id);
+  const typesByNode = fetchTypesByNode(db, orderedIds);
+  const fieldsByNode = fetchFieldsByNode(db, orderedIds);
   const expanded: Record<string, ExpandedNode> = {};
   for (const row of ordered) {
     expanded[row.id] = {
       id: row.id,
       title: row.title,
-      types: [],
-      fields: {},
+      types: typesByNode[row.id] ?? [],
+      fields: fieldsByNode[row.id] ?? {},
       body: row.body,
     };
   }

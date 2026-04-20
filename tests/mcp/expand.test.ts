@@ -209,3 +209,54 @@ describe('performExpansion — ranking and truncation', () => {
     expect(result.stats).toEqual({ returned: 1, considered: 1, truncated: false });
   });
 });
+
+describe('performExpansion — payload shape', () => {
+  it('returns full {id, title, types, fields, body} per expanded node', () => {
+    seedNode('root', 'notes/root.md', 'Root', 'body');
+    seedNode('a', 'notes/a.md', 'A', 'a body', 1000);
+    seedType('a', 'note');
+    seedType('a', 'meeting');
+    db.prepare(
+      'INSERT INTO node_fields (node_id, field_name, value_text, value_number, value_date, value_json, source) VALUES (?, ?, ?, ?, ?, ?, ?)'
+    ).run('a', 'status', 'open', null, null, null, 'frontmatter');
+    db.prepare(
+      'INSERT INTO node_fields (node_id, field_name, value_text, value_number, value_date, value_json, source) VALUES (?, ?, ?, ?, ?, ?, ?)'
+    ).run('a', 'date', null, null, '2026-04-20', null, 'frontmatter');
+    seedRel('root', 'A', 'wiki-link');
+
+    const result = performExpansion(db, 'root', { types: ['note'], direction: 'outgoing', max_nodes: 10 });
+    const entry = result.expanded['a'];
+    expect(entry).toBeDefined();
+    expect(entry.id).toBe('a');
+    expect(entry.title).toBe('A');
+    expect(entry.body).toBe('a body');
+    // Types returned in insertion order (rowid)
+    expect(entry.types).toEqual(['note', 'meeting']);
+    expect(entry.fields.status).toEqual({ value: 'open', type: 'text', source: 'frontmatter' });
+    expect(entry.fields.date).toEqual({ value: '2026-04-20', type: 'date', source: 'frontmatter' });
+  });
+
+  it('expanded entries have empty fields map when node has none', () => {
+    seedNode('root', 'notes/root.md', 'Root', 'body');
+    seedNode('a', 'notes/a.md', 'A', 'a body', 1000);
+    seedType('a', 'note');
+    seedRel('root', 'A', 'wiki-link');
+
+    const result = performExpansion(db, 'root', { types: ['note'], direction: 'outgoing', max_nodes: 10 });
+    expect(result.expanded['a'].fields).toEqual({});
+  });
+
+  it('Task 3 fixtures now populate expanded map', () => {
+    seedNode('root', 'notes/root.md', 'Root', 'body');
+    seedNode('a', 'notes/a.md', 'A', 'a body', 1000);
+    seedNode('b', 'notes/b.md', 'B', 'b body', 1500);
+    seedType('a', 'note');
+    seedType('b', 'note');
+    seedRel('root', 'A', 'wiki-link');
+    seedRel('root', 'B', 'wiki-link');
+
+    const result = performExpansion(db, 'root', { types: ['note'], direction: 'outgoing', max_nodes: 10 });
+    expect(Object.keys(result.expanded).sort()).toEqual(['a', 'b']);
+    expect(result.stats.returned).toBe(2);
+  });
+});

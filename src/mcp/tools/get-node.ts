@@ -15,6 +15,11 @@ const paramsShape = {
   title: z.string().optional(),
   include_embeds: z.boolean().optional().default(true),
   max_embeds: z.number().optional().default(20),
+  expand: z.object({
+    types: z.array(z.string()).min(1, 'types must be non-empty'),
+    direction: z.enum(['outgoing', 'incoming', 'both']).optional().default('outgoing'),
+    max_nodes: z.number().int().min(1).max(25).optional().default(10),
+  }).optional(),
 };
 
 interface NodeRow {

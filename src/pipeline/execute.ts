@@ -69,15 +69,26 @@ export function executeMutation(
     const { claimsByType, globalFields } = loadSchemaContext(db, mutation.types);
 
     // ── Undo snapshot capture (pre-mutation state) ──────────────────
+    // Track whether THIS call actually inserted a snapshot row (vs. being
+    // no-op'd by OR IGNORE because a snapshot for this (operation_id, node_id)
+    // already existed — e.g. pre-captured by a tool handler before the out-of-
+    // band UPDATE, or captured by a prior executeMutation call sharing the
+    // same operation_id). Only the inserting call is allowed to DELETE the
+    // snapshot on the no-op-write branch below.
+    let capturedHere = false;
     if (undoContext && mutation.source !== 'undo') {
       if (mutation.node_id === null) {
-        // Create: snapshot row with was_deleted = 1, other JSON columns null
-        db.prepare(`
-          INSERT INTO undo_snapshots (
+        // Create: snapshot row with was_deleted = 1, other JSON columns null.
+        // OR IGNORE: if a multi-call tool handler shares an operation_id, the
+        // first snapshot is authoritative; subsequent inserts for the same
+        // (operation_id, node_id) composite PK silently skip.
+        const info = db.prepare(`
+          INSERT OR IGNORE INTO undo_snapshots (
             operation_id, node_id, file_path, title, body, types, fields, relationships,
             was_deleted, post_mutation_hash
           ) VALUES (?, ?, ?, NULL, NULL, NULL, NULL, NULL, 1, NULL)
         `).run(undoContext.operation_id, `pending:${mutation.file_path}`, mutation.file_path);
+        capturedHere = info.changes > 0;
       } else {
         // Update: snapshot current DB state.
         // NB: if the node doesn't exist yet (caller-provided node_id for a
@@ -95,8 +106,12 @@ export function executeMutation(
             'SELECT target, rel_type, context FROM relationships WHERE source_id = ?'
           ).all(mutation.node_id);
 
-          db.prepare(`
-            INSERT INTO undo_snapshots (
+          // OR IGNORE: when multiple executeMutation calls share an
+          // operation_id for the same node (e.g. update-node with set_title
+          // that runs a mutation then executeRename on the same node), the
+          // first snapshot is the authoritative pre-state.
+          const info = db.prepare(`
+            INSERT OR IGNORE INTO undo_snapshots (
               operation_id, node_id, file_path, title, body, types, fields, relationships,
               was_deleted, post_mutation_hash
             ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, 0, NULL)
@@ -110,6 +125,7 @@ export function executeMutation(
             JSON.stringify(fieldsRows),
             JSON.stringify(relRows),
           );
+          capturedHere = info.changes > 0;
         }
       }
     }
@@ -285,7 +301,12 @@ export function executeMutation(
       // Delete it here so the committing txn doesn't leave an orphan row
       // with post_mutation_hash = NULL polluting undo history. Only reachable
       // for non-null node_id per the outer guard, so no placeholder case.
-      if (undoContext) {
+      //
+      // Guard: only delete if THIS call actually inserted the row. Otherwise
+      // we might nuke a pre-state snapshot captured out-of-band (e.g. by
+      // captureRenameSnapshot before the tool mutated nodes.file_path/title)
+      // or by an earlier executeMutation call sharing this operation_id.
+      if (undoContext && capturedHere) {
         db.prepare('DELETE FROM undo_snapshots WHERE operation_id = ? AND node_id = ?')
           .run(undoContext.operation_id, mutation.node_id);
       }

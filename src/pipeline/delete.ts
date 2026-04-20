@@ -61,8 +61,11 @@ export function executeDeletion(
           'SELECT target, rel_type, context FROM relationships WHERE source_id = ?'
         ).all(deletion.node_id);
 
+        // OR IGNORE: keep the first snapshot if multiple calls share an
+        // operation_id for the same node (defensive; delete-paths normally
+        // run once per node).
         db.prepare(`
-          INSERT INTO undo_snapshots (
+          INSERT OR IGNORE INTO undo_snapshots (
             operation_id, node_id, file_path, title, body, types, fields, relationships,
             was_deleted, post_mutation_hash
           ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, 0, NULL)

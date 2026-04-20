@@ -25,6 +25,51 @@ import { createOperation, finalizeOperation } from '../../undo/operation.js';
 const SKIP_TYPES = new Set(['code', 'inlineCode', 'yaml']);
 
 /**
+ * Capture a pre-mutation undo snapshot for a node whose identity is about to
+ * be changed out-of-band (file_path or title) before executeMutation runs.
+ *
+ * Mirrors the capture shape in `src/pipeline/execute.ts` exactly. Uses
+ * INSERT OR IGNORE so a later executeMutation snapshot under the same
+ * operation_id silently skips — keeping the pre-state authoritative.
+ *
+ * Safe to call only when the node already exists in `nodes`.
+ */
+export function captureRenameSnapshot(
+  db: Database.Database,
+  operation_id: string,
+  nodeId: string,
+): void {
+  const nodeRow = db.prepare('SELECT file_path, title, body FROM nodes WHERE id = ?')
+    .get(nodeId) as { file_path: string; title: string | null; body: string | null } | undefined;
+  if (!nodeRow) return;
+
+  const typesArr = (db.prepare('SELECT schema_type FROM node_types WHERE node_id = ?')
+    .all(nodeId) as Array<{ schema_type: string }>).map(r => r.schema_type);
+  const fieldsRows = db.prepare(
+    'SELECT field_name, value_text, value_number, value_date, value_json, value_raw_text, source FROM node_fields WHERE node_id = ?'
+  ).all(nodeId);
+  const relRows = db.prepare(
+    'SELECT target, rel_type, context FROM relationships WHERE source_id = ?'
+  ).all(nodeId);
+
+  db.prepare(`
+    INSERT OR IGNORE INTO undo_snapshots (
+      operation_id, node_id, file_path, title, body, types, fields, relationships,
+      was_deleted, post_mutation_hash
+    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, 0, NULL)
+  `).run(
+    operation_id,
+    nodeId,
+    nodeRow.file_path,
+    nodeRow.title,
+    nodeRow.body,
+    JSON.stringify(typesArr),
+    JSON.stringify(fieldsRows),
+    JSON.stringify(relRows),
+  );
+}
+
+/**
  * Core rename logic: renames file on disk, updates DB, re-renders, and rewrites references.
  * Must be called inside a db.transaction().
  */
@@ -58,6 +103,15 @@ export function executeRename(
       `SELECT DISTINCT source_id FROM relationships WHERE target IN (${placeholders}) AND source_id != ?`
     ).all(...targetsPointingToNode, node.node_id) as { source_id: string }[];
     for (const r of refs) referencingNodeIds.add(r.source_id);
+  }
+
+  // 0. Capture undo snapshot BEFORE mutating nodes row.
+  //    executeMutation can't capture the correct pre-state later because
+  //    the UPDATE below mutates file_path/title first. OR IGNORE by the
+  //    composite PK means the subsequent executeMutation snapshot insert
+  //    is a no-op when it fires under the same operation_id.
+  if (undoContext) {
+    captureRenameSnapshot(db, undoContext.operation_id, node.node_id);
   }
 
   // 1. Rename file on disk

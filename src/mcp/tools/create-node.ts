@@ -138,8 +138,10 @@ export function registerCreateNode(
         return fail('INVALID_PARAMS', `File "${filePath}" already exists on disk`);
       }
 
-      // ── Undo operation setup (skipped for dry_run) ──────────────────
-      const operation_id = dryRun ? undefined : createOperation(db, {
+      // ── Undo operation setup ────────────────────────────────────────
+      // Dry-run path returned above, so we're always on the live-write path
+      // here and must always create an operation.
+      const operation_id = createOperation(db, {
         source_tool: 'create-node',
         description: `create-node: '${title}'`,
       });
@@ -153,7 +155,7 @@ export function registerCreateNode(
           types,
           fields,
           body,
-        }, syncLogger, operation_id ? { operation_id } : undefined);
+        }, syncLogger, { operation_id });
 
         return ok(
           {
@@ -185,7 +187,7 @@ export function registerCreateNode(
         }
         return fail('INTERNAL_ERROR', err instanceof Error ? err.message : String(err));
       } finally {
-        if (operation_id) finalizeOperation(db, operation_id);
+        finalizeOperation(db, operation_id);
       }
     },
   );

@@ -9,7 +9,7 @@ import { existsSync, renameSync, mkdirSync } from 'node:fs';
 import { safeVaultPath } from '../../pipeline/safe-path.js';
 import { ok, fail, adaptIssue, type Issue } from './errors.js';
 import { resolveNodeIdentity } from './resolve-identity.js';
-import { executeRename } from './rename-node.js';
+import { executeRename, captureRenameSnapshot } from './rename-node.js';
 import { checkTitleSafety, type ToolIssue } from './title-warnings.js';
 import { executeMutation } from '../../pipeline/execute.js';
 import { PipelineError } from '../../pipeline/types.js';
@@ -756,6 +756,12 @@ function handleExecution(
       // Move under write lock for both paths
       writeLock.withLockSync(oldAbs, () => {
         writeLock.withLockSync(newAbs, () => {
+          // Capture undo snapshot BEFORE mutating nodes.file_path so the
+          // snapshot records the pre-move path. executeMutation's later
+          // capture is a no-op (INSERT OR IGNORE on composite PK).
+          if (operation_id) {
+            captureRenameSnapshot(db, operation_id, node.id);
+          }
           renameSync(oldAbs, newAbs);
           // Clear content_hash so executeMutation's no-op check doesn't skip re-rendering at the new path
           db.prepare('UPDATE nodes SET file_path = ?, content_hash = NULL WHERE id = ?').run(moveResult!.newFilePath, node.id);

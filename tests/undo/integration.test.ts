@@ -213,18 +213,64 @@ describe('undo integration — rename-node', () => {
   afterEach(() => { db.close(); cleanup(); });
 
   it('captures one operation with 1 + N snapshots for a rename that touches N refs', async () => {
-    writeFileSync(join(vaultPath, 'target.md'), '---\ntypes:\n  - note\n---\n# Target\n', 'utf-8');
+    writeFileSync(join(vaultPath, 'Target.md'), '---\ntypes:\n  - note\n---\n# Target\n', 'utf-8');
     writeFileSync(join(vaultPath, 'refA.md'), '---\ntypes:\n  - note\n---\n# RefA\n\nSee [[Target]]\n', 'utf-8');
     writeFileSync(join(vaultPath, 'refB.md'), '---\ntypes:\n  - note\n---\n# RefB\n\nAlso [[Target]]\n', 'utf-8');
     fullIndex(vaultPath, db);
+    const origNodeId = (db.prepare('SELECT id FROM nodes WHERE file_path = ?').get('Target.md') as { id: string }).id;
 
     await callTool(server, 'rename-node', { title: 'Target', new_title: 'Renamed' });
 
     const list = listOperations(db, {});
     expect(list.operations.length).toBe(1);
     // 1 for the rename itself + N for each actually-updated referencing node (N >= 1)
-    expect(list.operations[0].node_count).toBeGreaterThanOrEqual(2);
+    expect(list.operations[0].node_count).toBeGreaterThanOrEqual(3);
     expect(list.operations[0].description).toContain('references');
+
+    // The primary renamed node snapshot must record the PRE-rename identity.
+    const primary = db.prepare('SELECT file_path, title FROM undo_snapshots WHERE operation_id = ? AND node_id = ?')
+      .get(list.operations[0].operation_id, origNodeId) as { file_path: string; title: string } | undefined;
+    expect(primary).toBeDefined();
+    expect(primary!.file_path).toBe('Target.md');
+    expect(primary!.title).toBe('Target');
+
+    // Round-trip: restoreOperation must put the node back at its original path/title.
+    restoreOperation(db, writeLock, vaultPath, list.operations[0].operation_id, new Set([list.operations[0].operation_id]));
+    const afterRestore = db.prepare('SELECT file_path, title FROM nodes WHERE id = ?').get(origNodeId) as { file_path: string; title: string } | undefined;
+    expect(afterRestore).toBeDefined();
+    expect(afterRestore!.file_path).toBe('Target.md');
+    expect(afterRestore!.title).toBe('Target');
+  });
+
+  it('rename with zero references: captures exactly 1 primary snapshot and restore round-trips', async () => {
+    writeFileSync(join(vaultPath, 'Solo.md'), '---\ntypes:\n  - note\n---\n# Solo\n\nno refs here\n', 'utf-8');
+    fullIndex(vaultPath, db);
+    const origNodeId = (db.prepare('SELECT id FROM nodes WHERE file_path = ?').get('Solo.md') as { id: string }).id;
+
+    await callTool(server, 'rename-node', { title: 'Solo', new_title: 'Lonely' });
+
+    const list = listOperations(db, {});
+    expect(list.operations.length).toBe(1);
+    expect(list.operations[0].node_count).toBe(1);
+
+    // The single snapshot must record the PRE-rename state.
+    const snaps = db.prepare('SELECT node_id, file_path, title FROM undo_snapshots WHERE operation_id = ?')
+      .all(list.operations[0].operation_id) as Array<{ node_id: string; file_path: string; title: string }>;
+    expect(snaps.length).toBe(1);
+    expect(snaps[0].node_id).toBe(origNodeId);
+    expect(snaps[0].file_path).toBe('Solo.md');
+    expect(snaps[0].title).toBe('Solo');
+
+    // Pre-restore: node moved to new path
+    const preRestore = db.prepare('SELECT file_path, title FROM nodes WHERE id = ?').get(origNodeId) as { file_path: string; title: string };
+    expect(preRestore.file_path).toBe('Lonely.md');
+    expect(preRestore.title).toBe('Lonely');
+
+    // Restore: must revert file_path and title.
+    restoreOperation(db, writeLock, vaultPath, list.operations[0].operation_id, new Set([list.operations[0].operation_id]));
+    const restored = db.prepare('SELECT file_path, title FROM nodes WHERE id = ?').get(origNodeId) as { file_path: string; title: string };
+    expect(restored.file_path).toBe('Solo.md');
+    expect(restored.title).toBe('Solo');
   });
 });
 
@@ -410,5 +456,104 @@ describe('undo end-to-end', () => {
 
     const body = (db.prepare('SELECT body FROM nodes WHERE id = ?').get(nodeId) as { body: string }).body;
     expect(body).toBe('v1');
+  });
+});
+
+// ──────────────────────────────────────────────────────────────────────────
+// Regression tests for PR-review bugs C1, C2 (covered by rename suite above),
+// and C3. These lock in the INSERT OR IGNORE + pre-state-capture fixes.
+// ──────────────────────────────────────────────────────────────────────────
+
+describe('undo regression — C1: update-node with set_title (mutate + rename in one op)', () => {
+  let vaultPath: string;
+  let cleanup: () => void;
+  let db: Database.Database;
+  let writeLock: WriteLockManager;
+  let server: McpServer;
+
+  beforeEach(() => {
+    const v = createTempVault();
+    vaultPath = v.vaultPath;
+    cleanup = v.cleanup;
+    db = createTestDb();
+    addUndoTables(db);
+    db.prepare("INSERT INTO schemas (name, display_name, field_claims) VALUES ('note', 'Note', '[]')").run();
+    writeLock = new WriteLockManager();
+    server = new McpServer({ name: 'test', version: '0' });
+    registerUpdateNode(server, db, writeLock, vaultPath);
+  });
+
+  afterEach(() => { db.close(); cleanup(); });
+
+  it('does not throw UNIQUE constraint violation when set_title + set_body share an operation_id', async () => {
+    writeFileSync(join(vaultPath, 'c1.md'), '---\ntypes:\n  - note\n---\n# c1\n\nv1\n', 'utf-8');
+    fullIndex(vaultPath, db);
+
+    const resp = await callTool(server, 'update-node', {
+      file_path: 'c1.md',
+      set_title: 'c1-renamed',
+      set_body: 'v2',
+    });
+    const payload = JSON.parse(resp.content[0].text);
+    // Must succeed. Before the fix, this threw INTERNAL_ERROR with
+    // "UNIQUE constraint failed: undo_snapshots.operation_id, undo_snapshots.node_id".
+    expect(payload.ok).toBe(true);
+    expect(payload.data.file_path).toBe('c1-renamed.md');
+    expect(payload.data.title).toBe('c1-renamed');
+
+    // Exactly one operation, exactly one snapshot (the primary node).
+    const list = listOperations(db, {});
+    expect(list.operations.length).toBe(1);
+    expect(list.operations[0].node_count).toBe(1);
+  });
+});
+
+describe('undo regression — C3: update-node query-mode set_directory captures pre-move file_path', () => {
+  let vaultPath: string;
+  let cleanup: () => void;
+  let db: Database.Database;
+  let writeLock: WriteLockManager;
+  let server: McpServer;
+
+  beforeEach(() => {
+    const v = createTempVault();
+    vaultPath = v.vaultPath;
+    cleanup = v.cleanup;
+    db = createTestDb();
+    addUndoTables(db);
+    db.prepare("INSERT INTO schemas (name, display_name, field_claims) VALUES ('note', 'Note', '[]')").run();
+    writeLock = new WriteLockManager();
+    server = new McpServer({ name: 'test', version: '0' });
+    registerUpdateNode(server, db, writeLock, vaultPath);
+  });
+
+  afterEach(() => { db.close(); cleanup(); });
+
+  it('snapshot records ORIGINAL file_path (not post-move) and restore moves the file back', async () => {
+    writeFileSync(join(vaultPath, 'src.md'), '---\ntypes:\n  - note\n---\n# src\n\nbody\n', 'utf-8');
+    fullIndex(vaultPath, db);
+    const origNodeId = (db.prepare('SELECT id FROM nodes WHERE file_path = ?').get('src.md') as { id: string }).id;
+
+    await callTool(server, 'update-node', {
+      query: { title_eq: 'src' },
+      set_directory: 'dest',
+      dry_run: false,
+    });
+
+    // Post-move: file is at dest/src.md
+    const post = db.prepare('SELECT file_path FROM nodes WHERE id = ?').get(origNodeId) as { file_path: string };
+    expect(post.file_path).toBe('dest/src.md');
+
+    // Snapshot must record PRE-move path.
+    const list = listOperations(db, {});
+    expect(list.operations.length).toBe(1);
+    const snap = db.prepare('SELECT file_path FROM undo_snapshots WHERE operation_id = ? AND node_id = ?')
+      .get(list.operations[0].operation_id, origNodeId) as { file_path: string };
+    expect(snap.file_path).toBe('src.md');
+
+    // Restore: node must return to src.md.
+    restoreOperation(db, writeLock, vaultPath, list.operations[0].operation_id, new Set([list.operations[0].operation_id]));
+    const restored = db.prepare('SELECT file_path FROM nodes WHERE id = ?').get(origNodeId) as { file_path: string };
+    expect(restored.file_path).toBe('src.md');
   });
 });

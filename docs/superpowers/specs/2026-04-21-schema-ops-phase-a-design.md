@@ -19,6 +19,7 @@ Prioritization was agreed during brainstorming: Phase A addresses the diagnostic
 
 1. **A1 — Structured validation errors on schema ops.** Replace opaque `"Validation failed"` with grouped, actionable errors carrying `reason`, `field`, `count`, `invalid_values`, `sample_nodes`. Set the error-shape pattern for all schema-op tools.
 2. **A2 — `batch-mutate` create respects schema `default_directory`.** Extract shared directory resolver into a charter-aligned `src/schema/paths.ts`, use it from both `create-node` and `batch-mutate`. Rename `batch-mutate`'s `path` param to `directory` for semantic alignment with `create-node` (accept `path` as a deprecated alias with warning).
+3. **A3 — `rename-node` default-directory consistency for multi-typed nodes.** Today, `rename-node` picks a schema non-deterministically for multi-typed nodes (SQLite `SELECT ... LIMIT 1` without `ORDER BY`), producing different results from `create-node`'s explicit `types[0]`. Refactor `rename-node` to use the same `resolveDirectory()` helper from `src/schema/paths.ts`, driven by the node's ordered types list.
 
 **Finding 1 (note can't claim status) is resolved by A1**, not a separate code change. The failure has a data cause: 10 of the 16 notes with orphaned status values hold enum-invalid values (`active`, `draft`, `spec`, `complete`). With A1 in place, the next attempt at adding `status` to `note`'s claims will surface the 10-node `ENUM_INVALID` group with the offending values listed — self-diagnosing.
 
@@ -36,7 +37,7 @@ Prioritization was agreed during brainstorming: Phase A addresses the diagnostic
 
 ## Architecture overview
 
-Phase A lands in two existing files (`src/mcp/tools/update-schema.ts`, `src/mcp/tools/batch-mutate.ts`), refactors one existing file (`src/mcp/tools/create-node.ts`) to use the new shared helper, and introduces two new files:
+Phase A lands in two existing files (`src/mcp/tools/update-schema.ts`, `src/mcp/tools/batch-mutate.ts`), refactors two existing files (`src/mcp/tools/create-node.ts` and `src/mcp/tools/rename-node.ts`) to use the new shared helper, and introduces two new files:
 
 - **`src/schema/errors.ts`** — `SchemaValidationError` class, `ValidationGroup` type, grouping utilities.
 - **`src/schema/paths.ts`** — shared `resolveDirectory()` helper.
@@ -199,12 +200,51 @@ export function resolveDirectory(db: Database.Database, input: ResolveDirectoryI
   - create, both `path` and `directory` → fails with `INVALID_PARAMS`.
 - Regression: existing `create-node` tests pass unchanged.
 
+## A3 — `rename-node` default-directory consistency (multi-typed nodes)
+
+**Goal.** Make `rename-node`'s default-directory resolution identical to `create-node`'s for multi-typed nodes, so a rename without an explicit `directory` param doesn't silently move the file to a different type's schema directory.
+
+**Bug observed.** Creating a node with `types: ["task", "note"]` via `create-node` lands the file in `TaskNotes/Tasks/` (first-type wins, matching `task.default_directory`). Calling `rename-node` on that same node without a `directory` param moves the file to `Notes/` (`note.default_directory`). The two tools disagree on which schema's default_directory wins.
+
+**Root cause.** In `src/mcp/tools/rename-node.ts:244-245`:
+
+```typescript
+const nodeType = db.prepare('SELECT schema_type FROM node_types WHERE node_id = ? LIMIT 1')
+  .get(node.node_id) as { schema_type: string } | undefined;
+```
+
+The `LIMIT 1` without `ORDER BY` returns whichever row SQLite happens to yield first — implementation-defined, not user-specified. `create-node` uses the explicit `types[0]` from the user's input, which is deterministic.
+
+**Fix.**
+
+- Read the node's full types list in the same order `create-node` would honor (insertion order; add a `sort_order` column on `node_types` if one doesn't already exist).
+- Pass the ordered list to `resolveDirectory()` from A2's new `src/schema/paths.ts`. Same helper, same semantics — first type wins.
+- Keep the existing fallback to the current directory when no schema has a `default_directory`:
+  ```typescript
+  const types = readOrderedTypes(db, node.node_id);   // new helper
+  const dirResult = resolveDirectory(db, { types, directory: params.directory, override_default_directory: false });
+  if (!dirResult.ok) return fail(dirResult.code, dirResult.message);
+  const newDir = dirResult.source === 'root' ? dirname(oldFilePath) : dirResult.directory;
+  ```
+  Note: `resolveDirectory` returns `source: 'root'` when no schema has a default — in that case, preserve the file's current directory (existing behavior).
+
+**Out-of-scope consideration.** Other tools that mutate types (`add-type-to-node`, `remove-type-from-node`, `update-node` with `set_types`) could in principle change which type is "first" and therefore the notional default_directory — but none of them currently move files in response. We're not adding file-move semantics to those tools in this spec; only fixing the existing `rename-node` inconsistency. If a future finding calls for automatic directory reconciliation on type changes, that's its own design question.
+
+**Testing.**
+
+- Integration: extended `tests/mcp/rename-node.test.ts`:
+  - Create a multi-typed `[task, note]` node via `create-node`; verify it lands in `TaskNotes/Tasks/`.
+  - Rename without `directory` param; verify it stays in `TaskNotes/Tasks/` (not moved to `Notes/`).
+  - Rename with explicit `directory`; verify it goes there.
+  - Single-typed node rename continues to behave as before.
+- Regression: existing single-typed `rename-node` tests pass unchanged.
+
 ## Testing strategy summary
 
 - **New unit test files:** `tests/schema/errors.test.ts`, `tests/schema/paths.test.ts`.
-- **New integration test files:** `tests/mcp/update-schema.test.ts`, `tests/mcp/batch-mutate.test.ts` (or extension of existing).
-- **Regression:** `tests/schema/crud.test.ts`, `tests/schema/propagation.test.ts`, existing `create-node` tests pass unchanged.
-- **Manual smoke test (post-merge):** retry adding `status` to `note`'s claims; confirm the 10-node `ENUM_INVALID` group appears with offending values enumerated.
+- **New or extended integration test files:** `tests/mcp/update-schema.test.ts`, `tests/mcp/batch-mutate.test.ts`, `tests/mcp/rename-node.test.ts`.
+- **Regression:** `tests/schema/crud.test.ts`, `tests/schema/propagation.test.ts`, existing `create-node` and single-typed `rename-node` tests pass unchanged.
+- **Manual smoke test (post-merge):** retry adding `status` to `note`'s claims; confirm the 10-node `ENUM_INVALID` group appears with offending values enumerated. Also: rename a multi-typed `[task, note]` node and confirm it stays in the first type's default_directory.
 
 ## Implementation sequence
 
@@ -216,12 +256,14 @@ Each step is a focused commit. Verify `npm test && npm run build` before moving 
 4. **A2.1** — Create `src/schema/paths.ts::resolveDirectory`. Unit tests covering all six branches.
 5. **A2.2** — Refactor `create-node.ts` to use `resolveDirectory`. Regression tests pass unchanged.
 6. **A2.3** — Refactor `batch-mutate.ts`: rename `path` → `directory`, add `override_default_directory`, add deprecation warning for `path`, wire `resolveDirectory`. New integration tests.
-7. **Verify Phase A:** full test suite, manual smoke test of validation errors via MCP (retry the status-on-note claim). Confirm A1 + A2 both work end-to-end.
-8. **Commit Phase A** as one cohesive merge (or PR), ready to ship independently of Phase B.
+7. **A3** — Refactor `rename-node.ts` to read ordered types list + use `resolveDirectory`. New integration test for multi-typed rename consistency.
+8. **Verify Phase A:** full test suite, manual smoke tests of (a) validation errors via MCP (retry the status-on-note claim), (b) multi-typed rename staying in the first-type directory. Confirm A1 + A2 + A3 all work end-to-end.
+9. **Commit Phase A** as one cohesive merge (or PR), ready to ship independently of Phase B.
 
 ## Open questions (implementation-time checks)
 
-- Whether any callers other than `create-node` and `batch-mutate` rely on inline directory logic — verify during A2.2.
+- Whether any callers other than `create-node`, `batch-mutate`, and `rename-node` rely on inline directory logic — verify during A2.2 and A3.
+- Whether `node_types` already has a deterministic ordering (insertion order, a sort_order column, etc.) that can be relied on for A3, or whether a new column is needed. Check the DB schema during A3 — if there's no deterministic ordering today, add a migration.
 - Whether `propagateSchemaChange`'s collect-all path has any side-effects that require adjustment when multiple per-node mutations fail sequentially in the same transaction.
 
 ## Appendix — referenced source notes

@@ -48,7 +48,13 @@ export function createHttpApp(serverFactory: ServerFactory, authConfig?: AuthCon
       },
     }));
 
-    bearerAuth = requireBearerAuth({ verifier: provider });
+    // resourceMetadataUrl adds resource_metadata="..." to the WWW-Authenticate
+    // header on 401 responses. Required by the MCP 2025-06-18 auth spec so
+    // clients can discover the OAuth metadata endpoint and start the auth flow.
+    bearerAuth = requireBearerAuth({
+      verifier: provider,
+      resourceMetadataUrl: new URL('/.well-known/oauth-protected-resource', authConfig.issuerUrl).toString(),
+    });
   }
 
   // Conditional auth middleware for /mcp: skip HEAD and sessionless GET (protocol discovery)

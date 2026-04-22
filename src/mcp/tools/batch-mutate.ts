@@ -6,6 +6,7 @@ import { z } from 'zod';
 import { existsSync, unlinkSync } from 'node:fs';
 import { join } from 'node:path';
 import { safeVaultPath } from '../../pipeline/safe-path.js';
+import { resolveDirectory } from '../../schema/paths.js';
 import { ok, fail, adaptIssue } from './errors.js';
 import { resolveNodeIdentity } from './resolve-identity.js';
 import { executeMutation } from '../../pipeline/execute.js';
@@ -25,7 +26,9 @@ const createParamsSchema = z.object({
   types: z.array(z.string()).optional(),
   fields: z.record(z.string(), z.unknown()).optional(),
   body: z.string().optional(),
-  path: z.string().optional(),
+  directory: z.string().optional(),
+  override_default_directory: z.boolean().optional(),
+  path: z.string().optional().describe('DEPRECATED — use `directory`. Will be removed in a future release.'),
 }).strict();
 
 const updateParamsSchema = z.object({
@@ -67,11 +70,12 @@ export function registerBatchMutate(
 ): void {
   server.tool(
     'batch-mutate',
-    'Execute multiple mutation operations atomically. All operations succeed or all roll back. Rename is not supported in batch.',
+    'Execute multiple mutation operations atomically. All operations succeed or all roll back. Rename is not supported in batch. Create ops use schema default_directory when directory is omitted — pass override_default_directory: true to place elsewhere. The legacy path alias is deprecated; use directory.',
     paramsShape,
     async (params) => {
       const results: Array<{ op: string; node_id: string; file_path: string }> = [];
       const tmpDir = join(vaultPath, '.vault-engine', 'tmp');
+      const deprecationWarnings: Array<{ severity: 'warning'; code: string; message: string }> = [];
 
       // Track file state for rollback: files that existed before (backed up)
       // and files that were created new (to be deleted on rollback)
@@ -97,7 +101,24 @@ export function registerBatchMutate(
               const types = opParams.types ?? [];
               const fields = opParams.fields ?? {};
               const body = opParams.body ?? '';
-              const path = opParams.path;
+
+              // Directory param reconciliation: `path` is a deprecated alias for `directory`.
+              if (opParams.path !== undefined && opParams.directory !== undefined) {
+                throw new PipelineError(
+                  'INVALID_PARAMS',
+                  "Do not supply both 'path' and 'directory' on a create op. 'path' is deprecated — use 'directory'.",
+                );
+              }
+              let directoryParam = opParams.directory;
+              if (opParams.path !== undefined && opParams.directory === undefined) {
+                directoryParam = opParams.path;
+                deprecationWarnings.push({
+                  severity: 'warning',
+                  code: 'DEPRECATED_PARAM',
+                  message: "Param 'path' is deprecated in batch-mutate create; use 'directory' instead.",
+                });
+              }
+              const override_default_directory = opParams.override_default_directory ?? false;
 
               // Type-schema check
               const typeCheck = checkTypesHaveSchemas(db, types);
@@ -106,7 +127,10 @@ export function registerBatchMutate(
                   `Cannot create node with type${typeCheck.unknown.length > 1 ? 's' : ''} ${typeCheck.unknown.map(t => `'${t}'`).join(', ')} — no schema exists. Available: ${typeCheck.available.join(', ')}`);
               }
 
-              const filePath = path ? `${path}/${title}.md` : `${title}.md`;
+              const dirResult = resolveDirectory(db, { types, directory: directoryParam, override_default_directory });
+              if (!dirResult.ok) throw new PipelineError(dirResult.code, dirResult.message);
+
+              const filePath = dirResult.directory ? `${dirResult.directory}/${title}.md` : `${title}.md`;
               const absPath = safeVaultPath(vaultPath, filePath);
 
               const existing = db.prepare('SELECT id FROM nodes WHERE file_path = ?').get(filePath);
@@ -257,7 +281,7 @@ export function registerBatchMutate(
           for (const nodeId of deletedNodeIds) {
             embeddingIndexer?.removeNode(nodeId);
           }
-          return ok({ applied: true, results: applied });
+          return ok({ applied: true, results: applied }, deprecationWarnings);
         } catch {
           // DB transaction rolled back. Now revert file writes.
           const rollbackFailures: string[] = [];

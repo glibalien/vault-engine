@@ -5,6 +5,7 @@ import { ok, fail } from './errors.js';
 import { updateSchemaDefinition } from '../../schema/crud.js';
 import { diffClaims, propagateSchemaChange } from '../../schema/propagate.js';
 import { renderSchemaFile } from '../../schema/render.js';
+import { SchemaValidationError } from '../../schema/errors.js';
 import type { WriteLockManager } from '../../sync/write-lock.js';
 import type { SyncLogger } from '../../sync/sync-logger.js';
 
@@ -75,6 +76,9 @@ export function registerUpdateSchema(server: McpServer, db: Database.Database, c
 
         return ok({ ...result, propagation });
       } catch (err) {
+        if (err instanceof SchemaValidationError) {
+          return fail('VALIDATION_FAILED', err.message, { details: { groups: err.groups } });
+        }
         return fail('INVALID_PARAMS', err instanceof Error ? err.message : String(err));
       }
     },

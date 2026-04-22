@@ -6,6 +6,7 @@ import { createSchemaDefinition, updateSchemaDefinition } from '../../src/schema
 import { loadSchemaContext } from '../../src/pipeline/schema-context.js';
 import { mergeFieldClaims } from '../../src/validation/merge.js';
 import { validateProposedState } from '../../src/validation/validate.js';
+import { SchemaValidationError } from '../../src/schema/errors.js';
 
 let db: Database.Database;
 beforeEach(() => { db = createTestDb(); });
@@ -183,7 +184,20 @@ describe('claim validation guards', () => {
         name: 'note',
         field_claims: [{ field: 'count', enum_values_override: ['one'] }],
       });
-    }).toThrow(/structurally incompatible/);
+    }).toThrow(SchemaValidationError);
+
+    // 3. Verify the error has the right reason
+    try {
+      createSchemaDefinition(db, {
+        name: 'note2',
+        field_claims: [{ field: 'count', enum_values_override: ['one'] }],
+      });
+    } catch (e) {
+      if (e instanceof SchemaValidationError) {
+        expect(e.groups).toHaveLength(1);
+        expect(e.groups[0].reason).toBe('STRUCTURAL_INCOMPAT');
+      }
+    }
   });
 
   it('rejects override when overrides_allowed is false', () => {
@@ -200,7 +214,20 @@ describe('claim validation guards', () => {
         name: 'note',
         field_claims: [{ field: 'status', required: true }],
       });
-    }).toThrow(/does not allow required overrides/);
+    }).toThrow(SchemaValidationError);
+
+    // 3. Verify the error has the right reason
+    try {
+      createSchemaDefinition(db, {
+        name: 'note2',
+        field_claims: [{ field: 'status', required: true }],
+      });
+    } catch (e) {
+      if (e instanceof SchemaValidationError) {
+        expect(e.groups).toHaveLength(1);
+        expect(e.groups[0].reason).toBe('OVERRIDE_NOT_ALLOWED');
+      }
+    }
   });
 });
 

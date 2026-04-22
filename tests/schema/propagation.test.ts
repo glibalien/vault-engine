@@ -399,3 +399,61 @@ describe('propagateSchemaChange — date-token defaults', () => {
     expect(String(details.default_value).startsWith(today)).toBe(true);
   });
 });
+
+// ── collect-all behavior (Phase A) ─────────────────────────────────────
+
+import { SchemaValidationError } from '../../src/schema/errors.js';
+
+describe('propagateSchemaChange — collect-all validation failures', () => {
+  it('throws SchemaValidationError aggregating all per-node ENUM_MISMATCH failures', () => {
+    createGlobalField(db, {
+      name: 'status',
+      field_type: 'enum',
+      enum_values: ['open', 'closed'],
+    });
+    createSchemaDefinition(db, { name: 'note', field_claims: [] });
+
+    // Seed three nodes with pre-existing enum-invalid values
+    createNode({ file_path: 'a.md', title: 'A', types: ['note'], fields: { status: 'active' } });
+    createNode({ file_path: 'b.md', title: 'B', types: ['note'], fields: { status: 'active' } });
+    createNode({ file_path: 'c.md', title: 'C', types: ['note'], fields: { status: 'draft' } });
+
+    // Now add the status claim — propagation should surface all three failures
+    updateSchemaDefinition(db, 'note', { field_claims: [{ field: 'status', sort_order: 1 }] });
+    const diff = diffClaims([], [{ field: 'status', sort_order: 1 }]);
+
+    let caught: unknown = null;
+    try {
+      propagateSchemaChange(db, writeLock, vaultPath, 'note', diff);
+    } catch (e) {
+      caught = e;
+    }
+    expect(caught).toBeInstanceOf(SchemaValidationError);
+    const err = caught as SchemaValidationError;
+    const enumGroup = err.groups.find(g => g.reason === 'ENUM_INVALID' && g.field === 'status');
+    expect(enumGroup).toBeDefined();
+    expect(enumGroup!.count).toBe(3);
+    expect(enumGroup!.invalid_values).toEqual([
+      { value: 'active', count: 2 },
+      { value: 'draft', count: 1 },
+    ]);
+    expect(enumGroup!.sample_nodes).toHaveLength(3);
+  });
+
+  it('happy-path unchanged: no failures means no throw', () => {
+    createGlobalField(db, {
+      name: 'status',
+      field_type: 'enum',
+      enum_values: ['open', 'closed'],
+      default_value: 'open',
+      required: true,
+    });
+    createSchemaDefinition(db, { name: 'note', field_claims: [] });
+    createNode({ file_path: 'd.md', title: 'D', types: ['note'], fields: {} });
+
+    updateSchemaDefinition(db, 'note', { field_claims: [{ field: 'status', sort_order: 1 }] });
+    const diff = diffClaims([], [{ field: 'status', sort_order: 1 }]);
+
+    expect(() => propagateSchemaChange(db, writeLock, vaultPath, 'note', diff)).not.toThrow();
+  });
+});

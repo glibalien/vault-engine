@@ -13,6 +13,8 @@ import { resolveDefaultValue } from '../validation/resolve-default.js';
 import type { FileContext } from '../validation/resolve-default.js';
 import { safeVaultPath } from '../pipeline/safe-path.js';
 import { executeMutation } from '../pipeline/execute.js';
+import { PipelineError } from '../pipeline/types.js';
+import { SchemaValidationError, groupValidationIssues, type PerNodeIssue } from './errors.js';
 import type { WriteLockManager } from '../sync/write-lock.js';
 import type { SyncLogger } from '../sync/sync-logger.js';
 
@@ -182,6 +184,11 @@ function rerenderNodeThroughPipeline(
  * Re-renders affected nodes through executeMutation and populates defaults
  * for added claims. Emits `field-defaulted` and `fields-orphaned` edits_log
  * rows post-mutation with source='propagation'.
+ *
+ * Per-node PipelineError with validation issues are collected across the full
+ * loop. If any are collected, a SchemaValidationError is thrown at the end,
+ * which rolls back the enclosing db.transaction. File writes from successfully
+ * completed nodes are NOT rolled back (accepted until Phase B).
  */
 export function propagateSchemaChange(
   db: Database.Database,
@@ -212,93 +219,118 @@ export function propagateSchemaChange(
   const mergeCache = new Map<string, ReturnType<typeof mergeFieldClaims>>();
   const insertLog = db.prepare('INSERT INTO edits_log (node_id, timestamp, event_type, details) VALUES (?, ?, ?, ?)');
 
-  for (const nodeId of nodeIds) {
-    const state = loadNodeState(db, nodeId);
-    if (!state) continue;
+  const perNodeIssues: PerNodeIssue[] = [];
 
-    // Cache merge results by sorted type-set key
-    const typeKey = [...state.types].sort().join(',');
-    let mergeResult = mergeCache.get(typeKey);
-    if (!mergeResult) {
-      const ctx = loadSchemaContext(db, state.types);
-      mergeResult = mergeFieldClaims(state.types, ctx.claimsByType, ctx.globalFields);
-      mergeCache.set(typeKey, mergeResult);
-    }
-    const effectiveFields = mergeResult.ok ? mergeResult.effective_fields : mergeResult.partial_fields;
+  const runLoop = db.transaction(() => {
+    for (const nodeId of nodeIds) {
+      const state = loadNodeState(db, nodeId);
+      if (!state) continue;
 
-    // Identify fields that need adoption defaults on this node.
-    const adoptionFieldsToDefault: Array<{ field: string; value: unknown }> = [];
-    let fileCtx: FileContext | null = null;
-    for (const field of diff.added) {
-      if (field in state.currentFields) continue; // re-adoption — value already present
-      const ef = effectiveFields.get(field);
-      if (!ef?.resolved_required) continue;
-      if (ef.resolved_default_value === null || ef.resolved_default_value === undefined) continue;
-
-      if (fileCtx === null) fileCtx = buildFileContext(db, vaultPath, nodeId, state.file_path);
-      adoptionFieldsToDefault.push({
-        field,
-        value: resolveDefaultValue(ef.resolved_default_value, fileCtx),
-      });
-    }
-
-    // Resolve default source ('global' vs 'claim') for each adoption default.
-    // loadSchemaContext is called at most once per node regardless of adoption count.
-    const adoptionDefaults: Record<string, unknown> = {};
-    const adoptionSources: Record<string, 'global' | 'claim'> = {};
-    if (adoptionFieldsToDefault.length > 0) {
-      const ctx = loadSchemaContext(db, state.types);
-      for (const { field, value } of adoptionFieldsToDefault) {
-        adoptionDefaults[field] = value;
-        let src: 'global' | 'claim' = 'global';
-        for (const claims of ctx.claimsByType.values()) {
-          for (const c of claims) {
-            if (c.field === field && c.default_value_override.kind === 'override') {
-              src = 'claim';
-              break;
-            }
-          }
-          if (src === 'claim') break;
-        }
-        adoptionSources[field] = src;
+      // Cache merge results by sorted type-set key
+      const typeKey = [...state.types].sort().join(',');
+      let mergeResult = mergeCache.get(typeKey);
+      if (!mergeResult) {
+        const ctx = loadSchemaContext(db, state.types);
+        mergeResult = mergeFieldClaims(state.types, ctx.claimsByType, ctx.globalFields);
+        mergeCache.set(typeKey, mergeResult);
       }
+      const effectiveFields = mergeResult.ok ? mergeResult.effective_fields : mergeResult.partial_fields;
+
+      // Identify fields that need adoption defaults on this node.
+      const adoptionFieldsToDefault: Array<{ field: string; value: unknown }> = [];
+      let fileCtx: FileContext | null = null;
+      for (const field of diff.added) {
+        if (field in state.currentFields) continue; // re-adoption — value already present
+        const ef = effectiveFields.get(field);
+        if (!ef?.resolved_required) continue;
+        if (ef.resolved_default_value === null || ef.resolved_default_value === undefined) continue;
+
+        if (fileCtx === null) fileCtx = buildFileContext(db, vaultPath, nodeId, state.file_path);
+        adoptionFieldsToDefault.push({
+          field,
+          value: resolveDefaultValue(ef.resolved_default_value, fileCtx),
+        });
+      }
+
+      // Resolve default source ('global' vs 'claim') for each adoption default.
+      const adoptionDefaults: Record<string, unknown> = {};
+      const adoptionSources: Record<string, 'global' | 'claim'> = {};
+      if (adoptionFieldsToDefault.length > 0) {
+        const ctx = loadSchemaContext(db, state.types);
+        for (const { field, value } of adoptionFieldsToDefault) {
+          adoptionDefaults[field] = value;
+          let src: 'global' | 'claim' = 'global';
+          for (const claims of ctx.claimsByType.values()) {
+            for (const c of claims) {
+              if (c.field === field && c.default_value_override.kind === 'override') {
+                src = 'claim';
+                break;
+              }
+            }
+            if (src === 'claim') break;
+          }
+          adoptionSources[field] = src;
+        }
+      }
+
+      // Pipeline call — collect validation failures instead of re-throwing
+      let pipelineResult: { node_id: string; file_path: string; file_written: boolean } | null = null;
+      try {
+        pipelineResult = rerenderNodeThroughPipeline(
+          db, writeLock, vaultPath, nodeId, adoptionDefaults, syncLogger, state,
+        );
+      } catch (err) {
+        if (err instanceof PipelineError && err.validation) {
+          for (const issue of err.validation.issues) {
+            perNodeIssues.push({
+              node_id: nodeId,
+              title: state.title,
+              field: issue.field,
+              code: issue.code,
+              value: state.currentFields[issue.field],
+            });
+          }
+          continue;
+        }
+        throw err;
+      }
+      if (!pipelineResult) continue;
+
+      // Post-mutation emission: field-defaulted (adoption)
+      const now = Date.now();
+      for (const [field, value] of Object.entries(adoptionDefaults)) {
+        insertLog.run(nodeId, now, 'field-defaulted', JSON.stringify({
+          source: 'propagation',
+          field,
+          default_value: value,
+          default_source: adoptionSources[field],
+          trigger,
+          node_types: state.types,
+        }));
+        result.defaults_populated++;
+      }
+
+      // Post-mutation emission: fields-orphaned (one row per node, listing all)
+      const orphanedInThisNode = diff.removed.filter(f => f in state.currentFields);
+      if (orphanedInThisNode.length > 0) {
+        insertLog.run(nodeId, now, 'fields-orphaned', JSON.stringify({
+          source: 'propagation',
+          trigger,
+          orphaned_fields: orphanedInThisNode,
+          node_types: state.types,
+        }));
+        result.fields_orphaned += orphanedInThisNode.length;
+      }
+
+      if (pipelineResult.file_written) result.nodes_rerendered++;
     }
 
-    // Call the pipeline
-    const pipelineResult = rerenderNodeThroughPipeline(
-      db, writeLock, vaultPath, nodeId, adoptionDefaults, syncLogger, state,
-    );
-    if (!pipelineResult) continue;
-
-    // Post-mutation emission: field-defaulted (adoption)
-    const now = Date.now();
-    for (const [field, value] of Object.entries(adoptionDefaults)) {
-      insertLog.run(nodeId, now, 'field-defaulted', JSON.stringify({
-        source: 'propagation',
-        field,
-        default_value: value,
-        default_source: adoptionSources[field],
-        trigger,
-        node_types: state.types,
-      }));
-      result.defaults_populated++;
+    if (perNodeIssues.length > 0) {
+      throw new SchemaValidationError(groupValidationIssues(perNodeIssues));
     }
+  });
 
-    // Post-mutation emission: fields-orphaned (one row per node, listing all)
-    const orphanedInThisNode = diff.removed.filter(f => f in state.currentFields);
-    if (orphanedInThisNode.length > 0) {
-      insertLog.run(nodeId, now, 'fields-orphaned', JSON.stringify({
-        source: 'propagation',
-        trigger,
-        orphaned_fields: orphanedInThisNode,
-        node_types: state.types,
-      }));
-      result.fields_orphaned += orphanedInThisNode.length;
-    }
-
-    if (pipelineResult.file_written) result.nodes_rerendered++;
-  }
-
+  runLoop();
   return result;
 }
 

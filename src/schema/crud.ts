@@ -1,6 +1,7 @@
 // src/schema/crud.ts
 
 import type Database from 'better-sqlite3';
+import { SchemaValidationError, type ValidationGroup } from './errors.js';
 
 // ── Types ─────────────────────────────────────────────────────────────
 
@@ -77,46 +78,64 @@ interface GlobalFieldRow {
 }
 
 function validateClaims(db: Database.Database, claims: ClaimInput[]): void {
+  const groups: ValidationGroup[] = [];
+
   for (const claim of claims) {
     const gf = db
       .prepare(`SELECT name, field_type, list_item_type, overrides_allowed_required, overrides_allowed_default_value, overrides_allowed_enum_values FROM global_fields WHERE name = ?`)
       .get(claim.field) as GlobalFieldRow | undefined;
 
     if (!gf) {
-      throw new Error(
-        `Global field '${claim.field}' does not exist. Create it first with create-global-field.`,
-      );
+      groups.push({
+        reason: 'UNKNOWN_FIELD',
+        field: claim.field,
+        count: 1,
+        message: `Global field '${claim.field}' does not exist. Create it first with create-global-field.`,
+      });
+      continue; // subsequent checks on this claim are meaningless without gf
     }
 
-    // Per-property override gating
     if (claim.required !== undefined && gf.overrides_allowed_required !== 1) {
-      throw new Error(
-        `Field '${claim.field}' does not allow required overrides. Set overrides_allowed.required = true on the global field.`,
-      );
+      groups.push({
+        reason: 'OVERRIDE_NOT_ALLOWED',
+        field: claim.field,
+        count: 1,
+        message: `Field '${claim.field}' does not allow required overrides. Set overrides_allowed.required = true on the global field.`,
+      });
     }
     if ((claim.default_value !== undefined || claim.default_value_overridden) && gf.overrides_allowed_default_value !== 1) {
-      throw new Error(
-        `Field '${claim.field}' does not allow default_value overrides. Set overrides_allowed.default_value = true on the global field.`,
-      );
+      groups.push({
+        reason: 'OVERRIDE_NOT_ALLOWED',
+        field: claim.field,
+        count: 1,
+        message: `Field '${claim.field}' does not allow default_value overrides. Set overrides_allowed.default_value = true on the global field.`,
+      });
     }
     if (claim.enum_values_override !== undefined && gf.overrides_allowed_enum_values !== 1) {
-      throw new Error(
-        `Field '${claim.field}' does not allow enum_values overrides. Set overrides_allowed.enum_values = true on the global field.`,
-      );
+      groups.push({
+        reason: 'OVERRIDE_NOT_ALLOWED',
+        field: claim.field,
+        count: 1,
+        message: `Field '${claim.field}' does not allow enum_values overrides. Set overrides_allowed.enum_values = true on the global field.`,
+      });
     }
 
-    // Structural compatibility check for enum_values_override
     if (claim.enum_values_override !== undefined) {
       const isEnumCompatible =
         gf.field_type === 'enum' ||
         (gf.field_type === 'list' && gf.list_item_type === 'enum');
       if (!isEnumCompatible) {
-        throw new Error(
-          `Field '${claim.field}' (${gf.field_type}${gf.list_item_type ? '<' + gf.list_item_type + '>' : ''}) is structurally incompatible with enum_values_override. Only enum and list<enum> fields support enum overrides.`,
-        );
+        groups.push({
+          reason: 'STRUCTURAL_INCOMPAT',
+          field: claim.field,
+          count: 1,
+          message: `Field '${claim.field}' (${gf.field_type}${gf.list_item_type ? '<' + gf.list_item_type + '>' : ''}) is structurally incompatible with enum_values_override. Only enum and list<enum> fields support enum overrides.`,
+        });
       }
     }
   }
+
+  if (groups.length > 0) throw new SchemaValidationError(groups);
 }
 
 // ── Insert claims ─────────────────────────────────────────────────────

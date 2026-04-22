@@ -8,6 +8,7 @@ import {
   updateSchemaDefinition,
   deleteSchemaDefinition,
 } from '../../src/schema/crud.js';
+import { SchemaValidationError } from '../../src/schema/errors.js';
 
 let db: Database.Database;
 
@@ -100,30 +101,45 @@ describe('createSchemaDefinition', () => {
   });
 
   it('rejects claim for nonexistent global field', () => {
-    expect(() =>
+    let caught: unknown = null;
+    try {
       createSchemaDefinition(db, {
         name: 'Task',
         field_claims: [{ field: 'nonexistent_field' }],
-      }),
-    ).toThrow(/Global field 'nonexistent_field' does not exist/);
+      });
+    } catch (e) {
+      caught = e;
+    }
+    expect(caught).toBeInstanceOf(SchemaValidationError);
+    expect((caught as SchemaValidationError).groups[0].message).toMatch(/Global field 'nonexistent_field' does not exist/);
   });
 
   it('rejects required override without overrides_allowed.required', () => {
-    expect(() =>
+    let caught: unknown = null;
+    try {
       createSchemaDefinition(db, {
         name: 'Task',
         field_claims: [{ field: 'due_date', required: true }],
-      }),
-    ).toThrow(/overrides_allowed\.required/);
+      });
+    } catch (e) {
+      caught = e;
+    }
+    expect(caught).toBeInstanceOf(SchemaValidationError);
+    expect((caught as SchemaValidationError).groups[0].message).toMatch(/overrides_allowed\.required/);
   });
 
   it('rejects default_value override without overrides_allowed.default_value', () => {
-    expect(() =>
+    let caught: unknown = null;
+    try {
       createSchemaDefinition(db, {
         name: 'Task',
         field_claims: [{ field: 'priority', default_value: 5 }],
-      }),
-    ).toThrow(/overrides_allowed\.default_value/);
+      });
+    } catch (e) {
+      caught = e;
+    }
+    expect(caught).toBeInstanceOf(SchemaValidationError);
+    expect((caught as SchemaValidationError).groups[0].message).toMatch(/overrides_allowed\.default_value/);
   });
 
   it('allows semantic override when overrides_allowed is true', () => {
@@ -195,19 +211,29 @@ describe('updateSchemaDefinition', () => {
   });
 
   it('validates new claims during update (rejects nonexistent field)', () => {
-    expect(() =>
+    let caught: unknown = null;
+    try {
       updateSchemaDefinition(db, 'Task', {
         field_claims: [{ field: 'ghost_field' }],
-      }),
-    ).toThrow(/Global field 'ghost_field' does not exist/);
+      });
+    } catch (e) {
+      caught = e;
+    }
+    expect(caught).toBeInstanceOf(SchemaValidationError);
+    expect((caught as SchemaValidationError).groups[0].message).toMatch(/Global field 'ghost_field' does not exist/);
   });
 
   it('validates semantic overrides during update', () => {
-    expect(() =>
+    let caught: unknown = null;
+    try {
       updateSchemaDefinition(db, 'Task', {
         field_claims: [{ field: 'due_date', required: true }],
-      }),
-    ).toThrow(/overrides_allowed\.required/);
+      });
+    } catch (e) {
+      caught = e;
+    }
+    expect(caught).toBeInstanceOf(SchemaValidationError);
+    expect((caught as SchemaValidationError).groups[0].message).toMatch(/overrides_allowed\.required/);
   });
 
   it('throws when schema does not exist', () => {
@@ -265,5 +291,87 @@ describe('deleteSchemaDefinition', () => {
 
   it('throws when schema does not exist', () => {
     expect(() => deleteSchemaDefinition(db, 'NoSuchSchema')).toThrow(/not found/i);
+  });
+});
+
+// ── SchemaValidationError path ──────────────────────────────────────
+
+describe('validateClaims throws SchemaValidationError', () => {
+  it('UNKNOWN_FIELD: claim referencing nonexistent global field', () => {
+    let caught: unknown = null;
+    try {
+      createSchemaDefinition(db, {
+        name: 'Task',
+        field_claims: [{ field: 'nonexistent' }],
+      });
+    } catch (e) {
+      caught = e;
+    }
+    expect(caught).toBeInstanceOf(SchemaValidationError);
+    const err = caught as SchemaValidationError;
+    expect(err.groups).toHaveLength(1);
+    expect(err.groups[0].reason).toBe('UNKNOWN_FIELD');
+    expect(err.groups[0].field).toBe('nonexistent');
+    expect(err.groups[0].count).toBe(1);
+  });
+
+  it('OVERRIDE_NOT_ALLOWED: required override without overrides_allowed.required', () => {
+    let caught: unknown = null;
+    try {
+      createSchemaDefinition(db, {
+        name: 'Task',
+        field_claims: [{ field: 'due_date', required: true }],
+      });
+    } catch (e) {
+      caught = e;
+    }
+    expect(caught).toBeInstanceOf(SchemaValidationError);
+    const err = caught as SchemaValidationError;
+    expect(err.groups).toHaveLength(1);
+    expect(err.groups[0].reason).toBe('OVERRIDE_NOT_ALLOWED');
+    expect(err.groups[0].field).toBe('due_date');
+  });
+
+  it('STRUCTURAL_INCOMPAT: enum override on non-enum field', () => {
+    // Allow the override so we reach the structural check
+    createGlobalField(db, {
+      name: 'body_text',
+      field_type: 'string',
+      overrides_allowed: { enum_values: true },
+    });
+
+    let caught: unknown = null;
+    try {
+      createSchemaDefinition(db, {
+        name: 'Task',
+        field_claims: [{ field: 'body_text', enum_values_override: ['a', 'b'] }],
+      });
+    } catch (e) {
+      caught = e;
+    }
+    expect(caught).toBeInstanceOf(SchemaValidationError);
+    const err = caught as SchemaValidationError;
+    expect(err.groups).toHaveLength(1);
+    expect(err.groups[0].reason).toBe('STRUCTURAL_INCOMPAT');
+    expect(err.groups[0].field).toBe('body_text');
+  });
+
+  it('aggregates multiple claim-level failures into one throw (does not short-circuit)', () => {
+    let caught: unknown = null;
+    try {
+      createSchemaDefinition(db, {
+        name: 'Task',
+        field_claims: [
+          { field: 'nonexistent_a' },
+          { field: 'nonexistent_b' },
+          { field: 'due_date', required: true }, // OVERRIDE_NOT_ALLOWED
+        ],
+      });
+    } catch (e) {
+      caught = e;
+    }
+    expect(caught).toBeInstanceOf(SchemaValidationError);
+    const err = caught as SchemaValidationError;
+    expect(err.groups).toHaveLength(3);
   });
 });

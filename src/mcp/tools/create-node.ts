@@ -13,6 +13,7 @@ import { PipelineError } from '../../pipeline/types.js';
 import type { WriteLockManager } from '../../sync/write-lock.js';
 import type { SyncLogger } from '../../sync/sync-logger.js';
 import { checkTypesHaveSchemas } from '../../pipeline/check-types.js';
+import { resolveDirectory } from '../../schema/paths.js';
 import { loadSchemaContext } from '../../pipeline/schema-context.js';
 import { validateProposedState } from '../../validation/validate.js';
 import { buildFixable } from '../../validation/fixable.js';
@@ -58,31 +59,19 @@ export function registerCreateNode(
         );
       }
 
-      // ── Validate directory param ──────────────────────────────────
-      if (directory !== undefined && directory.endsWith('.md')) {
-        return fail(
-          'INVALID_PARAMS',
-          '"directory" must be a folder path, not a filename. The filename is always derived from the node title.',
-        );
-      }
+      // ── Resolve directory via shared helper ───────────────────────
+      const dirResult = resolveDirectory(db, {
+        types,
+        directory,
+        override_default_directory,
+      });
+      if (!dirResult.ok) return fail(dirResult.code, dirResult.message);
 
-      // Derive file path
-      let filePath: string;
+      // Filename template lookup — still inline (separate concern)
       let fileName = `${title}.md`;
-      let schemaDefaultDir: string | null = null;
-
       if (types.length >= 1) {
-        const schema = db.prepare('SELECT filename_template, default_directory FROM schemas WHERE name = ?')
-          .get(types[0]) as { filename_template: string | null; default_directory: string | null } | undefined;
-        schemaDefaultDir = schema?.default_directory ?? null;
-
-        if (directory !== undefined && schemaDefaultDir && !override_default_directory) {
-          return fail(
-            'INVALID_PARAMS',
-            `Type "${types[0]}" routes to "${schemaDefaultDir}/" via schema. Pass override_default_directory: true to place this node elsewhere.`,
-          );
-        }
-
+        const schema = db.prepare('SELECT filename_template FROM schemas WHERE name = ?')
+          .get(types[0]) as { filename_template: string | null } | undefined;
         if (schema?.filename_template) {
           const derived = evaluateTemplate(schema.filename_template, title, fields);
           if (derived === null) {
@@ -91,9 +80,9 @@ export function registerCreateNode(
           fileName = derived;
         }
       }
-
-      const dir = directory ?? schemaDefaultDir ?? '';
-      filePath = dir ? `${dir}/${fileName}` : fileName;
+      const filePath = dirResult.directory
+        ? `${dirResult.directory}/${fileName}`
+        : fileName;
 
       // ── Compute warnings ────────────────────────────────────────
       const titleIssues = checkTitleSafety(title);

@@ -53,7 +53,7 @@ function prepareStatements(db: Database.Database): Statements {
     deleteFts: db.prepare('DELETE FROM nodes_fts WHERE rowid = ?'),
     insertFts: db.prepare('INSERT INTO nodes_fts (rowid, title, body) VALUES (@rowid, @title, @body)'),
     deleteTypes: db.prepare('DELETE FROM node_types WHERE node_id = ?'),
-    insertType: db.prepare('INSERT INTO node_types (node_id, schema_type) VALUES (?, ?)'),
+    insertType: db.prepare('INSERT INTO node_types (node_id, schema_type, sort_order) VALUES (?, ?, ?)'),
     deleteFields: db.prepare('DELETE FROM node_fields WHERE node_id = ?'),
     insertField: db.prepare(`
       INSERT INTO node_fields (node_id, field_name, value_text, value_number, value_date, value_json, value_raw_text, source)
@@ -184,9 +184,9 @@ function doIndex(
   stmts.insertFts.run({ rowid: rowInfo.rowid, title: parsed.title ?? '', body: parsed.body });
 
   // Insert types
-  for (const t of parsed.types) {
-    stmts.insertType.run(nodeId, t);
-  }
+  parsed.types.forEach((t, idx) => {
+    stmts.insertType.run(nodeId, t, idx);
+  });
 
   // Insert fields
   const fieldNames = new Set<string>();

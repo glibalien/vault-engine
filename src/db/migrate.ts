@@ -372,3 +372,36 @@ export function addUndoTables(db: Database.Database): void {
   });
   run();
 }
+
+/**
+ * Migration: add node_types.sort_order column (2026-04-22, Phase A3).
+ *
+ * Enables deterministic "first type" lookup for multi-typed nodes — wins
+ * back parity with the explicit types[0] ordering that create-node uses.
+ *
+ * Backfill uses SQLite rowid per (node_id) partition — best-effort proxy
+ * for original insertion order. New inserts populate sort_order explicitly
+ * via pipeline/indexer loops (caller-supplied types array index).
+ *
+ * Idempotent — safe to run on a database that already has the column.
+ */
+export function addNodeTypesSortOrder(db: Database.Database): void {
+  const run = db.transaction(() => {
+    const cols = (db.prepare('PRAGMA table_info(node_types)').all() as Array<{ name: string }>)
+      .map(c => c.name);
+    if (!cols.includes('sort_order')) {
+      db.prepare('ALTER TABLE node_types ADD COLUMN sort_order INTEGER NOT NULL DEFAULT 0').run();
+      db.prepare(`
+        UPDATE node_types
+        SET sort_order = (
+          SELECT rn - 1 FROM (
+            SELECT node_id, schema_type, ROW_NUMBER() OVER (PARTITION BY node_id ORDER BY rowid) AS rn
+            FROM node_types
+          ) sub
+          WHERE sub.node_id = node_types.node_id AND sub.schema_type = node_types.schema_type
+        )
+      `).run();
+    }
+  });
+  run();
+}

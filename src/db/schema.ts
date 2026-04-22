@@ -22,6 +22,7 @@ export function createSchema(db: Database.Database): void {
     CREATE TABLE IF NOT EXISTS node_types (
       node_id TEXT NOT NULL REFERENCES nodes(id) ON DELETE CASCADE,
       schema_type TEXT NOT NULL,
+      sort_order INTEGER NOT NULL DEFAULT 0,
       PRIMARY KEY (node_id, schema_type)
     );
     CREATE INDEX IF NOT EXISTS idx_node_types_schema_type ON node_types(schema_type);

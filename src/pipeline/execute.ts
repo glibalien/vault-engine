@@ -385,10 +385,10 @@ export function executeMutation(
 
       // Delete and reinsert node_types
       db.prepare('DELETE FROM node_types WHERE node_id = ?').run(nodeId);
-      const insertType = db.prepare('INSERT INTO node_types (node_id, schema_type) VALUES (?, ?)');
-      for (const t of mutation.types) {
-        insertType.run(nodeId, t);
-      }
+      const insertType = db.prepare('INSERT INTO node_types (node_id, schema_type, sort_order) VALUES (?, ?, ?)');
+      mutation.types.forEach((t, idx) => {
+        insertType.run(nodeId, t, idx);
+      });
 
       // Delete and reinsert node_fields
       db.prepare('DELETE FROM node_fields WHERE node_id = ?').run(nodeId);

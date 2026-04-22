@@ -457,3 +457,19 @@ describe('propagateSchemaChange — collect-all validation failures', () => {
     expect(() => propagateSchemaChange(db, writeLock, vaultPath, 'note', diff)).not.toThrow();
   });
 });
+
+describe('node_types insertion order (Phase A3 prerequisite)', () => {
+  it('sort_order column reflects order of types array on insert', () => {
+    createGlobalField(db, { name: 'x', field_type: 'string' });
+    createSchemaDefinition(db, { name: 'task', field_claims: [], default_directory: 'TaskNotes/Tasks' });
+    createSchemaDefinition(db, { name: 'note', field_claims: [], default_directory: 'Notes' });
+
+    createNode({ file_path: 'z.md', title: 'Z', types: ['task', 'note'], fields: {}, body: '' });
+
+    const rows = db.prepare(
+      'SELECT schema_type, sort_order FROM node_types WHERE node_id = (SELECT id FROM nodes WHERE title = ?) ORDER BY sort_order'
+    ).all('Z') as Array<{ schema_type: string; sort_order: number }>;
+    expect(rows.map(r => r.schema_type)).toEqual(['task', 'note']);
+    expect(rows.map(r => r.sort_order)).toEqual([0, 1]);
+  });
+});

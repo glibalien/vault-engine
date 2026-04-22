@@ -13,6 +13,7 @@ import remarkGfm from 'remark-gfm';
 import type { Node, Parent } from 'unist';
 import type { Text } from 'mdast';
 import { ok, fail, adaptIssue } from './errors.js';
+import { resolveDirectory } from '../../schema/paths.js';
 import { resolveNodeIdentity } from './resolve-identity.js';
 import { checkTitleSafety, type ToolIssue } from './title-warnings.js';
 import { executeMutation } from '../../pipeline/execute.js';
@@ -230,27 +231,22 @@ export function registerRenameNode(
       const oldTitle = node.title;
       const oldFilePath = node.file_path;
 
-      // ── Validate directory param ──────────────────────────────────
-      if (params.directory !== undefined && params.directory.endsWith('.md')) {
-        return fail('INVALID_PARAMS',
-          '"directory" must be a folder path, not a filename. The filename is always derived from the node title.');
-      }
+      // Read ordered types so we honor the same "first type wins" rule as create-node
+      const orderedTypes = (db.prepare(
+        'SELECT schema_type FROM node_types WHERE node_id = ? ORDER BY sort_order, schema_type'
+      ).all(node.node_id) as Array<{ schema_type: string }>).map(r => r.schema_type);
 
-      // Derive new directory: explicit param > schema default > current directory
-      let newDir: string;
-      if (params.directory !== undefined) {
-        newDir = params.directory;
-      } else {
-        const nodeType = db.prepare('SELECT schema_type FROM node_types WHERE node_id = ? LIMIT 1')
-          .get(node.node_id) as { schema_type: string } | undefined;
-        let schemaDefault: string | null = null;
-        if (nodeType) {
-          const schema = db.prepare('SELECT default_directory FROM schemas WHERE name = ?')
-            .get(nodeType.schema_type) as { default_directory: string | null } | undefined;
-          schemaDefault = schema?.default_directory ?? null;
-        }
-        newDir = schemaDefault ?? dirname(oldFilePath);
-      }
+      // Resolve directory via shared helper (covers .md guard + override semantics)
+      const dirResult = resolveDirectory(db, {
+        types: orderedTypes,
+        directory: params.directory,
+        override_default_directory: true,
+      });
+      if (!dirResult.ok) return fail(dirResult.code, dirResult.message);
+
+      // When no type has a schema default, preserve the current directory
+      // instead of moving the file to the vault root.
+      const newDir = dirResult.source === 'root' ? dirname(oldFilePath) : dirResult.directory;
 
       const newFilePath = newDir === '.' || newDir === ''
         ? `${params.new_title}.md`

@@ -187,17 +187,19 @@ describe('claim validation guards', () => {
     }).toThrow(SchemaValidationError);
 
     // 3. Verify the error has the right reason
+    let caught: unknown = null;
     try {
       createSchemaDefinition(db, {
         name: 'note2',
         field_claims: [{ field: 'count', enum_values_override: ['one'] }],
       });
     } catch (e) {
-      if (e instanceof SchemaValidationError) {
-        expect(e.groups).toHaveLength(1);
-        expect(e.groups[0].reason).toBe('STRUCTURAL_INCOMPAT');
-      }
+      caught = e;
     }
+    expect(caught).toBeInstanceOf(SchemaValidationError);
+    const err1 = caught as SchemaValidationError;
+    expect(err1.groups).toHaveLength(1);
+    expect(err1.groups[0].reason).toBe('STRUCTURAL_INCOMPAT');
   });
 
   it('rejects override when overrides_allowed is false', () => {
@@ -217,17 +219,19 @@ describe('claim validation guards', () => {
     }).toThrow(SchemaValidationError);
 
     // 3. Verify the error has the right reason
+    let caught: unknown = null;
     try {
       createSchemaDefinition(db, {
         name: 'note2',
         field_claims: [{ field: 'status', required: true }],
       });
     } catch (e) {
-      if (e instanceof SchemaValidationError) {
-        expect(e.groups).toHaveLength(1);
-        expect(e.groups[0].reason).toBe('OVERRIDE_NOT_ALLOWED');
-      }
+      caught = e;
     }
+    expect(caught).toBeInstanceOf(SchemaValidationError);
+    const err2 = caught as SchemaValidationError;
+    expect(err2.groups).toHaveLength(1);
+    expect(err2.groups[0].reason).toBe('OVERRIDE_NOT_ALLOWED');
   });
 });
 

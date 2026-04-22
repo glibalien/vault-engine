@@ -236,7 +236,10 @@ export function registerRenameNode(
         'SELECT schema_type FROM node_types WHERE node_id = ? ORDER BY sort_order, schema_type'
       ).all(node.node_id) as Array<{ schema_type: string }>).map(r => r.schema_type);
 
-      // Resolve directory via shared helper (covers .md guard + override semantics)
+      // Resolve directory via shared helper (covers .md guard + first-type lookup).
+      // override_default_directory: true preserves rename-node's existing API contract —
+      // an explicit directory param unconditionally wins. create-node gates this behind
+      // the flag for new-node creation; rename is an explicit move, so no gate.
       const dirResult = resolveDirectory(db, {
         types: orderedTypes,
         directory: params.directory,

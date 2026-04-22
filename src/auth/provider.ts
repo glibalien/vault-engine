@@ -267,6 +267,9 @@ export class VaultOAuthProvider implements OAuthServerProvider {
     ).get(tokenHash, now) as TokenRow | undefined;
 
     if (!row) {
+      // DEBUG: temporary diagnostic for claude.ai 401 issue
+      const anyRow = this.db.prepare('SELECT type, revoked, expires_at, substr(client_id,1,8) as cid FROM oauth_tokens WHERE token = ?').get(tokenHash) as { type: string; revoked: number; expires_at: number; cid: string } | undefined;
+      process.stderr.write(`[oauth-debug] verifyAccessToken FAILED token_len=${token.length} token_prefix=${token.substring(0,12)} hash_prefix=${tokenHash.substring(0,12)} db_match=${anyRow ? JSON.stringify(anyRow) : 'NONE'}\n`);
       throw new InvalidTokenError('Invalid or expired access token');
     }
 

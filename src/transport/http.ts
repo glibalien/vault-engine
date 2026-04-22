@@ -59,6 +59,12 @@ export function createHttpApp(serverFactory: ServerFactory, authConfig?: AuthCon
 
   // Conditional auth middleware for /mcp: skip HEAD and sessionless GET (protocol discovery)
   app.use('/mcp', (req: Request, res: Response, next: NextFunction) => {
+    // DEBUG: temporary diagnostic for claude.ai 401 issue
+    const authHeader = req.headers.authorization;
+    const ua = req.headers['user-agent'] ?? '';
+    const sess = req.headers['mcp-session-id'] ?? '';
+    process.stderr.write(`[mcp-debug] ${req.method} authz=${authHeader ? authHeader.substring(0,20) + '...' : 'MISSING'} session=${sess} ua=${typeof ua === 'string' ? ua.substring(0, 60) : ''}\n`);
+
     if (req.method === 'HEAD') return next();
     if (req.method === 'GET' && !req.headers['mcp-session-id']) return next();
     bearerAuth(req, res, next);

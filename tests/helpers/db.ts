@@ -1,7 +1,7 @@
 import Database from 'better-sqlite3';
 import * as sqliteVec from 'sqlite-vec';
 import { createSchema } from '../../src/db/schema.js';
-import { addUndoTables, addNodeTypesSortOrder } from '../../src/db/migrate.js';
+import { addUndoTables, addNodeTypesSortOrder, addSchemaUndoSnapshots } from '../../src/db/migrate.js';
 
 export function createTestDb(): Database.Database {
   const db = new Database(':memory:');
@@ -11,5 +11,6 @@ export function createTestDb(): Database.Database {
   createSchema(db);
   addUndoTables(db);
   addNodeTypesSortOrder(db);
+  addSchemaUndoSnapshots(db);
   return db;
 }

@@ -9,7 +9,7 @@ describe('addUndoTables', () => {
 
     const opCols = (db.prepare('PRAGMA table_info(undo_operations)').all() as Array<{ name: string; type: string; notnull: number; pk: number }>);
     expect(opCols.map(c => c.name).sort()).toEqual(
-      ['description', 'node_count', 'operation_id', 'source_tool', 'status', 'timestamp'],
+      ['description', 'node_count', 'operation_id', 'schema_count', 'source_tool', 'status', 'timestamp'],
     );
     expect(opCols.find(c => c.name === 'operation_id')?.pk).toBe(1);
 

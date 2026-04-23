@@ -576,3 +576,34 @@ describe('propagateSchemaChange — transaction rollback on validation failure',
     expect(leakedDefault.c).toBe(0);
   });
 });
+
+describe('propagateSchemaChange — operation_id threading', () => {
+  it('per-node snapshots are captured under the caller-supplied operation_id', async () => {
+    const { createOperation, finalizeOperation } = await import('../../src/undo/operation.js');
+    const { addUndoTables, addSchemaUndoSnapshots } = await import('../../src/db/migrate.js');
+    addUndoTables(db);
+    addSchemaUndoSnapshots(db);
+
+    createGlobalField(db, { name: 'status', field_type: 'string', default_value: 'open', required: true });
+    createSchemaDefinition(db, { name: 'task', field_claims: [] });
+    const n1 = createNode({ file_path: 'a.md', title: 'A', types: ['task'] });
+
+    const op = createOperation(db, { source_tool: 'update-schema', description: 'test' });
+    try {
+      const oldClaims: Array<{ field: string; sort_order?: number }> = [];
+      const newClaims = [{ field: 'status', sort_order: 1000 }];
+      updateSchemaDefinition(db, 'task', { field_claims: newClaims });
+      const diff = diffClaims(oldClaims, newClaims);
+
+      propagateSchemaChange(db, writeLock, vaultPath, 'task', diff, undefined, { operation_id: op });
+    } finally {
+      finalizeOperation(db, op);
+    }
+
+    const snaps = db.prepare('SELECT node_id FROM undo_snapshots WHERE operation_id = ?').all(op) as Array<{ node_id: string }>;
+    expect(snaps.some(s => s.node_id === n1.node_id)).toBe(true);
+
+    const opRow = db.prepare('SELECT node_count FROM undo_operations WHERE operation_id = ?').get(op) as { node_count: number };
+    expect(opRow.node_count).toBeGreaterThan(0);
+  });
+});

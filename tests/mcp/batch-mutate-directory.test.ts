@@ -15,9 +15,19 @@ let vaultPath: string;
 let cleanup: () => void;
 let writeLock: WriteLockManager;
 
-function parseResult(result: unknown): any {
+interface BatchResponse {
+  ok: boolean;
+  data?: {
+    results: Array<{ file_path: string; node_id?: string }>;
+    [k: string]: unknown;
+  };
+  error?: { code: string; message: string; details?: Record<string, unknown> };
+  warnings: Array<{ code: string; message: string; severity?: string }>;
+}
+
+function parseResult(result: unknown): BatchResponse {
   const r = result as { content: Array<{ type: string; text: string }> };
-  return JSON.parse(r.content[0].text);
+  return JSON.parse(r.content[0].text) as BatchResponse;
 }
 
 function getHandler() {
@@ -53,7 +63,7 @@ describe('batch-mutate create uses schema default_directory', () => {
       operations: [{ op: 'create', params: { title: 'MyNote', types: ['note'] } }],
     }));
     expect(result.ok).toBe(true);
-    expect(result.data.results[0].file_path).toBe('Notes/MyNote.md');
+    expect(result.data?.results[0].file_path).toBe('Notes/MyNote.md');
     expect(existsSync(join(vaultPath, 'Notes/MyNote.md'))).toBe(true);
   });
 
@@ -63,8 +73,8 @@ describe('batch-mutate create uses schema default_directory', () => {
       operations: [{ op: 'create', params: { title: 'Rogue', types: ['note'], directory: 'Somewhere' } }],
     }));
     expect(result.ok).toBe(false);
-    expect(result.error.code).toBe('BATCH_FAILED');
-    expect(result.error.message).toMatch(/routes to "Notes\/"/);
+    expect(result.error?.code).toBe('BATCH_FAILED');
+    expect(result.error?.message).toMatch(/routes to "Notes\/"/);
   });
 
   it('directory + override_default_directory=true → lands in explicit directory', async () => {
@@ -73,7 +83,7 @@ describe('batch-mutate create uses schema default_directory', () => {
       operations: [{ op: 'create', params: { title: 'Rogue', types: ['note'], directory: 'Somewhere', override_default_directory: true } }],
     }));
     expect(result.ok).toBe(true);
-    expect(result.data.results[0].file_path).toBe('Somewhere/Rogue.md');
+    expect(result.data?.results[0].file_path).toBe('Somewhere/Rogue.md');
   });
 
   it('deprecated path alias alone → succeeds with DEPRECATED_PARAM warning', async () => {
@@ -82,8 +92,8 @@ describe('batch-mutate create uses schema default_directory', () => {
       operations: [{ op: 'create', params: { title: 'LegacyCall', types: ['bare'], path: 'Inbox' } }],
     }));
     expect(result.ok).toBe(true);
-    expect(result.data.results[0].file_path).toBe('Inbox/LegacyCall.md');
-    const deprecation = (result.warnings as Array<{ code: string }>).find(w => w.code === 'DEPRECATED_PARAM');
+    expect(result.data?.results[0].file_path).toBe('Inbox/LegacyCall.md');
+    const deprecation = result.warnings.find(w => w.code === 'DEPRECATED_PARAM');
     expect(deprecation).toBeDefined();
   });
 
@@ -93,8 +103,8 @@ describe('batch-mutate create uses schema default_directory', () => {
       operations: [{ op: 'create', params: { title: 'Conflict', types: ['bare'], path: 'A', directory: 'B' } }],
     }));
     expect(result.ok).toBe(false);
-    expect(result.error.code).toBe('BATCH_FAILED');
-    expect(result.error.message).toMatch(/path.*directory|Do not supply both/);
+    expect(result.error?.code).toBe('BATCH_FAILED');
+    expect(result.error?.message).toMatch(/path.*directory|Do not supply both/);
   });
 
   it('bare type (no schema default), no directory → root', async () => {
@@ -103,6 +113,22 @@ describe('batch-mutate create uses schema default_directory', () => {
       operations: [{ op: 'create', params: { title: 'Loose', types: ['bare'] } }],
     }));
     expect(result.ok).toBe(true);
-    expect(result.data.results[0].file_path).toBe('Loose.md');
+    expect(result.data?.results[0].file_path).toBe('Loose.md');
+  });
+
+  it('regression: legacy path-only call on a type with default_directory is BATCH_FAILED with routes-to message', async () => {
+    // Documents the Phase A3 breaking change — old callers that supplied
+    // `path` (or `directory`) that conflicts with a schema's default_directory
+    // now get BATCH_FAILED instead of silently landing the file in the
+    // caller-specified directory.
+    const handler = getHandler();
+    const result = parseResult(await handler({
+      operations: [{ op: 'create', params: { title: 'LegacyOnNote', types: ['note'], path: 'Elsewhere' } }],
+    }));
+    expect(result.ok).toBe(false);
+    expect(result.error?.code).toBe('BATCH_FAILED');
+    expect(result.error?.message).toMatch(/routes to "Notes\/"/);
+    const deprecation = result.warnings.find(w => w.code === 'DEPRECATED_PARAM');
+    expect(deprecation).toBeDefined();
   });
 });

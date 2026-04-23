@@ -326,7 +326,10 @@ export function propagateSchemaChange(
     }
 
     if (perNodeIssues.length > 0) {
-      throw new SchemaValidationError(groupValidationIssues(perNodeIssues));
+      const groups = groupValidationIssues(perNodeIssues);
+      if (groups.length > 0) {
+        throw new SchemaValidationError(groups);
+      }
     }
   });
 

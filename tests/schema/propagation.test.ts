@@ -473,3 +473,54 @@ describe('node_types insertion order (Phase A3 prerequisite)', () => {
     expect(rows.map(r => r.sort_order)).toEqual([0, 1]);
   });
 });
+
+describe('propagateSchemaChange — transaction rollback on validation failure', () => {
+  it('rolls back all field-defaulted + fields-orphaned rows when any node fails validation', () => {
+    // Three global fields. Status is an enum so we can force ENUM_MISMATCH on
+    // an invalid value. Priority carries a required+default so propagation
+    // emits field-defaulted rows. Legacy will be orphaned by the claim change.
+    createGlobalField(db, { name: 'status', field_type: 'enum', enum_values: ['open', 'done'] });
+    createGlobalField(db, { name: 'priority', field_type: 'string', default_value: 'normal', required: true });
+    createGlobalField(db, { name: 'legacy', field_type: 'string' });
+
+    // Initial schema claims only `legacy`; status is UNCLAIMED so creating a
+    // node with `status: 'bogus'` at this point does not trigger enum
+    // validation (the bogus value is carried as an orphan field).
+    createSchemaDefinition(db, {
+      name: 'task',
+      field_claims: [{ field: 'legacy', sort_order: 1000 }],
+    });
+
+    // 3 valid nodes (status='open'/'done') + 1 invalid node (status='bogus')
+    createNode({ file_path: 'n1.md', title: 'N1', types: ['task'], fields: { legacy: 'x', status: 'open' } });
+    createNode({ file_path: 'n2.md', title: 'N2', types: ['task'], fields: { legacy: 'x', status: 'open' } });
+    createNode({ file_path: 'n3.md', title: 'N3', types: ['task'], fields: { legacy: 'x', status: 'done' } });
+    createNode({ file_path: 'n4.md', title: 'N4', types: ['task'], fields: { legacy: 'x', status: 'bogus' } });
+
+    // Update schema: drop legacy claim, add status + required+default priority.
+    // Valid nodes would orphan `legacy` and default `priority`; the invalid
+    // node additionally rejects on `status` enum — forcing a mid-loop failure.
+    const oldClaims = [{ field: 'legacy', sort_order: 1000 }];
+    const newClaims = [
+      { field: 'status', sort_order: 1000 },
+      { field: 'priority', sort_order: 2000 },
+    ];
+    updateSchemaDefinition(db, 'task', { field_claims: newClaims });
+    const diff = diffClaims(oldClaims, newClaims);
+
+    expect(() => propagateSchemaChange(db, writeLock, vaultPath, 'task', diff))
+      .toThrow(SchemaValidationError);
+
+    // Because the throw inside db.transaction rolls back, NO edits_log rows for
+    // fields-orphaned or field-defaulted should persist.
+    const leakedOrphan = db.prepare(
+      "SELECT COUNT(*) AS c FROM edits_log WHERE event_type = 'fields-orphaned'"
+    ).get() as { c: number };
+    expect(leakedOrphan.c).toBe(0);
+
+    const leakedDefault = db.prepare(
+      "SELECT COUNT(*) AS c FROM edits_log WHERE event_type = 'field-defaulted'"
+    ).get() as { c: number };
+    expect(leakedDefault.c).toBe(0);
+  });
+});

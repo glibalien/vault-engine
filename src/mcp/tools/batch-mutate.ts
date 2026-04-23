@@ -316,9 +316,11 @@ export function registerBatchMutate(
             if (rollbackFailures.length > 0) {
               details.rollback_failures = rollbackFailures;
             }
-            return fail('BATCH_FAILED', batchError.message, { details });
+            // Surface DEPRECATED_PARAM warnings even on failure — a caller using a
+            // deprecated param should see the warning regardless of whether the op succeeded.
+            return fail('BATCH_FAILED', batchError.message, { details, warnings: deprecationWarnings });
           }
-          return fail('INTERNAL_ERROR', 'Batch operation failed');
+          return fail('INTERNAL_ERROR', 'Batch operation failed', { warnings: deprecationWarnings });
         }
       } finally {
         finalizeOperation(db, operation_id);

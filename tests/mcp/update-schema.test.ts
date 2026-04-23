@@ -203,3 +203,90 @@ describe('update-schema dry_run', () => {
     expect(field?.value_text).toBe('open');
   });
 });
+
+describe('update-schema confirm_large_change gate', () => {
+  let handler: (args: Record<string, unknown>) => Promise<unknown>;
+
+  function createNode(overrides: { file_path: string; title: string; types: string[]; fields?: Record<string, unknown> }) {
+    executeMutation(db, writeLock, vaultPath, {
+      source: 'tool',
+      node_id: null,
+      file_path: overrides.file_path,
+      title: overrides.title,
+      types: overrides.types,
+      fields: overrides.fields ?? {},
+      body: '',
+    });
+  }
+
+  beforeEach(() => {
+    // Replace the enum `status` created by the outer beforeEach with a string field.
+    db.prepare('DELETE FROM global_fields').run();
+    createGlobalField(db, { name: 'status', field_type: 'string', default_value: 'open', required: true });
+    handler = getHandler();
+  });
+
+  it('orphan-producing change without confirm_large_change returns CONFIRMATION_REQUIRED', async () => {
+    createSchemaDefinition(db, { name: 'task', field_claims: [{ field: 'status' }] });
+    createNode({ file_path: 'a.md', title: 'A', types: ['task'], fields: { status: 'done' } });
+
+    const result = parseResult(await handler({
+      name: 'task',
+      field_claims: [],
+    }));
+
+    expect(result.ok).toBe(false);
+    expect((result as { error?: { code: string } }).error?.code).toBe('CONFIRMATION_REQUIRED');
+    const details = (result as { error: { details: {
+      orphaned_field_names: Array<{ field: string; count: number }>;
+      propagation: { fields_orphaned: number };
+      claims_removed: string[];
+    } } }).error.details;
+    expect(details.orphaned_field_names).toEqual([{ field: 'status', count: 1 }]);
+    expect(details.claims_removed).toEqual(['status']);
+    expect(details.propagation.fields_orphaned).toBe(1);
+
+    const claims = db.prepare('SELECT field FROM schema_field_claims WHERE schema_name = ?').all('task');
+    expect(claims).toHaveLength(1);
+  });
+
+  it('same change with confirm_large_change=true succeeds', async () => {
+    createSchemaDefinition(db, { name: 'task', field_claims: [{ field: 'status' }] });
+    createNode({ file_path: 'a.md', title: 'A', types: ['task'], fields: { status: 'done' } });
+
+    const result = parseResult(await handler({
+      name: 'task',
+      field_claims: [],
+      confirm_large_change: true,
+    }));
+
+    expect(result.ok).toBe(true);
+    const claims = db.prepare('SELECT field FROM schema_field_claims WHERE schema_name = ?').all('task');
+    expect(claims).toHaveLength(0);
+  });
+
+  it('change with zero orphans succeeds without confirm_large_change', async () => {
+    createSchemaDefinition(db, { name: 'task', field_claims: [] });
+
+    const result = parseResult(await handler({
+      name: 'task',
+      field_claims: [{ field: 'status' }],
+    }));
+
+    expect(result.ok).toBe(true);
+  });
+
+  it('dry_run with orphans does not trigger the gate — preview returns normally', async () => {
+    createSchemaDefinition(db, { name: 'task', field_claims: [{ field: 'status' }] });
+    createNode({ file_path: 'a.md', title: 'A', types: ['task'], fields: { status: 'done' } });
+
+    const result = parseResult(await handler({
+      name: 'task',
+      field_claims: [],
+      dry_run: true,
+    }));
+
+    expect(result.ok).toBe(true);
+    expect((result as { data: { propagation: { fields_orphaned: number } } }).data.propagation.fields_orphaned).toBe(1);
+  });
+});

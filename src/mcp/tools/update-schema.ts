@@ -25,7 +25,9 @@ const TOOL_DESC =
   'Updates an existing schema definition. If field_claims is provided, it replaces all existing claims. ' +
   'When dry_run=true, returns a preview (claim diff, orphan counts, propagation numbers) without committing — ' +
   'a response with ok:false on a dry-run means the change WOULD BE REJECTED if committed, not that the dry-run itself failed; ' +
-  'preview data is then in error.details alongside groups.';
+  'preview data is then in error.details alongside groups. ' +
+  'When a non-dry-run commit would orphan any field value(s), the response is ok:false with error.code CONFIRMATION_REQUIRED; ' +
+  're-call with confirm_large_change:true to proceed.';
 
 export function registerUpdateSchema(
   server: McpServer,
@@ -44,8 +46,9 @@ export function registerUpdateSchema(
       field_claims: z.array(fieldClaimSchema).optional().describe('New field claims (replaces existing)'),
       metadata: z.unknown().optional().describe('New metadata'),
       dry_run: z.boolean().optional().describe('Preview the effect without committing'),
+      confirm_large_change: z.boolean().optional().describe('Acknowledge the change would orphan field values. Required when propagation would orphan any field.'),
     },
-    async ({ name, dry_run, ...rest }) => {
+    async ({ name, dry_run, confirm_large_change, ...rest }) => {
       if (!ctx?.writeLock || !ctx?.vaultPath) {
         return fail('INTERNAL_ERROR', 'update-schema requires write context (writeLock + vaultPath).');
       }
@@ -86,7 +89,23 @@ export function registerUpdateSchema(
         });
       }
 
-      // Live-commit path. (B2 confirm gate lands here in Task 4; B3 undo threading in Task 8.)
+      // Confirm gate: once we're past the dry_run early-return, any orphan-producing
+      // commit must set confirm_large_change:true. Dry-runs stay gate-free by design
+      // (return above runs first on dry_run: true).
+      if (preview.propagation.fields_orphaned > 0 && !confirm_large_change) {
+        const fieldCount = preview.orphaned_field_names.length;
+        return fail(
+          'CONFIRMATION_REQUIRED',
+          `This change would orphan ${preview.propagation.fields_orphaned} field value(s) across ${fieldCount} field(s). Set confirm_large_change: true to proceed, or run with dry_run: true to preview.`,
+          { details: {
+              orphaned_field_names: preview.orphaned_field_names,
+              propagation: preview.propagation,
+              claims_removed: preview.claims_removed,
+            } },
+        );
+      }
+
+      // Live-commit path. (B3 undo threading lands here in Task 8.)
       try {
         const result = updateSchemaDefinition(db, name, rest);
 

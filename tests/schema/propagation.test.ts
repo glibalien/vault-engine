@@ -474,6 +474,58 @@ describe('node_types insertion order (Phase A3 prerequisite)', () => {
   });
 });
 
+describe('propagateSchemaChange — preview mode', () => {
+  it('preview=true: no file writes, no throw on validation failure; returns validation_groups + orphaned_field_names', () => {
+    createGlobalField(db, { name: 'status', field_type: 'enum', enum_values: ['open', 'done'] });
+    createSchemaDefinition(db, { name: 'task', field_claims: [{ field: 'status' }] });
+
+    createNode({ file_path: 'n1.md', title: 'N1', types: ['task'], fields: { status: 'open' } });
+    createNode({ file_path: 'n2.md', title: 'N2', types: ['task'], fields: { status: 'open' } });
+
+    const mtimeBefore = statSync(join(vaultPath, 'n1.md')).mtimeMs;
+
+    const oldClaims = [{ field: 'status', sort_order: 1000 }];
+    const newClaims: Array<{ field: string; sort_order?: number }> = [];
+    updateSchemaDefinition(db, 'task', { field_claims: newClaims });
+    const diff = diffClaims(oldClaims, newClaims);
+
+    const result = propagateSchemaChange(db, writeLock, vaultPath, 'task', diff, undefined, { preview: true });
+
+    expect(result.fields_orphaned).toBe(2);
+    expect(result.orphaned_field_names).toEqual([{ field: 'status', count: 2 }]);
+    expect(result.validation_groups).toEqual([]);
+
+    const mtimeAfter = statSync(join(vaultPath, 'n1.md')).mtimeMs;
+    expect(mtimeAfter).toBe(mtimeBefore);
+
+    expect(result.nodes_affected).toBe(2);
+  });
+
+  it('preview=true: validation failures flow into validation_groups instead of throwing', () => {
+    createGlobalField(db, { name: 'status', field_type: 'enum', enum_values: ['open', 'done'] });
+    createGlobalField(db, { name: 'priority', field_type: 'string', required: true, default_value: 'normal' });
+    // Start with unclaimed status so we can seed an invalid value without create-path rejection
+    createSchemaDefinition(db, { name: 'task', field_claims: [] });
+
+    createNode({ file_path: 'ok.md', title: 'OK', types: ['task'], fields: { status: 'open' } });
+    createNode({ file_path: 'bad.md', title: 'Bad', types: ['task'], fields: { status: 'bogus' } });
+
+    // Now claim status + add priority; preview should flag n2's bogus value AND count orphans.
+    const oldClaims: Array<{ field: string; sort_order?: number }> = [];
+    const newClaims = [{ field: 'status', sort_order: 1000 }, { field: 'priority', sort_order: 2000 }];
+    updateSchemaDefinition(db, 'task', { field_claims: newClaims });
+    const diff = diffClaims(oldClaims, newClaims);
+
+    const result = propagateSchemaChange(db, writeLock, vaultPath, 'task', diff, undefined, { preview: true });
+
+    expect(result.validation_groups).toBeDefined();
+    expect(result.validation_groups!.length).toBeGreaterThan(0);
+    const enumGroup = result.validation_groups!.find(g => g.reason === 'ENUM_INVALID');
+    expect(enumGroup?.field).toBe('status');
+    expect(enumGroup?.count).toBe(1);
+  });
+});
+
 describe('propagateSchemaChange — transaction rollback on validation failure', () => {
   it('rolls back all field-defaulted + fields-orphaned rows when any node fails validation', () => {
     // Three global fields. Status is an enum so we can force ENUM_MISMATCH on

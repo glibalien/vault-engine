@@ -54,4 +54,15 @@ describe('list-undo-history', () => {
     expect(payload.data.operations.length).toBe(2);
     expect(payload.data.truncated).toBe(true);
   });
+
+  it('includes schema_count in each operation row', async () => {
+    const op = createOperation(db, { source_tool: 'update-schema', description: 'u' });
+    db.prepare('UPDATE undo_operations SET schema_count = 1 WHERE operation_id = ?').run(op);
+
+    const result = await callTool(server, 'list-undo-history', { source_tool: 'update-schema' });
+    const payload = JSON.parse(result.content[0].text);
+    const rows = payload.data.operations as Array<{ operation_id: string; schema_count: number }>;
+    expect(rows[0].operation_id).toBe(op);
+    expect(rows[0].schema_count).toBe(1);
+  });
 });

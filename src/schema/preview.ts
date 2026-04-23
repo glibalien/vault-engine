@@ -9,6 +9,7 @@
 import type Database from 'better-sqlite3';
 import { getSchemaDefinition, updateSchemaDefinition, type UpdateSchemaInput } from './crud.js';
 import { diffClaims, propagateSchemaChange } from './propagate.js';
+import { readCurrentClaims } from './claims.js';
 import { SchemaValidationError, type ValidationGroup } from './errors.js';
 import type { WriteLockManager } from '../sync/write-lock.js';
 
@@ -68,6 +69,12 @@ export function previewSchemaChange(
     base.claims_modified = diff.changed;
   }
 
+  // The returned claims_added/removed/modified (in `base`) reflects the caller's
+  // intent — computed pre-savepoint against the synthetic new-claims shape.
+  // Inside the savepoint we re-compute the diff against the post-update DB
+  // state to drive propagation. In normal operation these are identical;
+  // the split exists because propagation must act on the actually-written
+  // shape while the response reflects what the user asked for.
   db.prepare('SAVEPOINT preview_schema_change').run();
   let result: SchemaPreviewResult;
   try {
@@ -108,39 +115,3 @@ export function previewSchemaChange(
   }
 }
 
-// Internal helper — reads current claims in a shape compatible with diffClaims().
-interface ClaimRow {
-  field: string;
-  sort_order: number;
-  label: string | null;
-  description: string | null;
-  required_override: number | null;
-  default_value_override: string | null;
-  default_value_overridden: number;
-  enum_values_override: string | null;
-}
-
-function readCurrentClaims(db: Database.Database, schemaName: string): Array<{
-  field: string;
-  sort_order?: number;
-  label?: string;
-  description?: string;
-  required?: boolean | null;
-  default_value?: unknown;
-  enum_values_override?: string[] | null;
-}> {
-  const rows = db.prepare(
-    'SELECT field, sort_order, label, description, required_override, default_value_override, default_value_overridden, enum_values_override FROM schema_field_claims WHERE schema_name = ?',
-  ).all(schemaName) as ClaimRow[];
-  return rows.map(r => ({
-    field: r.field,
-    sort_order: r.sort_order,
-    label: r.label ?? undefined,
-    description: r.description ?? undefined,
-    required: r.required_override !== null ? r.required_override === 1 : null,
-    default_value: r.default_value_overridden === 1
-      ? (r.default_value_override !== null ? JSON.parse(r.default_value_override) : null)
-      : undefined,
-    enum_values_override: r.enum_values_override !== null ? JSON.parse(r.enum_values_override) : null,
-  }));
-}

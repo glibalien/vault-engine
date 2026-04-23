@@ -2,18 +2,20 @@ import { describe, it, expect, beforeEach, afterEach } from 'vitest';
 import type { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import Database from 'better-sqlite3';
 import { createSchema } from '../../src/db/schema.js';
-import { addUndoTables } from '../../src/db/migrate.js';
+import { addUndoTables, addNodeTypesSortOrder } from '../../src/db/migrate.js';
 import { createGlobalField } from '../../src/global-fields/crud.js';
 import { createSchemaDefinition } from '../../src/schema/crud.js';
 import { executeMutation } from '../../src/pipeline/execute.js';
 import { registerUpdateSchema } from '../../src/mcp/tools/update-schema.js';
 import { WriteLockManager } from '../../src/sync/write-lock.js';
+import { SyncLogger } from '../../src/sync/sync-logger.js';
 import { createTempVault } from '../helpers/vault.js';
 
 let db: Database.Database;
 let vaultPath: string;
 let cleanup: () => void;
 let writeLock: WriteLockManager;
+let syncLogger: SyncLogger;
 
 function parseResult(result: unknown): Record<string, unknown> {
   const r = result as { content: Array<{ type: string; text: string }> };
@@ -27,7 +29,7 @@ function getHandler() {
       captured = (args) => h(args) as Promise<unknown>;
     },
   } as unknown as McpServer;
-  registerUpdateSchema(fakeServer, db, { writeLock, vaultPath });
+  registerUpdateSchema(fakeServer, db, { writeLock, vaultPath, syncLogger });
   return captured!;
 }
 
@@ -38,7 +40,9 @@ beforeEach(() => {
   db.pragma('foreign_keys = ON');
   createSchema(db);
   addUndoTables(db);
+  addNodeTypesSortOrder(db);
   writeLock = new WriteLockManager();
+  syncLogger = new SyncLogger(db);
 
   createGlobalField(db, {
     name: 'status',
@@ -116,5 +120,86 @@ describe('update-schema structured validation errors', () => {
     const err = (result as { error: { code: string; message: string } }).error;
     expect(err.code).toBe('INVALID_PARAMS');
     expect(err.message).toContain("'does_not_exist' not found");
+  });
+});
+
+describe('update-schema dry_run', () => {
+  it('dry_run=true returns preview data without committing the change', async () => {
+    // Reset default fixtures: we want a string field with a default, not the enum one.
+    db.prepare('DELETE FROM global_fields').run();
+    createGlobalField(db, { name: 'priority', field_type: 'string', default_value: 'open', required: true });
+    // Create a task schema and node (note schema already created in beforeEach).
+    createSchemaDefinition(db, { name: 'task', field_claims: [] });
+    executeMutation(db, writeLock, vaultPath, {
+      source: 'tool',
+      node_id: null,
+      file_path: 'a.md',
+      title: 'A',
+      types: ['task'],
+      fields: {},
+      body: '',
+    });
+
+    const handler = getHandler();
+    const result = parseResult(await handler({
+      name: 'task',
+      field_claims: [{ field: 'priority' }],
+      dry_run: true,
+    }));
+
+    expect(result.ok).toBe(true);
+    const data = (result as { data: { claims_added: string[]; propagation: { defaults_populated: number } } }).data;
+    expect(data.claims_added).toEqual(['priority']);
+    expect(data.propagation.defaults_populated).toBe(1);
+
+    // Assert no commit happened — no claims persisted.
+    const claims = db.prepare('SELECT field FROM schema_field_claims WHERE schema_name = ?').all('task');
+    expect(claims).toEqual([]);
+  });
+
+  it('dry_run=true with claim-level failure returns ok:false with groups + preview data in error.details', async () => {
+    const handler = getHandler();
+    const result = parseResult(await handler({
+      name: 'note',
+      field_claims: [{ field: 'nonexistent' }],
+      dry_run: true,
+    }));
+
+    expect(result.ok).toBe(false);
+    const err = (result as { error: { code: string; details: { groups: Array<{ reason: string }>; claims_added: string[] } } }).error;
+    expect(err.code).toBe('VALIDATION_FAILED');
+    expect(err.details.groups.some(g => g.reason === 'UNKNOWN_FIELD')).toBe(true);
+    expect(err.details.claims_added).toEqual(['nonexistent']);
+  });
+
+  it('commit path (no dry_run) still works — single claim add persists + default populated', async () => {
+    db.prepare('DELETE FROM global_fields').run();
+    createGlobalField(db, { name: 'priority', field_type: 'string', default_value: 'open', required: true });
+    createSchemaDefinition(db, { name: 'task', field_claims: [] });
+    executeMutation(db, writeLock, vaultPath, {
+      source: 'tool',
+      node_id: null,
+      file_path: 'a.md',
+      title: 'A',
+      types: ['task'],
+      fields: {},
+      body: '',
+    });
+
+    const handler = getHandler();
+    const result = parseResult(await handler({
+      name: 'task',
+      field_claims: [{ field: 'priority' }],
+    }));
+
+    expect(result.ok).toBe(true);
+
+    // Claim persisted.
+    const claims = db.prepare('SELECT field FROM schema_field_claims WHERE schema_name = ?').all('task') as Array<{ field: string }>;
+    expect(claims.map(c => c.field)).toEqual(['priority']);
+
+    // Node got the default value.
+    const field = db.prepare('SELECT value_text FROM node_fields WHERE field_name = ?').get('priority') as { value_text: string } | undefined;
+    expect(field?.value_text).toBe('open');
   });
 });

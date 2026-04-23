@@ -3,8 +3,9 @@ import type Database from 'better-sqlite3';
 import { z } from 'zod';
 import { ok, fail } from './errors.js';
 import { updateSchemaDefinition } from '../../schema/crud.js';
-import { diffClaims, propagateSchemaChange } from '../../schema/propagate.js';
+import { propagateSchemaChange } from '../../schema/propagate.js';
 import { renderSchemaFile } from '../../schema/render.js';
+import { previewSchemaChange } from '../../schema/preview.js';
 import { SchemaValidationError } from '../../schema/errors.js';
 import type { WriteLockManager } from '../../sync/write-lock.js';
 import type { SyncLogger } from '../../sync/sync-logger.js';
@@ -20,10 +21,20 @@ const fieldClaimSchema = z.object({
   enum_values_override: z.array(z.string()).optional().describe('Per-type enum values (replaces global for this type)'),
 });
 
-export function registerUpdateSchema(server: McpServer, db: Database.Database, ctx?: { writeLock?: WriteLockManager; vaultPath?: string; syncLogger?: SyncLogger }): void {
+const TOOL_DESC =
+  'Updates an existing schema definition. If field_claims is provided, it replaces all existing claims. ' +
+  'When dry_run=true, returns a preview (claim diff, orphan counts, propagation numbers) without committing — ' +
+  'a response with ok:false on a dry-run means the change WOULD BE REJECTED if committed, not that the dry-run itself failed; ' +
+  'preview data is then in error.details alongside groups.';
+
+export function registerUpdateSchema(
+  server: McpServer,
+  db: Database.Database,
+  ctx?: { writeLock?: WriteLockManager; vaultPath?: string; syncLogger?: SyncLogger },
+): void {
   server.tool(
     'update-schema',
-    'Updates an existing schema definition. If field_claims is provided, it replaces all existing claims.',
+    TOOL_DESC,
     {
       name: z.string().describe('Schema name to update'),
       display_name: z.string().optional().describe('New display name'),
@@ -32,48 +43,66 @@ export function registerUpdateSchema(server: McpServer, db: Database.Database, c
       default_directory: z.string().optional().describe('New default directory for files of this type'),
       field_claims: z.array(fieldClaimSchema).optional().describe('New field claims (replaces existing)'),
       metadata: z.unknown().optional().describe('New metadata'),
+      dry_run: z.boolean().optional().describe('Preview the effect without committing'),
     },
-    async ({ name, ...rest }) => {
-      try {
-        // Snapshot old claims before update (for propagation diff)
-        let oldClaims: Array<{ field: string; sort_order?: number; label?: string; description?: string; required?: boolean | null; default_value?: unknown; enum_values_override?: string[] | null }> = [];
-        if (rest.field_claims && ctx?.writeLock && ctx?.vaultPath) {
-          const rows = db.prepare('SELECT field, sort_order, label, description, required_override, default_value_override, default_value_overridden, enum_values_override FROM schema_field_claims WHERE schema_name = ?')
-            .all(name) as Array<{ field: string; sort_order: number; label: string | null; description: string | null; required_override: number | null; default_value_override: string | null; default_value_overridden: number; enum_values_override: string | null }>;
-          oldClaims = rows.map(r => ({
-            field: r.field,
-            sort_order: r.sort_order,
-            label: r.label ?? undefined,
-            description: r.description ?? undefined,
-            required: r.required_override !== null ? r.required_override === 1 : null,
-            default_value: r.default_value_overridden === 1
-              ? (r.default_value_override !== null ? JSON.parse(r.default_value_override) : null)
-              : undefined,
-            enum_values_override: r.enum_values_override !== null ? JSON.parse(r.enum_values_override) : null,
-          }));
-        }
+    async ({ name, dry_run, ...rest }) => {
+      if (!ctx?.writeLock || !ctx?.vaultPath) {
+        return fail('INTERNAL_ERROR', 'update-schema requires write context (writeLock + vaultPath).');
+      }
+      const writeLock = ctx.writeLock;
+      const vaultPath = ctx.vaultPath;
 
+      // Preview first — no operation created, no side effects.
+      let preview;
+      try {
+        preview = previewSchemaChange(db, writeLock, vaultPath, name, rest);
+      } catch (err) {
+        return fail('INVALID_PARAMS', err instanceof Error ? err.message : String(err));
+      }
+
+      if (!preview.ok) {
+        return fail(
+          'VALIDATION_FAILED',
+          `Schema change rejected: ${preview.groups.length} validation group(s).`,
+          { details: {
+              groups: preview.groups,
+              claims_added: preview.claims_added,
+              claims_removed: preview.claims_removed,
+              claims_modified: preview.claims_modified,
+              orphaned_field_names: preview.orphaned_field_names,
+              propagation: preview.propagation,
+            } },
+        );
+      }
+
+      if (dry_run) {
+        return ok({
+          would_commit: true,
+          claims_added: preview.claims_added,
+          claims_removed: preview.claims_removed,
+          claims_modified: preview.claims_modified,
+          orphaned_field_names: preview.orphaned_field_names,
+          propagation: preview.propagation,
+        });
+      }
+
+      // Live-commit path. (B2 confirm gate lands here in Task 4; B3 undo threading in Task 8.)
+      try {
         const result = updateSchemaDefinition(db, name, rest);
 
-        // Propagate if claims changed and write context available
         let propagation;
-        if (rest.field_claims && ctx?.writeLock && ctx?.vaultPath) {
-          const newClaims = rest.field_claims.map(c => ({
-            field: c.field,
-            sort_order: c.sort_order,
-            label: c.label,
-            description: c.description,
-            required: c.required ?? null,
-            default_value: c.default_value ?? null,
-            enum_values_override: c.enum_values_override ?? null,
-          }));
-          const diff = diffClaims(oldClaims, newClaims);
-          propagation = propagateSchemaChange(db, ctx.writeLock, ctx.vaultPath, name, diff, ctx.syncLogger);
+        if (rest.field_claims) {
+          // Reuse the diff computed by the preview — preview ran against the
+          // same pre-update state as our commit path.
+          const preDiff = {
+            added: preview.claims_added,
+            removed: preview.claims_removed,
+            changed: preview.claims_modified,
+          };
+          propagation = propagateSchemaChange(db, writeLock, vaultPath, name, preDiff, ctx.syncLogger);
         }
 
-        // Re-render schema YAML file
-        if (ctx?.vaultPath) renderSchemaFile(db, ctx.vaultPath, name);
-
+        renderSchemaFile(db, vaultPath, name);
         return ok({ ...result, propagation });
       } catch (err) {
         if (err instanceof SchemaValidationError) {

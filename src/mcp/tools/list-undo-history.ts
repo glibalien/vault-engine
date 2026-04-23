@@ -37,6 +37,7 @@ export function registerListUndoHistory(
           source_tool: o.source_tool,
           description: o.description,
           node_count: o.node_count,
+          schema_count: o.schema_count,
           status: o.status,
         })),
         truncated: result.truncated,

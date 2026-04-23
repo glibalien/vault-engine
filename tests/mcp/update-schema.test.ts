@@ -2,18 +2,20 @@ import { describe, it, expect, beforeEach, afterEach } from 'vitest';
 import type { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import Database from 'better-sqlite3';
 import { createSchema } from '../../src/db/schema.js';
-import { addUndoTables } from '../../src/db/migrate.js';
+import { addUndoTables, addNodeTypesSortOrder, addSchemaUndoSnapshots } from '../../src/db/migrate.js';
 import { createGlobalField } from '../../src/global-fields/crud.js';
 import { createSchemaDefinition } from '../../src/schema/crud.js';
 import { executeMutation } from '../../src/pipeline/execute.js';
 import { registerUpdateSchema } from '../../src/mcp/tools/update-schema.js';
 import { WriteLockManager } from '../../src/sync/write-lock.js';
+import { SyncLogger } from '../../src/sync/sync-logger.js';
 import { createTempVault } from '../helpers/vault.js';
 
 let db: Database.Database;
 let vaultPath: string;
 let cleanup: () => void;
 let writeLock: WriteLockManager;
+let syncLogger: SyncLogger;
 
 function parseResult(result: unknown): Record<string, unknown> {
   const r = result as { content: Array<{ type: string; text: string }> };
@@ -27,7 +29,7 @@ function getHandler() {
       captured = (args) => h(args) as Promise<unknown>;
     },
   } as unknown as McpServer;
-  registerUpdateSchema(fakeServer, db, { writeLock, vaultPath });
+  registerUpdateSchema(fakeServer, db, { writeLock, vaultPath, syncLogger });
   return captured!;
 }
 
@@ -38,7 +40,10 @@ beforeEach(() => {
   db.pragma('foreign_keys = ON');
   createSchema(db);
   addUndoTables(db);
+  addNodeTypesSortOrder(db);
+  addSchemaUndoSnapshots(db);
   writeLock = new WriteLockManager();
+  syncLogger = new SyncLogger(db);
 
   createGlobalField(db, {
     name: 'status',
@@ -116,5 +121,260 @@ describe('update-schema structured validation errors', () => {
     const err = (result as { error: { code: string; message: string } }).error;
     expect(err.code).toBe('INVALID_PARAMS');
     expect(err.message).toContain("'does_not_exist' not found");
+  });
+});
+
+describe('update-schema dry_run', () => {
+  it('dry_run=true returns preview data without committing the change', async () => {
+    // Reset default fixtures: we want a string field with a default, not the enum one.
+    db.prepare('DELETE FROM global_fields').run();
+    createGlobalField(db, { name: 'priority', field_type: 'string', default_value: 'open', required: true });
+    // Create a task schema and node (note schema already created in beforeEach).
+    createSchemaDefinition(db, { name: 'task', field_claims: [] });
+    executeMutation(db, writeLock, vaultPath, {
+      source: 'tool',
+      node_id: null,
+      file_path: 'a.md',
+      title: 'A',
+      types: ['task'],
+      fields: {},
+      body: '',
+    });
+
+    const handler = getHandler();
+    const result = parseResult(await handler({
+      name: 'task',
+      field_claims: [{ field: 'priority' }],
+      dry_run: true,
+    }));
+
+    expect(result.ok).toBe(true);
+    const data = (result as { data: { claims_added: string[]; propagation: { defaults_populated: number } } }).data;
+    expect(data.claims_added).toEqual(['priority']);
+    expect(data.propagation.defaults_populated).toBe(1);
+
+    // Assert no commit happened — no claims persisted.
+    const claims = db.prepare('SELECT field FROM schema_field_claims WHERE schema_name = ?').all('task');
+    expect(claims).toEqual([]);
+  });
+
+  it('dry_run=true with claim-level failure returns ok:false with groups + preview data in error.details', async () => {
+    const handler = getHandler();
+    const result = parseResult(await handler({
+      name: 'note',
+      field_claims: [{ field: 'nonexistent' }],
+      dry_run: true,
+    }));
+
+    expect(result.ok).toBe(false);
+    const err = (result as { error: { code: string; details: { groups: Array<{ reason: string }>; claims_added: string[] } } }).error;
+    expect(err.code).toBe('VALIDATION_FAILED');
+    expect(err.details.groups.some(g => g.reason === 'UNKNOWN_FIELD')).toBe(true);
+    expect(err.details.claims_added).toEqual(['nonexistent']);
+  });
+
+  it('commit path (no dry_run) still works — single claim add persists + default populated', async () => {
+    db.prepare('DELETE FROM global_fields').run();
+    createGlobalField(db, { name: 'priority', field_type: 'string', default_value: 'open', required: true });
+    createSchemaDefinition(db, { name: 'task', field_claims: [] });
+    executeMutation(db, writeLock, vaultPath, {
+      source: 'tool',
+      node_id: null,
+      file_path: 'a.md',
+      title: 'A',
+      types: ['task'],
+      fields: {},
+      body: '',
+    });
+
+    const handler = getHandler();
+    const result = parseResult(await handler({
+      name: 'task',
+      field_claims: [{ field: 'priority' }],
+    }));
+
+    expect(result.ok).toBe(true);
+
+    // Claim persisted.
+    const claims = db.prepare('SELECT field FROM schema_field_claims WHERE schema_name = ?').all('task') as Array<{ field: string }>;
+    expect(claims.map(c => c.field)).toEqual(['priority']);
+
+    // Node got the default value.
+    const field = db.prepare('SELECT value_text FROM node_fields WHERE field_name = ?').get('priority') as { value_text: string } | undefined;
+    expect(field?.value_text).toBe('open');
+  });
+});
+
+describe('update-schema confirm_large_change gate', () => {
+  let handler: (args: Record<string, unknown>) => Promise<unknown>;
+
+  function createNode(overrides: { file_path: string; title: string; types: string[]; fields?: Record<string, unknown> }) {
+    executeMutation(db, writeLock, vaultPath, {
+      source: 'tool',
+      node_id: null,
+      file_path: overrides.file_path,
+      title: overrides.title,
+      types: overrides.types,
+      fields: overrides.fields ?? {},
+      body: '',
+    });
+  }
+
+  beforeEach(() => {
+    // Replace the enum `status` created by the outer beforeEach with a string field.
+    db.prepare('DELETE FROM global_fields').run();
+    createGlobalField(db, { name: 'status', field_type: 'string', default_value: 'open', required: true });
+    handler = getHandler();
+  });
+
+  it('orphan-producing change without confirm_large_change returns CONFIRMATION_REQUIRED', async () => {
+    createSchemaDefinition(db, { name: 'task', field_claims: [{ field: 'status' }] });
+    createNode({ file_path: 'a.md', title: 'A', types: ['task'], fields: { status: 'done' } });
+
+    const result = parseResult(await handler({
+      name: 'task',
+      field_claims: [],
+    }));
+
+    expect(result.ok).toBe(false);
+    expect((result as { error?: { code: string } }).error?.code).toBe('CONFIRMATION_REQUIRED');
+    const details = (result as { error: { details: {
+      orphaned_field_names: Array<{ field: string; count: number }>;
+      propagation: { fields_orphaned: number };
+      claims_removed: string[];
+    } } }).error.details;
+    expect(details.orphaned_field_names).toEqual([{ field: 'status', count: 1 }]);
+    expect(details.claims_removed).toEqual(['status']);
+    expect(details.propagation.fields_orphaned).toBe(1);
+
+    const claims = db.prepare('SELECT field FROM schema_field_claims WHERE schema_name = ?').all('task');
+    expect(claims).toHaveLength(1);
+  });
+
+  it('same change with confirm_large_change=true succeeds', async () => {
+    createSchemaDefinition(db, { name: 'task', field_claims: [{ field: 'status' }] });
+    createNode({ file_path: 'a.md', title: 'A', types: ['task'], fields: { status: 'done' } });
+
+    const result = parseResult(await handler({
+      name: 'task',
+      field_claims: [],
+      confirm_large_change: true,
+    }));
+
+    expect(result.ok).toBe(true);
+    const claims = db.prepare('SELECT field FROM schema_field_claims WHERE schema_name = ?').all('task');
+    expect(claims).toHaveLength(0);
+  });
+
+  it('change with zero orphans succeeds without confirm_large_change', async () => {
+    createSchemaDefinition(db, { name: 'task', field_claims: [] });
+
+    const result = parseResult(await handler({
+      name: 'task',
+      field_claims: [{ field: 'status' }],
+    }));
+
+    expect(result.ok).toBe(true);
+  });
+
+  it('dry_run with orphans does not trigger the gate — preview returns normally', async () => {
+    createSchemaDefinition(db, { name: 'task', field_claims: [{ field: 'status' }] });
+    createNode({ file_path: 'a.md', title: 'A', types: ['task'], fields: { status: 'done' } });
+
+    const result = parseResult(await handler({
+      name: 'task',
+      field_claims: [],
+      dry_run: true,
+    }));
+
+    expect(result.ok).toBe(true);
+    expect((result as { data: { propagation: { fields_orphaned: number } } }).data.propagation.fields_orphaned).toBe(1);
+  });
+});
+
+describe('update-schema undo integration', () => {
+  let handler: (args: Record<string, unknown>) => Promise<unknown>;
+
+  function createNode(overrides: { file_path: string; title: string; types: string[]; fields?: Record<string, unknown> }) {
+    executeMutation(db, writeLock, vaultPath, {
+      source: 'tool',
+      node_id: null,
+      file_path: overrides.file_path,
+      title: overrides.title,
+      types: overrides.types,
+      fields: overrides.fields ?? {},
+      body: '',
+    });
+  }
+
+  beforeEach(() => {
+    db.prepare('DELETE FROM global_fields').run();
+    handler = getHandler();
+  });
+
+  it('successful commit is captured in list-undo-history with schema_count=1', async () => {
+    const { listOperations } = await import('../../src/undo/operation.js');
+    createGlobalField(db, { name: 'status', field_type: 'string', default_value: 'open', required: true });
+    createSchemaDefinition(db, { name: 'task', field_claims: [] });
+    createNode({ file_path: 'a.md', title: 'A', types: ['task'] });
+
+    const result = parseResult(await handler({
+      name: 'task',
+      field_claims: [{ field: 'status' }],
+    }));
+    expect(result.ok).toBe(true);
+
+    const list = listOperations(db, { source_tool: 'update-schema' });
+    expect(list.operations.length).toBe(1);
+    const op = list.operations[0];
+    expect(op.schema_count).toBe(1);
+    expect(op.node_count).toBeGreaterThan(0);
+  });
+
+  it('undo-operations restores schema to pre-state (claims cleared)', async () => {
+    const { restoreMany } = await import('../../src/undo/restore.js');
+    const { listOperations } = await import('../../src/undo/operation.js');
+    createGlobalField(db, { name: 'status', field_type: 'string' });
+    createSchemaDefinition(db, { name: 'task', field_claims: [] });
+
+    await handler({ name: 'task', field_claims: [{ field: 'status' }] });
+
+    const list = listOperations(db, { source_tool: 'update-schema' });
+    const op_id = list.operations[0].operation_id;
+
+    restoreMany(db, writeLock, vaultPath, { operation_ids: [op_id], dry_run: false });
+
+    const claims = db.prepare('SELECT field FROM schema_field_claims WHERE schema_name = ?').all('task') as Array<{ field: string }>;
+    expect(claims).toEqual([]);
+  });
+
+  it('validation-rejecting commit rolls back; operation row carries counts=0', async () => {
+    createGlobalField(db, { name: 'status', field_type: 'enum', enum_values: ['open', 'done'] });
+    createSchemaDefinition(db, { name: 'task', field_claims: [{ field: 'status' }] });
+    createNode({ file_path: 'ok.md', title: 'OK', types: ['task'], fields: { status: 'open' } });
+
+    db.prepare('UPDATE node_fields SET value_text = ? WHERE field_name = ?').run('garbage', 'status');
+
+    createGlobalField(db, { name: 'priority', field_type: 'string', required: true, default_value: 'normal' });
+
+    const result = parseResult(await handler({
+      name: 'task',
+      field_claims: [{ field: 'status' }, { field: 'priority' }],
+    }));
+
+    expect(result.ok).toBe(false);
+    expect((result as { error?: { code: string } }).error?.code).toBe('VALIDATION_FAILED');
+
+    const claims = db.prepare('SELECT field FROM schema_field_claims WHERE schema_name = ? ORDER BY field').all('task') as Array<{ field: string }>;
+    expect(claims.map(c => c.field)).toEqual(['status']);
+
+    const ops = db.prepare(
+      "SELECT node_count, schema_count, status FROM undo_operations WHERE source_tool = 'update-schema'"
+    ).all() as Array<{ node_count: number; schema_count: number; status: string }>;
+    expect(ops.length).toBeLessThanOrEqual(1);
+    if (ops.length === 1) {
+      expect(ops[0].node_count).toBe(0);
+      expect(ops[0].schema_count).toBe(0);
+    }
   });
 });

@@ -4,6 +4,8 @@ import { z } from 'zod';
 import { ok, fail } from './errors.js';
 import { createSchemaDefinition } from '../../schema/crud.js';
 import { renderSchemaFile } from '../../schema/render.js';
+import { createOperation, finalizeOperation } from '../../undo/operation.js';
+import { captureSchemaSnapshot } from '../../undo/schema-snapshot.js';
 
 const fieldClaimSchema = z.object({
   field: z.string(),
@@ -30,17 +32,31 @@ export function registerCreateSchema(server: McpServer, db: Database.Database, c
       metadata: z.unknown().optional().describe('Arbitrary metadata'),
     },
     async (params) => {
-      // Reserved prefix check
       if (params.name.startsWith('_')) {
         return fail('INVALID_PARAMS', "Schema names starting with '_' are reserved for engine-managed files.");
       }
 
+      const operation_id = createOperation(db, {
+        source_tool: 'create-schema',
+        description: `create-schema: ${params.name}`,
+      });
+
       try {
-        const result = createSchemaDefinition(db, params);
+        let result: ReturnType<typeof createSchemaDefinition> | undefined;
+        const tx = db.transaction(() => {
+          captureSchemaSnapshot(db, operation_id, params.name, { was_new: true });
+          result = createSchemaDefinition(db, params);
+        });
+        tx();
+
+        db.prepare('UPDATE undo_operations SET schema_count = 1 WHERE operation_id = ?').run(operation_id);
+
         if (ctx?.vaultPath) renderSchemaFile(db, ctx.vaultPath, params.name);
-        return ok(result);
+        return ok({ ...result!, operation_id });
       } catch (err) {
         return fail('INVALID_PARAMS', err instanceof Error ? err.message : String(err));
+      } finally {
+        finalizeOperation(db, operation_id);
       }
     },
   );

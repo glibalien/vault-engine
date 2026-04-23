@@ -8,6 +8,7 @@ export interface UndoOperationRow {
   source_tool: string;
   description: string;
   node_count: number;
+  schema_count: number;
   status: 'active' | 'undone' | 'expired';
 }
 

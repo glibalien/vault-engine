@@ -12,7 +12,8 @@ export type ErrorCode =
   | 'AMBIGUOUS_FILENAME'
   | 'CONFLICT'
   | 'BATCH_FAILED'
-  | 'OPERATION_NOT_FOUND';
+  | 'OPERATION_NOT_FOUND'
+  | 'CONFIRMATION_REQUIRED';
 
 export interface Issue {
   code: string;

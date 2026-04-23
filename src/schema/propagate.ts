@@ -14,15 +14,23 @@ import type { FileContext } from '../validation/resolve-default.js';
 import { safeVaultPath } from '../pipeline/safe-path.js';
 import { executeMutation } from '../pipeline/execute.js';
 import { PipelineError } from '../pipeline/types.js';
-import { SchemaValidationError, groupValidationIssues, type PerNodeIssue } from './errors.js';
+import { SchemaValidationError, groupValidationIssues, type PerNodeIssue, type ValidationGroup } from './errors.js';
 import type { WriteLockManager } from '../sync/write-lock.js';
 import type { SyncLogger } from '../sync/sync-logger.js';
+
+export interface PropagationOptions {
+  preview?: boolean;
+  operation_id?: string;
+}
 
 export interface PropagationResult {
   nodes_affected: number;
   nodes_rerendered: number;
   defaults_populated: number;
   fields_orphaned: number;
+  // Preview-mode augmentations (present iff opts.preview was true):
+  validation_groups?: ValidationGroup[];
+  orphaned_field_names?: Array<{ field: string; count: number }>;
 }
 
 interface ClaimDiff {
@@ -149,6 +157,7 @@ function rerenderNodeThroughPipeline(
   adoptionDefaults: Record<string, unknown>,
   syncLogger: SyncLogger | undefined,
   preLoaded?: LoadedNodeState,
+  opts?: { dbOnly?: boolean; operation_id?: string },
 ): { node_id: string; file_path: string; file_written: boolean } | null {
   const state = preLoaded ?? loadNodeState(db, nodeId);
   if (!state) return null;
@@ -161,6 +170,8 @@ function rerenderNodeThroughPipeline(
     }
   }
 
+  const undoCtx = opts?.operation_id ? { operation_id: opts.operation_id } : undefined;
+
   const result = executeMutation(db, writeLock, vaultPath, {
     source: 'propagation',
     node_id: nodeId,
@@ -170,7 +181,8 @@ function rerenderNodeThroughPipeline(
     fields: mergedFields,
     body: state.body,
     raw_field_texts: state.rawFieldTexts,
-  }, syncLogger);
+    db_only: opts?.dbOnly === true,
+  }, syncLogger, undoCtx);
 
   return {
     node_id: result.node_id,
@@ -197,7 +209,11 @@ export function propagateSchemaChange(
   schemaName: string,
   diff: ClaimDiff,
   syncLogger?: SyncLogger,
+  opts: PropagationOptions = {},
 ): PropagationResult {
+  const preview = opts.preview === true;
+  const orphanCounts = new Map<string, number>();
+
   const result: PropagationResult = {
     nodes_affected: 0,
     nodes_rerendered: 0,
@@ -206,13 +222,23 @@ export function propagateSchemaChange(
   };
 
   if (diff.added.length === 0 && diff.removed.length === 0 && diff.changed.length === 0) {
+    if (preview) {
+      result.validation_groups = [];
+      result.orphaned_field_names = [];
+    }
     return result;
   }
 
   const nodeIds = (db.prepare('SELECT node_id FROM node_types WHERE schema_type = ?').all(schemaName) as Array<{ node_id: string }>)
     .map(r => r.node_id);
 
-  if (nodeIds.length === 0) return result;
+  if (nodeIds.length === 0) {
+    if (preview) {
+      result.validation_groups = [];
+      result.orphaned_field_names = [];
+    }
+    return result;
+  }
   result.nodes_affected = nodeIds.length;
 
   const trigger = `update-schema: ${schemaName}`;
@@ -278,6 +304,7 @@ export function propagateSchemaChange(
       try {
         pipelineResult = rerenderNodeThroughPipeline(
           db, writeLock, vaultPath, nodeId, adoptionDefaults, syncLogger, state,
+          { dbOnly: preview, operation_id: opts.operation_id },
         );
       } catch (err) {
         if (err instanceof PipelineError && err.validation) {
@@ -299,38 +326,61 @@ export function propagateSchemaChange(
       // Post-mutation emission: field-defaulted (adoption)
       const now = Date.now();
       for (const [field, value] of Object.entries(adoptionDefaults)) {
-        insertLog.run(nodeId, now, 'field-defaulted', JSON.stringify({
-          source: 'propagation',
-          field,
-          default_value: value,
-          default_source: adoptionSources[field],
-          trigger,
-          node_types: state.types,
-        }));
+        if (!preview) {
+          insertLog.run(nodeId, now, 'field-defaulted', JSON.stringify({
+            source: 'propagation',
+            field,
+            default_value: value,
+            default_source: adoptionSources[field],
+            trigger,
+            node_types: state.types,
+          }));
+        }
         result.defaults_populated++;
       }
 
       // Post-mutation emission: fields-orphaned (one row per node, listing all)
       const orphanedInThisNode = diff.removed.filter(f => f in state.currentFields);
       if (orphanedInThisNode.length > 0) {
-        insertLog.run(nodeId, now, 'fields-orphaned', JSON.stringify({
-          source: 'propagation',
-          trigger,
-          orphaned_fields: orphanedInThisNode,
-          node_types: state.types,
-        }));
+        if (!preview) {
+          insertLog.run(nodeId, now, 'fields-orphaned', JSON.stringify({
+            source: 'propagation',
+            trigger,
+            orphaned_fields: orphanedInThisNode,
+            node_types: state.types,
+          }));
+        }
         result.fields_orphaned += orphanedInThisNode.length;
+        if (preview) {
+          for (const f of orphanedInThisNode) {
+            orphanCounts.set(f, (orphanCounts.get(f) ?? 0) + 1);
+          }
+        }
       }
 
       if (pipelineResult.file_written) result.nodes_rerendered++;
     }
 
     if (perNodeIssues.length > 0) {
-      throw new SchemaValidationError(groupValidationIssues(perNodeIssues));
+      const groups = groupValidationIssues(perNodeIssues);
+      if (groups.length > 0) {
+        if (preview) {
+          result.validation_groups = groups;
+        } else {
+          throw new SchemaValidationError(groups);
+        }
+      }
     }
   });
 
   runLoop();
+
+  if (preview) {
+    result.validation_groups = result.validation_groups ?? [];
+    result.orphaned_field_names = Array.from(orphanCounts.entries())
+      .map(([field, count]) => ({ field, count }))
+      .sort((a, b) => b.count - a.count || a.field.localeCompare(b.field));
+  }
   return result;
 }
 

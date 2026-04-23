@@ -7,6 +7,8 @@ import { propagateSchemaChange } from '../../schema/propagate.js';
 import { renderSchemaFile } from '../../schema/render.js';
 import { previewSchemaChange } from '../../schema/preview.js';
 import { SchemaValidationError } from '../../schema/errors.js';
+import { createOperation, finalizeOperation } from '../../undo/operation.js';
+import { captureSchemaSnapshot } from '../../undo/schema-snapshot.js';
 import type { WriteLockManager } from '../../sync/write-lock.js';
 import type { SyncLogger } from '../../sync/sync-logger.js';
 
@@ -105,30 +107,58 @@ export function registerUpdateSchema(
         );
       }
 
-      // Live-commit path. (B3 undo threading lands here in Task 8.)
-      try {
-        const result = updateSchemaDefinition(db, name, rest);
+      // Live-commit path.
+      const operation_id = createOperation(db, {
+        source_tool: 'update-schema',
+        description: buildDescription(name, rest, preview),
+      });
 
-        let propagation;
-        if (rest.field_claims) {
-          // Reuse the diff computed by the preview — preview ran against the
-          // same pre-update state as our commit path.
-          const preDiff = {
-            added: preview.claims_added,
-            removed: preview.claims_removed,
-            changed: preview.claims_modified,
-          };
-          propagation = propagateSchemaChange(db, writeLock, vaultPath, name, preDiff, ctx.syncLogger);
-        }
+      let finalResult: ReturnType<typeof updateSchemaDefinition> | undefined;
+      let propagation: ReturnType<typeof propagateSchemaChange> | undefined;
+      try {
+        const tx = db.transaction(() => {
+          captureSchemaSnapshot(db, operation_id, name);
+          finalResult = updateSchemaDefinition(db, name, rest);
+          if (rest.field_claims) {
+            const preDiff = {
+              added: preview.claims_added,
+              removed: preview.claims_removed,
+              changed: preview.claims_modified,
+            };
+            propagation = propagateSchemaChange(
+              db, writeLock, vaultPath, name, preDiff, ctx.syncLogger,
+              { operation_id },
+            );
+          }
+        });
+        tx();
+
+        db.prepare(
+          'UPDATE undo_operations SET schema_count = 1 WHERE operation_id = ?',
+        ).run(operation_id);
 
         renderSchemaFile(db, vaultPath, name);
-        return ok({ ...result, propagation });
+        return ok({ ...finalResult!, propagation, operation_id });
       } catch (err) {
         if (err instanceof SchemaValidationError) {
           return fail('VALIDATION_FAILED', err.message, { details: { groups: err.groups } });
         }
         return fail('INVALID_PARAMS', err instanceof Error ? err.message : String(err));
+      } finally {
+        finalizeOperation(db, operation_id);
       }
     },
   );
+}
+
+function buildDescription(
+  name: string,
+  rest: { field_claims?: unknown },
+  preview: { claims_added: string[]; claims_removed: string[]; claims_modified: string[] },
+): string {
+  if (!rest.field_claims) return `update-schema: ${name}`;
+  const a = preview.claims_added.length;
+  const r = preview.claims_removed.length;
+  const m = preview.claims_modified.length;
+  return `update-schema: ${name} (+${a}/-${r}/~${m} claims)`;
 }

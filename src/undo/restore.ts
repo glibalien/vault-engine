@@ -10,6 +10,7 @@ import type { WriteLockManager } from '../sync/write-lock.js';
 import { reconstructValue } from '../pipeline/classify-value.js';
 import type { Conflict, ConflictReason, RestoreResult, UndoSnapshotRow } from './types.js';
 import { getSnapshots, getOperation, markUndone } from './operation.js';
+import { restoreSchemaSnapshot } from './schema-snapshot.js';
 
 export interface RestoreOptions {
   dry_run?: boolean;
@@ -117,6 +118,13 @@ export function restoreOperation(
   const conflicts = detectConflicts(db, vaultPath, operation_id, snapshots, operations_in_this_call);
   const conflictedIds = new Set(conflicts.map(c => c.node_id));
 
+  // Schema snapshots tied to this operation. Schema-level conflicts are not
+  // detected; re-updates between the operation and the undo overwrite without
+  // warning. Node-level snapshots still run through detectConflicts.
+  const schemaSnaps = db.prepare(
+    'SELECT schema_name FROM undo_schema_snapshots WHERE operation_id = ?',
+  ).all(operation_id) as Array<{ schema_name: string }>;
+
   // Partition resolve_conflicts
   const resolveMap = new Map<string, 'revert' | 'skip'>();
   for (const r of opts.resolve_conflicts ?? []) resolveMap.set(r.node_id, r.action);
@@ -125,6 +133,12 @@ export function restoreOperation(
   let skipped = 0;
 
   if (!opts.dry_run) {
+    // Schema-first pass: restore schema state before any node work so
+    // node restores re-validate against the pre-change schema.
+    for (const snap of schemaSnaps) {
+      restoreSchemaSnapshot(db, vaultPath, operation_id, snap.schema_name);
+    }
+
     // Creates first, then updates, then deletes (within this op)
     const buckets = { create: [] as UndoSnapshotRow[], update: [] as UndoSnapshotRow[], delete: [] as UndoSnapshotRow[] };
     for (const s of snapshots) {

@@ -6,6 +6,7 @@ import type { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import type Database from 'better-sqlite3';
 import { mcpAuthRouter } from '@modelcontextprotocol/sdk/server/auth/router.js';
 import { requireBearerAuth } from '@modelcontextprotocol/sdk/server/auth/middleware/bearerAuth.js';
+import { LATEST_PROTOCOL_VERSION } from '@modelcontextprotocol/sdk/types.js';
 import { VaultOAuthProvider } from '../auth/provider.js';
 
 export type ServerFactory = () => McpServer;
@@ -25,11 +26,42 @@ function requestLogger(req: Request, res: Response, next: NextFunction): void {
   next();
 }
 
+/**
+ * CORS middleware for browser-based MCP clients.
+ *
+ * The MCP 2025-06-18 spec permits clients to run in the browser. Without these
+ * headers:
+ *   - OPTIONS preflight gets 401'd by bearerAuth and never sees Allow-* headers.
+ *   - Even when the actual POST succeeds, the WWW-Authenticate header on a 401
+ *     response is not accessible to client JS (it's not a "simple response
+ *     header" and CORS hides non-exposed headers), so the client can't read
+ *     the resource_metadata URL and can't start OAuth discovery.
+ *
+ * Exposing WWW-Authenticate, Mcp-Session-Id, and MCP-Protocol-Version lets the
+ * client see what it needs; short-circuiting OPTIONS ensures preflight succeeds
+ * before any auth middleware runs.
+ */
+function corsHeaders(req: Request, res: Response, next: NextFunction): void {
+  res.setHeader('Access-Control-Allow-Origin', '*');
+  res.setHeader('Access-Control-Allow-Methods', 'GET, POST, DELETE, HEAD, OPTIONS');
+  res.setHeader('Access-Control-Allow-Headers', 'Authorization, Content-Type, Accept, Mcp-Session-Id, MCP-Protocol-Version');
+  res.setHeader('Access-Control-Expose-Headers', 'WWW-Authenticate, Mcp-Session-Id, MCP-Protocol-Version');
+  res.setHeader('Access-Control-Max-Age', '86400');
+  if (req.method === 'OPTIONS') {
+    res.status(204).end();
+    return;
+  }
+  next();
+}
+
 export function createHttpApp(serverFactory: ServerFactory, authConfig?: AuthConfig): Express {
   const sessions = new Map<string, StreamableHTTPServerTransport>();
   const app = express();
   app.set('trust proxy', 1);
 
+  // CORS must run before auth so OPTIONS preflight isn't 401'd, and before the
+  // body parsers so they don't try to parse an empty preflight body.
+  app.use(corsHeaders);
   app.use(express.json());
   app.use(express.urlencoded({ extended: false }));
   app.use(requestLogger);
@@ -40,31 +72,34 @@ export function createHttpApp(serverFactory: ServerFactory, authConfig?: AuthCon
   if (authConfig) {
     const provider = new VaultOAuthProvider(authConfig.db, authConfig.ownerPassword);
 
+    // Resource server URL = full MCP endpoint path. Per RFC 9728 §3.1/3.2 and
+    // MCP 2025-06-18 §3.1.2:
+    //   (a) protected-resource metadata lives at
+    //       /.well-known/oauth-protected-resource<path>, and
+    //   (b) `resource` field in the metadata equals the URL the client
+    //       requested.
+    // The 2025-11-25 claude.ai client (dumped headers confirm clientInfo name
+    // "Anthropic/ClaudeAI", protocolVersion 2025-11-25) requires this and
+    // silently gives up on the OAuth flow without it.
+    const resourceServerUrl = new URL('/mcp', authConfig.issuerUrl);
+
     app.use(mcpAuthRouter({
       provider,
       issuerUrl: authConfig.issuerUrl,
+      resourceServerUrl,
       authorizationOptions: {
         rateLimit: { windowMs: 60_000, max: 5 },
       },
     }));
 
-    // resourceMetadataUrl adds resource_metadata="..." to the WWW-Authenticate
-    // header on 401 responses. Required by the MCP 2025-06-18 auth spec so
-    // clients can discover the OAuth metadata endpoint and start the auth flow.
     bearerAuth = requireBearerAuth({
       verifier: provider,
-      resourceMetadataUrl: new URL('/.well-known/oauth-protected-resource', authConfig.issuerUrl).toString(),
+      resourceMetadataUrl: new URL('/.well-known/oauth-protected-resource/mcp', authConfig.issuerUrl).toString(),
     });
   }
 
   // Conditional auth middleware for /mcp: skip HEAD and sessionless GET (protocol discovery)
   app.use('/mcp', (req: Request, res: Response, next: NextFunction) => {
-    // DEBUG: temporary diagnostic for claude.ai 401 issue
-    const authHeader = req.headers.authorization;
-    const ua = req.headers['user-agent'] ?? '';
-    const sess = req.headers['mcp-session-id'] ?? '';
-    process.stderr.write(`[mcp-debug] ${req.method} authz=${authHeader ? authHeader.substring(0,20) + '...' : 'MISSING'} session=${sess} ua=${typeof ua === 'string' ? ua.substring(0, 60) : ''}\n`);
-
     if (req.method === 'HEAD') return next();
     if (req.method === 'GET' && !req.headers['mcp-session-id']) return next();
     bearerAuth(req, res, next);
@@ -112,14 +147,14 @@ export function createHttpApp(serverFactory: ServerFactory, authConfig?: AuthCon
   });
 
   app.head('/mcp', (_req: Request, res: Response) => {
-    res.set('MCP-Protocol-Version', '2025-03-26');
+    res.set('MCP-Protocol-Version', LATEST_PROTOCOL_VERSION);
     res.status(200).end();
   });
 
   app.get('/mcp', async (req: Request, res: Response) => {
     const sessionId = req.headers['mcp-session-id'] as string | undefined;
     if (!sessionId) {
-      res.set('MCP-Protocol-Version', '2025-03-26');
+      res.set('MCP-Protocol-Version', LATEST_PROTOCOL_VERSION);
       res.status(200).end();
       return;
     }

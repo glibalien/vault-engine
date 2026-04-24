@@ -1,7 +1,6 @@
 import type { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import type Database from 'better-sqlite3';
 import { z } from 'zod';
-import { basename } from 'node:path';
 import { ok, fail } from './errors.js';
 import { resolveFieldValue, type FieldRow } from '../field-value.js';
 import { resolveTarget } from '../../resolver/resolve.js';
@@ -106,21 +105,13 @@ export function registerGetNode(
       const outgoing = db.prepare('SELECT * FROM relationships WHERE source_id = ?')
         .all(node.id) as RelRow[];
 
-      // Get incoming relationships
-      // Match relationships where target matches this node's file_path, basename, or title
-      const nodeBasename = basename(node.file_path, '.md');
+      // Get incoming relationships via resolved_target_id, populated by the
+      // resolver (see src/resolver/refresh.ts). This catches links whose raw
+      // target string only matches via case-insensitive / NFC-normalized
+      // resolution and would otherwise be missed by literal target comparison.
       const incoming = db.prepare(
-        'SELECT r.*, n.title as source_title FROM relationships r JOIN nodes n ON n.id = r.source_id WHERE (r.target = ? OR r.target = ? OR r.target = ?) AND r.source_id != ?'
-      ).all(node.file_path, nodeBasename, node.title ?? '', node.id) as Array<RelRow & { source_title: string | null }>;
-
-      // Deduplicate incoming by (source_id, rel_type)
-      const incomingSeen = new Set<string>();
-      const incomingDeduped = incoming.filter(r => {
-        const key = `${r.source_id}:${r.rel_type}`;
-        if (incomingSeen.has(key)) return false;
-        incomingSeen.add(key);
-        return true;
-      });
+        'SELECT r.*, n.title as source_title FROM relationships r JOIN nodes n ON n.id = r.source_id WHERE r.resolved_target_id = ? AND r.source_id != ?'
+      ).all(node.id, node.id) as Array<RelRow & { source_title: string | null }>;
 
       // Group outgoing
       const outgoingGrouped: Record<string, Array<{ target_id: string | null; target_title: string; context?: string }>> = {};
@@ -145,7 +136,7 @@ export function registerGetNode(
 
       // Group incoming
       const incomingGrouped: Record<string, Array<{ source_id: string; source_title: string | null; context?: string }>> = {};
-      for (const r of incomingDeduped) {
+      for (const r of incoming) {
         if (!incomingGrouped[r.rel_type]) incomingGrouped[r.rel_type] = [];
         const entry: { source_id: string; source_title: string | null; context?: string } = {
           source_id: r.source_id,

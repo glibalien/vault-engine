@@ -552,6 +552,47 @@ describe('get-node', () => {
     expect(result.relationships.incoming['wiki-link'][0].source_id).toBe('n1');
   });
 
+  it('finds backlinks via resolved_target_id when raw target does not match path/title/basename', async () => {
+    // n4 wikilinks to n2 using uppercase 'QUICK NOTE'. The resolver matches
+    // case-insensitively (Tier 4) and stores resolved_target_id='n2', but the
+    // raw target string does not equal n2.file_path / basename / title — so a
+    // backlink lookup that compares raw target strings would miss it.
+    db.prepare(
+      'INSERT INTO nodes (id, file_path, title, body, content_hash, file_mtime, indexed_at) VALUES (?, ?, ?, ?, ?, ?, ?)'
+    ).run('n4', 'aliases/n4.md', 'Aliased Linker', '', 'h4', 4000, 5000);
+    db.prepare(
+      'INSERT INTO relationships (source_id, target, rel_type, context, resolved_target_id) VALUES (?, ?, ?, ?, ?)'
+    ).run('n4', 'QUICK NOTE', 'wiki-link', null, 'n2');
+
+    const handler = getToolHandler(registerGetNode);
+    const body = parseResult(await handler({ node_id: 'n2' }) as any) as any;
+    const sourceIds = (body.data.relationships.incoming['wiki-link'] ?? []).map((r: any) => r.source_id);
+    expect(sourceIds).toContain('n4');
+  });
+
+  it('does not collapse distinct backlinks from one source with the same rel_type', async () => {
+    // Two relationship rows from n4 to n2: distinct raw targets (one matches
+    // by title, one by basename) but same rel_type. Both rows resolve to n2.
+    // Both backlinks should appear in the response — collapsing them by
+    // (source_id, rel_type) loses information.
+    db.prepare(
+      'INSERT INTO nodes (id, file_path, title, body, content_hash, file_mtime, indexed_at) VALUES (?, ?, ?, ?, ?, ?, ?)'
+    ).run('n4', 'aliases/n4.md', 'Aliased Linker', '', 'h4', 4000, 5000);
+    db.prepare(
+      'INSERT INTO relationships (source_id, target, rel_type, context, resolved_target_id) VALUES (?, ?, ?, ?, ?)'
+    ).run('n4', 'Quick Note', 'wiki-link', '[[Quick Note]]', 'n2');
+    db.prepare(
+      'INSERT INTO relationships (source_id, target, rel_type, context, resolved_target_id) VALUES (?, ?, ?, ?, ?)'
+    ).run('n4', 'note', 'wiki-link', '[[note]]', 'n2');
+
+    const handler = getToolHandler(registerGetNode);
+    const body = parseResult(await handler({ node_id: 'n2' }) as any) as any;
+    const fromN4 = (body.data.relationships.incoming['wiki-link'] ?? []).filter(
+      (r: any) => r.source_id === 'n4'
+    );
+    expect(fromN4).toHaveLength(2);
+  });
+
   it('returns body and metadata', async () => {
     const handler = getToolHandler(registerGetNode);
     const body = parseResult(await handler({ node_id: 'n1' }) as any) as any;

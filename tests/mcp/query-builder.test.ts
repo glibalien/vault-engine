@@ -425,6 +425,61 @@ describe('buildNodeQuery', () => {
     });
   });
 
+  describe('date comparison operators against value_date column', () => {
+    // The indexer stores Date-typed field values in node_fields.value_date
+    // (see classifyValue in src/pipeline/classify-value.ts). The seed at the
+    // top of this file stores `scheduled` in value_text instead, which masks
+    // the bug. These tests insert into value_date directly to verify that
+    // gt/lt/gte/lte/eq/ne work against properly typed date fields.
+    function seedDateNode(id: string, title: string, due: string) {
+      db.prepare(
+        'INSERT INTO nodes (id, file_path, title, body, content_hash, file_mtime, indexed_at) VALUES (?, ?, ?, ?, ?, ?, ?)'
+      ).run(id, `dated/${id}.md`, title, '', `h-${id}`, 1000, 2000);
+      db.prepare(
+        'INSERT INTO node_fields (node_id, field_name, value_text, value_number, value_date, value_json, source) VALUES (?, ?, ?, ?, ?, ?, ?)'
+      ).run(id, 'due', null, null, due, null, 'frontmatter');
+    }
+
+    beforeEach(() => {
+      seedDateNode('d1', 'Past', '2026-01-15');
+      seedDateNode('d2', 'Mid',  '2026-04-01');
+      seedDateNode('d3', 'Late', '2026-06-30');
+    });
+
+    it('gte against value_date returns rows on or after threshold', () => {
+      const { rows } = runQuery({ fields: { due: { gte: '2026-04-01' } } });
+      const ids = rows.map(r => r.id).sort();
+      expect(ids).toEqual(['d2', 'd3']);
+    });
+
+    it('lte against value_date returns rows on or before threshold', () => {
+      const { rows } = runQuery({ fields: { due: { lte: '2026-04-01' } } });
+      const ids = rows.map(r => r.id).sort();
+      expect(ids).toEqual(['d1', 'd2']);
+    });
+
+    it('gt against value_date is strict', () => {
+      const { rows } = runQuery({ fields: { due: { gt: '2026-04-01' } } });
+      expect(rows.map(r => r.id)).toEqual(['d3']);
+    });
+
+    it('lt against value_date is strict', () => {
+      const { rows } = runQuery({ fields: { due: { lt: '2026-04-01' } } });
+      expect(rows.map(r => r.id)).toEqual(['d1']);
+    });
+
+    it('eq against value_date matches the row', () => {
+      const { rows } = runQuery({ fields: { due: { eq: '2026-04-01' } } });
+      expect(rows.map(r => r.id)).toEqual(['d2']);
+    });
+
+    it('ne against value_date excludes the row', () => {
+      const { rows } = runQuery({ fields: { due: { ne: '2026-04-01' } } });
+      const ids = rows.map(r => r.id).sort();
+      expect(ids).toEqual(['d1', 'd3']);
+    });
+  });
+
   describe('multi-field filters (param ordering)', () => {
     it('includes + eq across two fields returns correct results', () => {
       // n1: context=["work"], status=open
@@ -502,6 +557,23 @@ describe('buildNodeQuery', () => {
     it('uses >= comparison in sql', () => {
       const { sql } = buildNodeQuery({ modified_since: '2020-01-01' });
       expect(sql).toContain('n.file_mtime >= ?');
+    });
+
+    it('compares against milliseconds (matches indexer storage)', () => {
+      // Indexer writes Math.floor(st.mtimeMs); see src/indexer/indexer.ts.
+      // A cutoff in the future must exclude an mtime in the past, even when
+      // they are millisecond-scale numbers (~1.7e12) rather than seconds.
+      const recentMs  = Date.UTC(2026, 0, 1); // 2026-01-01T00:00:00Z in ms
+      const futureIso = '2027-01-01';
+      db.prepare(
+        'INSERT INTO nodes (id, file_path, title, body, content_hash, file_mtime, indexed_at) VALUES (?, ?, ?, ?, ?, ?, ?)'
+      ).run('m1', 'mtime/m1.md', 'M1', '', 'hm1', recentMs, recentMs);
+
+      const { rows: included } = runQuery({ modified_since: '2025-01-01' });
+      expect(included.some(r => r.id === 'm1')).toBe(true);
+
+      const { rows: excluded } = runQuery({ modified_since: futureIso });
+      expect(excluded.some(r => r.id === 'm1')).toBe(false);
     });
   });
 

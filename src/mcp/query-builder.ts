@@ -140,14 +140,17 @@ export function buildFilterClauses(
           if (typeof value === 'number') {
             whereClauses.push(`${a}.value_number = ?`);
           } else {
-            whereClauses.push(`${a}.value_text = ?`);
+            // Date-typed fields are stored in value_date (see classifyValue);
+            // string-typed fields land in value_text. COALESCE compares against
+            // whichever column actually holds the value — both are ISO/lex-safe.
+            whereClauses.push(`COALESCE(${a}.value_date, ${a}.value_text) = ?`);
           }
           whereParams.push(value);
         } else if (op === 'ne') {
           if (typeof value === 'number') {
             whereClauses.push(`${a}.value_number != ?`);
           } else {
-            whereClauses.push(`${a}.value_text != ?`);
+            whereClauses.push(`COALESCE(${a}.value_date, ${a}.value_text) != ?`);
           }
           whereParams.push(value);
         } else if (['gt', 'lt', 'gte', 'lte'].includes(op)) {
@@ -155,8 +158,7 @@ export function buildFilterClauses(
           if (typeof value === 'number') {
             whereClauses.push(`${a}.value_number ${sqlOp} ?`);
           } else {
-            // ISO date strings sort lexicographically in value_text
-            whereClauses.push(`${a}.value_text ${sqlOp} ?`);
+            whereClauses.push(`COALESCE(${a}.value_date, ${a}.value_text) ${sqlOp} ?`);
           }
           whereParams.push(value);
         }
@@ -244,11 +246,11 @@ export function buildFilterClauses(
     }
   }
 
-  // Modified since filter
+  // Modified since filter — file_mtime is stored in milliseconds (see indexer
+  // and watcher: Math.floor(st.mtimeMs)), so the cutoff must also be in ms.
   if (filter.modified_since) {
     whereClauses.push(`${alias}.file_mtime >= ?`);
-    const ts = Math.floor(new Date(filter.modified_since).getTime() / 1000);
-    whereParams.push(ts);
+    whereParams.push(new Date(filter.modified_since).getTime());
   }
 
   return { joins, joinParams, whereClauses, whereParams };

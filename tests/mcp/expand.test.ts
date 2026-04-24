@@ -97,6 +97,19 @@ describe('performExpansion — direction', () => {
     expect(result.stats.considered).toBe(2);
   });
 
+  it('direction=incoming finds sources whose raw target only resolves via case-insensitive matching', () => {
+    // 'ROOT' resolves to root via Tier 4 (case-insensitive basename) but does
+    // not equal root.file_path / basename / title — so a raw-target-string
+    // backlink lookup would miss it. Only resolved_target_id catches it.
+    seedNode('root', 'notes/root.md', 'Root', 'body');
+    seedNode('z', 'notes/z.md', 'Z', 'z body');
+    seedType('z', 'note');
+    seedRel('z', 'ROOT', 'wiki-link');
+
+    const result = performExpansion(db, 'root', { types: ['note'], direction: 'incoming', max_nodes: 10 });
+    expect(result.stats.considered).toBe(1);
+  });
+
   it('direction=both unions and dedupes', () => {
     seedNode('root', 'notes/root.md', 'Root', 'body');
     seedNode('a', 'notes/a.md', 'A', 'a body');

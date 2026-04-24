@@ -1,5 +1,4 @@
 import type Database from 'better-sqlite3';
-import { basename } from 'node:path';
 import { resolveFieldValue, type FieldRow } from './field-value.js';
 
 export interface ExpandOptions {
@@ -44,10 +43,9 @@ function collectOutgoingCandidates(db: Database.Database, rootId: string): Set<s
 }
 
 function collectIncomingCandidates(db: Database.Database, rootNode: NodeRow): Set<string> {
-  const nodeBasename = basename(rootNode.file_path, '.md');
   const rows = db.prepare(
-    'SELECT source_id FROM relationships WHERE (target = ? OR target = ? OR target = ?) AND source_id != ?'
-  ).all(rootNode.file_path, nodeBasename, rootNode.title ?? '', rootNode.id) as Array<{ source_id: string }>;
+    'SELECT DISTINCT source_id FROM relationships WHERE resolved_target_id = ? AND source_id != ?'
+  ).all(rootNode.id, rootNode.id) as Array<{ source_id: string }>;
   const ids = new Set<string>();
   for (const row of rows) ids.add(row.source_id);
   return ids;

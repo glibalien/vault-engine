@@ -384,7 +384,11 @@ describe('propagateSchemaChange — date-token defaults', () => {
     const field = db.prepare(
       'SELECT value_text, value_date FROM node_fields WHERE node_id = ? AND field_name = ?',
     ).get(node.node_id, 'created_on') as { value_text: string | null; value_date: string | null } | undefined;
-    const today = new Date().toISOString().slice(0, 10); // YYYY-MM-DD
+    // $now resolves to local-time YYYY-MM-DD (see formatDate in resolve-default.ts)
+    // — match that semantic here. Using toISOString() would give UTC, which silently
+    // fails in any timezone once UTC rolls past midnight but local hasn't.
+    const n = new Date();
+    const today = `${n.getFullYear()}-${String(n.getMonth() + 1).padStart(2, '0')}-${String(n.getDate()).padStart(2, '0')}`;
     const persisted = field?.value_text ?? field?.value_date ?? '';
     expect(persisted.startsWith(today)).toBe(true);
     // Must be the resolved form, not the unresolved token

@@ -87,7 +87,7 @@ describe('schemaless type consistency', () => {
 
   it('describe-schema for task does not include custom type in its scope', async () => {
     const handler = getToolHandler('describe-schema');
-    const body = parseResult(await handler({ name: 'task' }));
+    const body = parseResult(await handler({ name: 'task', include: ['coverage'] }));
     expect(body.ok).toBe(true);
     const result = body.data;
 

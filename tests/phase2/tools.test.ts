@@ -101,9 +101,12 @@ describe('get-node conformance', () => {
 });
 
 describe('describe-schema enrichments', () => {
-  it('returns node_count, field_coverage, orphan_field_names, and inlined global_field', async () => {
+  it('returns node_count, field_coverage, orphan_field_names, and inlined global_field when all audit sections are included', async () => {
     const handler = getToolHandler('describe-schema');
-    const body = parseResult(await handler({ name: 'task' }));
+    const body = parseResult(await handler({
+      name: 'task',
+      include: ['coverage', 'orphans', 'overrides'],
+    }));
     expect(body.ok).toBe(true);
     const result = body.data;
 
@@ -114,10 +117,11 @@ describe('describe-schema enrichments', () => {
 
     expect(result.orphan_field_names).toContainEqual({ field: 'custom_field', count: 1 });
 
-    // field_claims is an array with global_field inlined
-    expect(result.field_claims).toBeInstanceOf(Array);
-    expect(result.field_claims.length).toBe(3);
-    const statusClaim = result.field_claims.find((c: any) => c.field === 'status');
+    // Compact shape keeps the key as `fields` even when overrides are included;
+    // overrides add per-field detail (global_field block, override fields).
+    expect(result.fields).toBeInstanceOf(Array);
+    expect(result.fields.length).toBe(3);
+    const statusClaim = result.fields.find((c: any) => c.name === 'status');
     expect(statusClaim.global_field).toBeDefined();
     expect(statusClaim.global_field.field_type).toBe('enum');
   });

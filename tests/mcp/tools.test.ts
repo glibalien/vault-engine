@@ -160,14 +160,17 @@ describe('describe-schema', () => {
     ).run('meeting', 'attendees', 2);
 
     const handler = getToolHandler(registerDescribeSchema);
-    const body = parseResult(await handler({ name: 'meeting' }) as any) as any;
+    const body = parseResult(await handler({
+      name: 'meeting',
+      include: ['coverage', 'orphans'],
+    }) as any) as any;
     expect(body.ok).toBe(true);
     const result = body.data;
     expect(result.name).toBe('meeting');
     expect(result.display_name).toBe('Meeting');
-    expect(result.field_claims).toHaveLength(2);
-    expect(result.field_claims[0].field).toBe('date');
-    expect(result.field_claims[1].field).toBe('attendees');
+    expect(result.fields).toHaveLength(2);
+    expect(result.fields[0].name).toBe('date');
+    expect(result.fields[1].name).toBe('attendees');
     expect(result.metadata).toEqual({ auto_create: true });
     expect(result.node_count).toBe(0);
     expect(result.field_coverage).toEqual({

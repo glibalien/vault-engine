@@ -37,21 +37,22 @@ interface GlobalFieldRow {
   list_item_type: string | null;
 }
 
-interface CoverageRow {
-  count: number;
-}
-
 interface OrphanRow {
   field_name: string;
   count: number;
 }
 
+const includeSchema = z.array(z.enum(['coverage', 'orphans', 'overrides'])).optional();
+
 export function registerDescribeSchema(server: McpServer, db: Database.Database): void {
   server.tool(
     'describe-schema',
-    'Returns full details for a named schema.',
-    { name: z.string().describe('Schema name') },
-    async ({ name }) => {
+    'Returns a named schema in a compact creation-oriented shape (just what\'s needed to author a valid node). Pass `include` to layer in audit data: "coverage" (node_count + field_coverage), "orphans" (orphan_field_names), "overrides" (per-field override detail + full global_field blocks).',
+    {
+      name: z.string().describe('Schema name'),
+      include: includeSchema.describe('Audit sections to add. Any subset of coverage, orphans, overrides.'),
+    },
+    async ({ name, include }) => {
       const row = db.prepare('SELECT name, display_name, icon, filename_template, default_directory, metadata FROM schemas WHERE name = ?')
         .get(name) as SchemaRow | undefined;
 
@@ -59,14 +60,17 @@ export function registerDescribeSchema(server: McpServer, db: Database.Database)
         return fail('NOT_FOUND', `Schema '${name}' not found`);
       }
 
-      // Read claims from schema_field_claims table
+      const includeSet = new Set(include ?? []);
+      const wantCoverage = includeSet.has('coverage');
+      const wantOrphans = includeSet.has('orphans');
+      const wantOverrides = includeSet.has('overrides');
+
       const claims = db.prepare(
         'SELECT field, label, description, sort_order, required_override, default_value_override, default_value_overridden, enum_values_override FROM schema_field_claims WHERE schema_name = ? ORDER BY sort_order ASC, field ASC'
       ).all(name) as ClaimRow[];
 
-      // For each claim, inline the global field definition
       const globalFieldStmt = db.prepare('SELECT * FROM global_fields WHERE name = ?');
-      const field_claims = claims.map(claim => {
+      const fields = claims.map(claim => {
         const gf = globalFieldStmt.get(claim.field) as GlobalFieldRow | undefined;
         const overridden = claim.default_value_overridden === 1;
         const defaultValueOverride = overridden
@@ -75,7 +79,6 @@ export function registerDescribeSchema(server: McpServer, db: Database.Database)
         const enumValuesOverride = claim.enum_values_override !== null
           ? JSON.parse(claim.enum_values_override) : null;
 
-        // Compute resolved effective values
         const resolvedRequired = claim.required_override !== null
           ? Boolean(claim.required_override)
           : (gf ? Boolean(gf.required) : false);
@@ -86,22 +89,31 @@ export function registerDescribeSchema(server: McpServer, db: Database.Database)
           ? enumValuesOverride
           : (gf?.enum_values ? JSON.parse(gf.enum_values) : null);
 
-        return {
-          field: claim.field,
-          label: claim.label,
-          description: claim.description,
-          sort_order: claim.sort_order,
-          required_override: claim.required_override === null ? null : Boolean(claim.required_override),
-          default_value_override: overridden
+        const field: Record<string, unknown> = {
+          name: claim.field,
+          type: gf?.field_type ?? 'unknown',
+          required: resolvedRequired,
+          default_value: resolvedDefaultValue,
+        };
+
+        // Only include shape-specific attributes when they apply
+        if (resolvedEnumValues !== null) field.enum_values = resolvedEnumValues;
+        if (gf?.reference_target) field.reference_target = gf.reference_target;
+        if (gf?.list_item_type) field.list_item_type = gf.list_item_type;
+
+        // Label/description: include only when non-null
+        const description = claim.description ?? gf?.description ?? null;
+        if (claim.label !== null) field.label = claim.label;
+        if (description !== null) field.description = description;
+
+        if (wantOverrides) {
+          field.required_override = claim.required_override === null ? null : Boolean(claim.required_override);
+          field.default_value_override = overridden
             ? { overridden: true, value: defaultValueOverride }
-            : { overridden: false },
-          enum_values_override: enumValuesOverride,
-          resolved: {
-            required: resolvedRequired,
-            default_value: resolvedDefaultValue,
-            enum_values: resolvedEnumValues,
-          },
-          global_field: gf ? {
+            : { overridden: false };
+          field.enum_values_override = enumValuesOverride;
+          field.sort_order = claim.sort_order;
+          field.global_field = gf ? {
             field_type: gf.field_type,
             enum_values: gf.enum_values ? JSON.parse(gf.enum_values) : null,
             reference_target: gf.reference_target,
@@ -114,50 +126,54 @@ export function registerDescribeSchema(server: McpServer, db: Database.Database)
               enum_values: Boolean(gf.overrides_allowed_enum_values),
             },
             list_item_type: gf.list_item_type,
-          } : null,
-        };
+          } : null;
+        }
+
+        return field;
       });
 
-      // Compute node_count
-      const nodeCountRow = db.prepare(
-        'SELECT COUNT(*) as count FROM node_types WHERE schema_type = ?'
-      ).get(name) as { count: number };
-      const node_count = nodeCountRow.count;
-
-      // Compute field_coverage
-      const coverageStmt = db.prepare(
-        `SELECT COUNT(*) as count FROM node_fields nf
-         JOIN node_types nt ON nt.node_id = nf.node_id AND nt.schema_type = ?
-         WHERE nf.field_name = ?`
-      );
-      const field_coverage: Record<string, { have_value: number; total: number }> = {};
-      for (const claim of claims) {
-        const coverageRow = coverageStmt.get(name, claim.field) as CoverageRow;
-        field_coverage[claim.field] = { have_value: coverageRow.count, total: node_count };
-      }
-
-      // Compute orphan_field_names
-      const orphan_field_names = db.prepare(
-        `SELECT nf.field_name, COUNT(*) as count
-         FROM node_fields nf
-         JOIN node_types nt ON nt.node_id = nf.node_id AND nt.schema_type = ?
-         WHERE nf.field_name NOT IN (SELECT field FROM schema_field_claims WHERE schema_name = ?)
-         GROUP BY nf.field_name
-         ORDER BY count DESC`
-      ).all(name, name) as OrphanRow[];
-
-      return ok({
+      const response: Record<string, unknown> = {
         name: row.name,
         display_name: row.display_name,
         icon: row.icon,
         filename_template: row.filename_template,
         default_directory: row.default_directory,
         metadata: row.metadata ? JSON.parse(row.metadata) : null,
-        field_claims,
-        node_count,
-        field_coverage,
-        orphan_field_names: orphan_field_names.map(r => ({ field: r.field_name, count: r.count })),
-      });
+        fields,
+      };
+
+      if (wantCoverage) {
+        const nodeCountRow = db.prepare(
+          'SELECT COUNT(*) as count FROM node_types WHERE schema_type = ?'
+        ).get(name) as { count: number };
+        response.node_count = nodeCountRow.count;
+
+        const coverageStmt = db.prepare(
+          `SELECT COUNT(*) as count FROM node_fields nf
+           JOIN node_types nt ON nt.node_id = nf.node_id AND nt.schema_type = ?
+           WHERE nf.field_name = ?`
+        );
+        const field_coverage: Record<string, { have_value: number; total: number }> = {};
+        for (const claim of claims) {
+          const coverageRow = coverageStmt.get(name, claim.field) as { count: number };
+          field_coverage[claim.field] = { have_value: coverageRow.count, total: nodeCountRow.count };
+        }
+        response.field_coverage = field_coverage;
+      }
+
+      if (wantOrphans) {
+        const orphan_field_names = db.prepare(
+          `SELECT nf.field_name, COUNT(*) as count
+           FROM node_fields nf
+           JOIN node_types nt ON nt.node_id = nf.node_id AND nt.schema_type = ?
+           WHERE nf.field_name NOT IN (SELECT field FROM schema_field_claims WHERE schema_name = ?)
+           GROUP BY nf.field_name
+           ORDER BY count DESC`
+        ).all(name, name) as OrphanRow[];
+        response.orphan_field_names = orphan_field_names.map(r => ({ field: r.field_name, count: r.count }));
+      }
+
+      return ok(response);
     },
   );
 }

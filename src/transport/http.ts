@@ -42,6 +42,7 @@ function requestLogger(req: Request, res: Response, next: NextFunction): void {
  * before any auth middleware runs.
  */
 function corsHeaders(req: Request, res: Response, next: NextFunction): void {
+  res.setHeader('MCP-Protocol-Version', LATEST_PROTOCOL_VERSION);
   res.setHeader('Access-Control-Allow-Origin', '*');
   res.setHeader('Access-Control-Allow-Methods', 'GET, POST, DELETE, HEAD, OPTIONS');
   res.setHeader('Access-Control-Allow-Headers', 'Authorization, Content-Type, Accept, Mcp-Session-Id, MCP-Protocol-Version');
@@ -82,6 +83,11 @@ export function createHttpApp(serverFactory: ServerFactory, authConfig?: AuthCon
     // "Anthropic/ClaudeAI", protocolVersion 2025-11-25) requires this and
     // silently gives up on the OAuth flow without it.
     const resourceServerUrl = new URL('/mcp', authConfig.issuerUrl);
+    const legacyResourceServerUrl = new URL('/', authConfig.issuerUrl);
+    const protectedResourceMetadata = {
+      resource: legacyResourceServerUrl.href,
+      authorization_servers: [authConfig.issuerUrl.href],
+    };
 
     app.use(mcpAuthRouter({
       provider,
@@ -91,6 +97,12 @@ export function createHttpApp(serverFactory: ServerFactory, authConfig?: AuthCon
         rateLimit: { windowMs: 60_000, max: 5 },
       },
     }));
+
+    // Compatibility endpoint for clients that still probe the pre-RFC-9728 root
+    // metadata URL instead of using the path-specific URL from WWW-Authenticate.
+    app.get('/.well-known/oauth-protected-resource', (_req: Request, res: Response) => {
+      res.json(protectedResourceMetadata);
+    });
 
     bearerAuth = requireBearerAuth({
       verifier: provider,

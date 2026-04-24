@@ -7,7 +7,7 @@ import type { EmbeddingIndexer } from '../../search/indexer.js';
 export function registerVaultStats(server: McpServer, db: Database.Database, extractorRegistry?: ExtractorRegistry, embeddingIndexer?: EmbeddingIndexer): void {
   server.tool(
     'vault-stats',
-    'Returns vault statistics: node counts, type counts, field count, relationship count, orphan count, schema count, and search index status.',
+    'Summary snapshot of vault health and size: node counts, type counts, field count, relationship count, orphan count, schema count, and search index status.',
     {},
     async () => {
       const nodeCount = (db.prepare('SELECT COUNT(*) as count FROM nodes').get() as { count: number }).count;

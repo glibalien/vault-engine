@@ -10,7 +10,7 @@ import { safeVaultPath } from '../../pipeline/safe-path.js';
 import { ok, fail, adaptIssue, type Issue } from './errors.js';
 import { resolveNodeIdentity } from './resolve-identity.js';
 import { executeRename, captureRenameSnapshot } from './rename-node.js';
-import { checkTitleSafety, type ToolIssue } from './title-warnings.js';
+import { checkTitleSafety, sanitizeFilename, type ToolIssue } from './title-warnings.js';
 import { executeMutation } from '../../pipeline/execute.js';
 import { PipelineError } from '../../pipeline/types.js';
 import { reconstructValue } from '../../pipeline/classify-value.js';
@@ -182,10 +182,12 @@ export function registerUpdateNode(
 
       // If title changed, derive new file path and check for conflicts
       let effectiveFilePath = node.file_path;
+      const titleSanitized = titleChanged ? sanitizeFilename(`${finalTitle}.md`) : null;
       if (titleChanged) {
         const currentDir = dirname(node.file_path);
         const newDir = currentDir === '.' ? '' : currentDir;
-        effectiveFilePath = newDir ? `${newDir}/${finalTitle}.md` : `${finalTitle}.md`;
+        const sanitizedFilename = titleSanitized!.filename;
+        effectiveFilePath = newDir ? `${newDir}/${sanitizedFilename}` : sanitizedFilename;
 
         // Conflict check
         if (effectiveFilePath !== node.file_path) {
@@ -259,7 +261,14 @@ export function registerUpdateNode(
         const { claimsByType, globalFields } = loadSchemaContext(db, finalTypes);
         const validation = validateProposedState(finalFields, finalTypes, claimsByType, globalFields);
         const titleIssues: ToolIssue[] = titleChanged ? checkTitleSafety(finalTitle) : [];
-        const allIssues = [...validation.issues, ...titleIssues, ...typeOpConflict];
+        const sanitizeIssues: ToolIssue[] = titleSanitized?.sanitized
+          ? [{
+              code: 'TITLE_FILENAME_SANITIZED',
+              message: `Title contains path-separator characters; replaced with '-' in filename: ${titleSanitized.characters.join(' ')}`,
+              characters: titleSanitized.characters,
+            }]
+          : [];
+        const allIssues = [...validation.issues, ...titleIssues, ...sanitizeIssues, ...typeOpConflict];
         return ok(
           {
             dry_run: true,
@@ -314,6 +323,13 @@ export function registerUpdateNode(
           })();
 
           const titleIssues: ToolIssue[] = checkTitleSafety(finalTitle);
+          const sanitizeIssues: ToolIssue[] = titleSanitized?.sanitized
+            ? [{
+                code: 'TITLE_FILENAME_SANITIZED',
+                message: `Title contains path-separator characters; replaced with '-' in filename: ${titleSanitized.characters.join(' ')}`,
+                characters: titleSanitized.characters,
+              }]
+            : [];
           return ok(
             {
               node_id: node.node_id,
@@ -324,7 +340,7 @@ export function registerUpdateNode(
               coerced_state: mutResult.validation.coerced_state,
               orphan_fields: mutResult.validation.orphan_fields,
             },
-            [...mutResult.validation.issues, ...titleIssues, ...typeOpConflict].map(adaptIssue),
+            [...mutResult.validation.issues, ...titleIssues, ...sanitizeIssues, ...typeOpConflict].map(adaptIssue),
           );
         }
 
@@ -553,7 +569,8 @@ function computeNewPath(currentFilePath: string, title: string, ops: QueryModeOp
   if (ops.set_directory === undefined) return null;
 
   const targetDir = ops.set_directory === '.' ? '' : ops.set_directory;
-  const newFilePath = targetDir === '' ? `${title}.md` : `${targetDir}/${title}.md`;
+  const { filename } = sanitizeFilename(`${title}.md`);
+  const newFilePath = targetDir === '' ? filename : `${targetDir}/${filename}`;
 
   if (newFilePath === currentFilePath) return null; // already at target
 

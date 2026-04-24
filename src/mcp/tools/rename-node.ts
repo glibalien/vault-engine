@@ -15,7 +15,7 @@ import type { Text } from 'mdast';
 import { ok, fail, adaptIssue } from './errors.js';
 import { resolveDirectory } from '../../schema/paths.js';
 import { resolveNodeIdentity } from './resolve-identity.js';
-import { checkTitleSafety, type ToolIssue } from './title-warnings.js';
+import { checkTitleSafety, sanitizeFilename, type ToolIssue } from './title-warnings.js';
 import { executeMutation } from '../../pipeline/execute.js';
 import { reconstructValue } from '../../pipeline/classify-value.js';
 import { resolveTarget } from '../../resolver/resolve.js';
@@ -251,9 +251,10 @@ export function registerRenameNode(
       // instead of moving the file to the vault root.
       const newDir = dirResult.source === 'root' ? dirname(oldFilePath) : dirResult.directory;
 
+      const sanitized = sanitizeFilename(`${params.new_title}.md`);
       const newFilePath = newDir === '.' || newDir === ''
-        ? `${params.new_title}.md`
-        : `${newDir}/${params.new_title}.md`;
+        ? sanitized.filename
+        : `${newDir}/${sanitized.filename}`;
 
       // Conflict check
       if (newFilePath !== oldFilePath) {
@@ -290,6 +291,13 @@ export function registerRenameNode(
             operation_id,
           );
         const issues: ToolIssue[] = checkTitleSafety(params.new_title);
+        if (sanitized.sanitized) {
+          issues.push({
+            code: 'TITLE_FILENAME_SANITIZED',
+            message: `Title contains path-separator characters; replaced with '-' in filename: ${sanitized.characters.join(' ')}`,
+            characters: sanitized.characters,
+          });
+        }
         return ok(
           {
             node_id: node.node_id,

@@ -16,6 +16,26 @@ export function checkTitleSafety(title: string): ToolIssue[] {
   }];
 }
 
+const FILENAME_UNSAFE = ['/', '\\'];
+
+export interface SanitizeResult {
+  filename: string;
+  sanitized: boolean;
+  characters: string[];
+}
+
+export function sanitizeFilename(name: string): SanitizeResult {
+  const found = FILENAME_UNSAFE.filter(ch => name.includes(ch));
+  if (found.length === 0) {
+    return { filename: name, sanitized: false, characters: [] };
+  }
+  let out = name;
+  for (const ch of FILENAME_UNSAFE) {
+    out = out.split(ch).join('-');
+  }
+  return { filename: out, sanitized: true, characters: found };
+}
+
 export function checkBodyFrontmatter(body: string): ToolIssue[] {
   if (body.startsWith('---\n') || body.startsWith('---\r\n')) {
     return [{

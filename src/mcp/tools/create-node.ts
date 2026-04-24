@@ -7,7 +7,7 @@ import { existsSync } from 'node:fs';
 import { join } from 'node:path';
 import { safeVaultPath } from '../../pipeline/safe-path.js';
 import { ok, fail, adaptIssue } from './errors.js';
-import { checkTitleSafety, checkBodyFrontmatter } from './title-warnings.js';
+import { checkTitleSafety, checkBodyFrontmatter, sanitizeFilename } from './title-warnings.js';
 import { executeMutation } from '../../pipeline/execute.js';
 import { PipelineError } from '../../pipeline/types.js';
 import type { WriteLockManager } from '../../sync/write-lock.js';
@@ -80,6 +80,8 @@ export function registerCreateNode(
           fileName = derived;
         }
       }
+      const sanitize = sanitizeFilename(fileName);
+      fileName = sanitize.filename;
       const filePath = dirResult.directory
         ? `${dirResult.directory}/${fileName}`
         : fileName;
@@ -87,7 +89,14 @@ export function registerCreateNode(
       // ── Compute warnings ────────────────────────────────────────
       const titleIssues = checkTitleSafety(title);
       const bodyIssues = checkBodyFrontmatter(body);
-      const extraIssues = [...titleIssues, ...bodyIssues];
+      const sanitizeIssues = sanitize.sanitized
+        ? [{
+            code: 'TITLE_FILENAME_SANITIZED',
+            message: `Title contains path-separator characters; replaced with '-' in filename: ${sanitize.characters.join(' ')}`,
+            characters: sanitize.characters,
+          }]
+        : [];
+      const extraIssues = [...titleIssues, ...bodyIssues, ...sanitizeIssues];
 
       // Conflict check
       const existing = db.prepare('SELECT id, title FROM nodes WHERE file_path = ?').get(filePath) as { id: string; title: string } | undefined;

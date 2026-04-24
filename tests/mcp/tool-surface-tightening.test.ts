@@ -13,7 +13,7 @@ import { registerRenameNode } from '../../src/mcp/tools/rename-node.js';
 import { registerCreateNode } from '../../src/mcp/tools/create-node.js';
 import { registerUpdateNode } from '../../src/mcp/tools/update-node.js';
 import { createTempVault } from '../helpers/vault.js';
-import { checkTitleSafety, checkBodyFrontmatter } from '../../src/mcp/tools/title-warnings.js';
+import { checkTitleSafety, checkBodyFrontmatter, sanitizeFilename } from '../../src/mcp/tools/title-warnings.js';
 
 describe('checkTitleSafety', () => {
   it('returns no issues for clean titles', () => {
@@ -41,6 +41,36 @@ describe('checkTitleSafety', () => {
 
   it('returns empty for titles with safe special chars like dashes and apostrophes', () => {
     expect(checkTitleSafety("It's a well-formed — title")).toEqual([]);
+  });
+});
+
+describe('sanitizeFilename', () => {
+  it('passes clean filenames through unchanged', () => {
+    const result = sanitizeFilename('My Normal Title');
+    expect(result.filename).toBe('My Normal Title');
+    expect(result.sanitized).toBe(false);
+    expect(result.characters).toEqual([]);
+  });
+
+  it('replaces forward slash with hyphen', () => {
+    const result = sanitizeFilename('30/60/90 Plan');
+    expect(result.filename).toBe('30-60-90 Plan');
+    expect(result.sanitized).toBe(true);
+    expect(result.characters).toContain('/');
+  });
+
+  it('replaces backslash with hyphen', () => {
+    const result = sanitizeFilename('a\\b\\c');
+    expect(result.filename).toBe('a-b-c');
+    expect(result.sanitized).toBe(true);
+    expect(result.characters).toContain('\\');
+  });
+
+  it('reports both slash and backslash when present', () => {
+    const result = sanitizeFilename('a/b\\c');
+    expect(result.filename).toBe('a-b-c');
+    expect(result.sanitized).toBe(true);
+    expect(result.characters).toEqual(expect.arrayContaining(['/', '\\']));
   });
 });
 
@@ -173,6 +203,23 @@ describe('rename-node surface tightening', () => {
     expect(unsafe!.severity).toBe('warning');
     expect(unsafe!.details?.characters).toEqual(expect.arrayContaining(['(', ')']));
   });
+
+  it('sanitizes slashes in new_title to keep file flat', async () => {
+    const node = createNode('Notes/old.md', 'old');
+    const body = parseResult(await handler({
+      node_id: node.node_id,
+      new_title: '30/60/90 Plan',
+    })) as any;
+    expect(body.ok).toBe(true);
+    expect(body.data.new_file_path).toBe('Notes/30-60-90 Plan.md');
+    expect(body.data.new_title).toBe('30/60/90 Plan');
+    expect(existsSync(join(vaultPath, 'Notes/30-60-90 Plan.md'))).toBe(true);
+    expect(existsSync(join(vaultPath, 'Notes/30'))).toBe(false);
+    const warnings = body.warnings as Array<{ code: string; details?: { characters?: string[] } }>;
+    const sanitized = warnings.find(w => w.code === 'TITLE_FILENAME_SANITIZED');
+    expect(sanitized).toBeDefined();
+    expect(sanitized!.details?.characters).toContain('/');
+  });
 });
 
 describe('create-node surface tightening', () => {
@@ -294,6 +341,36 @@ describe('create-node surface tightening', () => {
     const warnings = result.warnings as Array<{ code: string }>;
     expect(warnings.some(w => w.code === 'FRONTMATTER_IN_BODY')).toBe(true);
   });
+
+  it('sanitizes forward slashes in title to keep file flat', async () => {
+    const result = parseResult(await handler({
+      title: 'OpenAI SE Manager — 30/60/90 for Jenny',
+      types: [],
+      directory: 'Notes',
+    })) as any;
+    expect(result.ok).toBe(true);
+    expect(result.data.file_path).toBe('Notes/OpenAI SE Manager — 30-60-90 for Jenny.md');
+    expect(result.data.title).toBe('OpenAI SE Manager — 30/60/90 for Jenny');
+    expect(existsSync(join(vaultPath, 'Notes/OpenAI SE Manager — 30-60-90 for Jenny.md'))).toBe(true);
+    expect(existsSync(join(vaultPath, 'Notes/OpenAI SE Manager — 30'))).toBe(false);
+    const warnings = result.warnings as Array<{ code: string; details?: { characters?: string[] } }>;
+    const sanitized = warnings.find(w => w.code === 'TITLE_FILENAME_SANITIZED');
+    expect(sanitized).toBeDefined();
+    expect(sanitized!.details?.characters).toContain('/');
+  });
+
+  it('dry-run reports sanitized file_path and warning', async () => {
+    const result = parseResult(await handler({
+      title: 'A/B Test',
+      types: [],
+      directory: 'Notes',
+      dry_run: true,
+    })) as any;
+    expect(result.ok).toBe(true);
+    expect(result.data.would_create.file_path).toBe('Notes/A-B Test.md');
+    const warnings = result.warnings as Array<{ code: string }>;
+    expect(warnings.some(w => w.code === 'TITLE_FILENAME_SANITIZED')).toBe(true);
+  });
 });
 
 describe('update-node set_title renames file', () => {
@@ -397,6 +474,39 @@ describe('update-node set_title renames file', () => {
     expect(body.ok).toBe(true);
     const data = body.data as Record<string, unknown>;
     expect(data.file_path).toBe('Notes/Same.md');
+  });
+
+  it('set_title sanitizes slashes in title to keep file flat', async () => {
+    const node = createNode('Notes/Old.md', 'Old');
+    const body = parseResult(await handler({
+      node_id: node.node_id,
+      set_title: 'A/B Test',
+    }));
+    expect(body.ok).toBe(true);
+    const data = body.data as Record<string, unknown>;
+    expect(data.file_path).toBe('Notes/A-B Test.md');
+    expect(data.title).toBe('A/B Test');
+    expect(existsSync(join(vaultPath, 'Notes/A-B Test.md'))).toBe(true);
+    expect(existsSync(join(vaultPath, 'Notes/A'))).toBe(false);
+    const warnings = body.warnings as Array<{ code: string; details?: { characters?: string[] } }>;
+    const sanitized = warnings.find(w => w.code === 'TITLE_FILENAME_SANITIZED');
+    expect(sanitized).toBeDefined();
+    expect(sanitized!.details?.characters).toContain('/');
+  });
+
+  it('set_title dry-run reports sanitized file_path and warning', async () => {
+    const node = createNode('Notes/Old.md', 'Old');
+    const body = parseResult(await handler({
+      node_id: node.node_id,
+      set_title: '30/60/90 Plan',
+      dry_run: true,
+    }));
+    expect(body.ok).toBe(true);
+    const data = body.data as Record<string, unknown>;
+    const preview = data.preview as Record<string, unknown>;
+    expect(preview.file_path).toBe('Notes/30-60-90 Plan.md');
+    const warnings = body.warnings as Array<{ code: string }>;
+    expect(warnings.some(w => w.code === 'TITLE_FILENAME_SANITIZED')).toBe(true);
   });
 
   it('set_title includes title safety warnings', async () => {

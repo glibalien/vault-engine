@@ -11,7 +11,7 @@ import type Database from 'better-sqlite3';
 import { extname, join } from 'node:path';
 import { stat } from 'node:fs/promises';
 import { safeVaultPath } from '../pipeline/safe-path.js';
-import { findFileInVault } from './assembler.js';
+import { findFileInVault } from './find-file.js';
 import { resolveTarget } from '../resolver/resolve.js';
 
 export interface ResolvedRef {

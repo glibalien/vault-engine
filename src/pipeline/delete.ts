@@ -17,6 +17,7 @@ export interface DeletionResult {
   node_id: string;
   file_path: string;
   file_unlinked: boolean;
+  unlink_error?: string;
 }
 
 export function executeDeletion(
@@ -93,6 +94,7 @@ export function executeDeletion(
   refreshOnDelete(db, deletion.node_id);
 
   let fileUnlinked = false;
+  let unlinkError: string | undefined;
   if (deletion.unlink_file) {
     const absPath = safeVaultPath(vaultPath, deletion.file_path);
     writeLock.withLockSync(absPath, () => {
@@ -103,6 +105,9 @@ export function executeDeletion(
         const code = (err as NodeJS.ErrnoException).code;
         if (code === 'ENOENT') {
           fileUnlinked = true;
+        } else {
+          unlinkError = `${code ?? 'UNKNOWN'}: ${(err as Error).message}`;
+          console.error(`[executeDeletion] unlink failed for ${deletion.file_path}: ${unlinkError}`);
         }
       }
     });
@@ -112,5 +117,6 @@ export function executeDeletion(
     node_id: deletion.node_id,
     file_path: deletion.file_path,
     file_unlinked: fileUnlinked,
+    ...(unlinkError ? { unlink_error: unlinkError } : {}),
   };
 }

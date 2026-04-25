@@ -2,30 +2,11 @@ import type { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import type Database from 'better-sqlite3';
 import { z } from 'zod';
 import { join, basename } from 'node:path';
-import { stat, readdir } from 'node:fs/promises';
+import { stat } from 'node:fs/promises';
 import { safeVaultPath } from '../../pipeline/safe-path.js';
 import { ok, fail } from './errors.js';
 import type { ExtractionCache } from '../../extraction/cache.js';
-
-/** Search vault recursively for a file by basename (binary files aren't in nodes table). */
-async function findFileInVault(vaultPath: string, filename: string): Promise<string | null> {
-  const target = basename(filename);
-  async function search(dir: string): Promise<string | null> {
-    let entries;
-    try { entries = await readdir(dir, { withFileTypes: true }); } catch { return null; }
-    for (const entry of entries) {
-      if (entry.name.startsWith('.')) continue;
-      const fullPath = join(dir, entry.name);
-      if (entry.isFile() && entry.name === target) return fullPath;
-      if (entry.isDirectory()) {
-        const found = await search(fullPath);
-        if (found) return found;
-      }
-    }
-    return null;
-  }
-  return search(vaultPath);
-}
+import { findFileInVault } from '../../extraction/find-file.js';
 
 export function registerReadEmbedded(
   server: McpServer,
@@ -62,10 +43,19 @@ export function registerReadEmbedded(
         if (matches.length === 0) {
           // Binary files (audio, images) aren't in nodes table — search vault
           const directPath = safeVaultPath(vaultPath, filename!);
+          let directExists = false;
           try {
             await stat(directPath);
+            directExists = true;
+          } catch (err) {
+            const code = (err as NodeJS.ErrnoException).code;
+            if (code !== 'ENOENT' && code !== 'ENOTDIR') {
+              return fail('INTERNAL_ERROR', `stat failed for "${filename}": ${code ?? 'UNKNOWN'}: ${(err as Error).message}`);
+            }
+          }
+          if (directExists) {
             resolvedPath = directPath;
-          } catch {
+          } else {
             const found = await findFileInVault(vaultPath, filename!);
             if (found) {
               resolvedPath = found;

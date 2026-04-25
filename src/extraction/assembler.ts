@@ -1,40 +1,10 @@
-import { stat, readdir } from 'node:fs/promises';
-import { join, basename } from 'node:path';
+import { stat } from 'node:fs/promises';
+import { join } from 'node:path';
 import type Database from 'better-sqlite3';
 import type { ExtractionCache } from './cache.js';
 import type { AssembledNode, EmbedEntry, EmbedError } from './types.js';
 import { resolveEmbedRef } from './resolve.js';
-
-/**
- * Search the vault recursively for a file by basename.
- * Obsidian resolves ![[filename]] by searching the entire vault, not just
- * the vault root. Binary files (audio, images, etc.) aren't in the nodes
- * table, so we need a filesystem search.
- */
-export async function findFileInVault(vaultPath: string, filename: string): Promise<string | null> {
-  const target = basename(filename);
-  async function search(dir: string): Promise<string | null> {
-    let entries;
-    try {
-      entries = await readdir(dir, { withFileTypes: true });
-    } catch {
-      return null;
-    }
-    for (const entry of entries) {
-      if (entry.name.startsWith('.')) continue; // skip hidden dirs like .vault-engine
-      const fullPath = join(dir, entry.name);
-      if (entry.isFile() && entry.name === target) {
-        return fullPath;
-      }
-      if (entry.isDirectory()) {
-        const found = await search(fullPath);
-        if (found) return found;
-      }
-    }
-    return null;
-  }
-  return search(vaultPath);
-}
+import { findFileInVault } from './find-file.js';
 
 export interface AssembleOptions {
   maxEmbeds?: number;

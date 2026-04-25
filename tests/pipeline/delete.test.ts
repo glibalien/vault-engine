@@ -1,5 +1,5 @@
-import { describe, it, expect, beforeEach, afterEach } from 'vitest';
-import { mkdtempSync, writeFileSync, existsSync, rmSync } from 'node:fs';
+import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
+import { mkdtempSync, writeFileSync, existsSync, mkdirSync, rmSync } from 'node:fs';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 import Database from 'better-sqlite3';
@@ -127,6 +127,30 @@ describe('executeDeletion', () => {
     });
 
     expect(result.file_unlinked).toBe(true);
+    expect(result.unlink_error).toBeUndefined();
+  });
+
+  it('surfaces unlink_error and returns file_unlinked=false on non-ENOENT failure', () => {
+    seedNode(db, 'n1', 'a.md', 'A');
+    // Create a directory at the path so unlinkSync rejects with EISDIR/EPERM.
+    mkdirSync(join(vaultPath, 'a.md'));
+
+    const errSpy = vi.spyOn(console, 'error').mockImplementation(() => {});
+    try {
+      const result = executeDeletion(db, writeLock, vaultPath, {
+        source: 'tool',
+        node_id: 'n1',
+        file_path: 'a.md',
+        unlink_file: true,
+      });
+
+      expect(result.file_unlinked).toBe(false);
+      expect(result.unlink_error).toBeDefined();
+      expect(result.unlink_error).toMatch(/EISDIR|EPERM/);
+      expect(errSpy).toHaveBeenCalled();
+    } finally {
+      errSpy.mockRestore();
+    }
   });
 
   it('does not touch the filesystem when unlink_file is false', () => {

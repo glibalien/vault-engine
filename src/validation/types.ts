@@ -89,12 +89,12 @@ export interface CoercedValue {
 export interface ValidationIssue {
   field: string;
   severity: 'error';
-  code: IssueCode;
+  code: ValidationIssueCode;
   message: string;
   details?: unknown;
 }
 
-export type IssueCode =
+export type ValidationIssueCode =
   | 'REQUIRED_MISSING'
   | 'ENUM_MISMATCH'
   | 'TYPE_MISMATCH'

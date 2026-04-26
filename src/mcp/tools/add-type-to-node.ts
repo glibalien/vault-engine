@@ -16,12 +16,15 @@ import type { SyncLogger } from '../../sync/sync-logger.js';
 import { checkTypesHaveSchemas } from '../../pipeline/check-types.js';
 import { buildFixable } from '../../validation/fixable.js';
 import { createOperation, finalizeOperation } from '../../undo/operation.js';
+import { loadSchemaContext } from '../../pipeline/schema-context.js';
+import { validateProposedState } from '../../validation/validate.js';
 
 const paramsShape = {
   node_id: z.string().optional(),
   file_path: z.string().optional(),
   title: z.string().optional(),
   type: z.string(),
+  dry_run: z.boolean().default(false),
 };
 
 export function registerAddTypeToNode(
@@ -33,7 +36,7 @@ export function registerAddTypeToNode(
 ): void {
   server.tool(
     'add-type-to-node',
-    'Add a type to a node, automatically populating claimed fields with defaults. The type must have a defined schema. Use list-schemas to see available types.',
+    'Add a type to a node, automatically populating claimed fields with defaults. The type must have a defined schema. Use list-schemas to see available types. Use dry_run: true to preview the type addition and field defaults without applying.',
     paramsShape,
     async (params) => {
       const resolved = resolveNodeIdentity(db, {
@@ -67,6 +70,9 @@ export function registerAddTypeToNode(
         .all(node.node_id) as Array<{ schema_type: string }>).map(t => t.schema_type);
 
       if (currentTypes.includes(params.type)) {
+        if (params.dry_run) {
+          return ok({ dry_run: true, would_be_no_op: true, types: currentTypes });
+        }
         return ok({
           node_id: node.node_id,
           file_path: node.file_path,
@@ -103,6 +109,25 @@ export function registerAddTypeToNode(
       }
 
       const mergedFields = { ...currentFields, ...defaults };
+
+      if (params.dry_run) {
+        const { claimsByType, globalFields } = loadSchemaContext(db, newTypes);
+        const validation = validateProposedState(mergedFields, newTypes, claimsByType, globalFields);
+        const wouldAddFields = populated.reduce<Record<string, unknown>>((acc, p) => {
+          acc[p.field] = p.default_value;
+          return acc;
+        }, {});
+        return ok(
+          {
+            dry_run: true,
+            would_be_no_op: false,
+            types: newTypes,
+            would_add_fields: wouldAddFields,
+            would_readopt_fields: readoptedFields,
+          },
+          validation.issues.map(adaptIssue),
+        );
+      }
 
       const operation_id = createOperation(db, {
         source_tool: 'add-type-to-node',

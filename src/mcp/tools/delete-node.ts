@@ -16,6 +16,7 @@ const paramsShape = {
   file_path: z.string().optional(),
   title: z.string().optional(),
   confirm: z.boolean().default(false),
+  dry_run: z.boolean().default(false),
   referencing_nodes_limit: z.number().default(20),
 };
 
@@ -29,7 +30,7 @@ export function registerDeleteNode(
 ): void {
   server.tool(
     'delete-node',
-    'Delete a node and its file. Without confirm: true, returns a preview showing referencing nodes.',
+    'Delete a node and its file. Without confirm: true, returns a preview showing referencing nodes. Use dry_run: true to preview without applying. dry_run is independent of confirm — dry_run: true always previews.',
     paramsShape,
     async (params) => {
       const resolved = resolveNodeIdentity(db, {
@@ -65,7 +66,7 @@ export function registerDeleteNode(
       const types = (db.prepare('SELECT schema_type FROM node_types WHERE node_id = ?')
         .all(node.node_id) as Array<{ schema_type: string }>).map(t => t.schema_type);
 
-      if (!params.confirm) {
+      if (params.dry_run || !params.confirm) {
         const referencing_nodes = incomingRels.slice(0, params.referencing_nodes_limit).map(r => ({
           node_id: r.source_id,
           title: r.title,
@@ -80,20 +81,19 @@ export function registerDeleteNode(
             details: { incoming_reference_count: incomingCount.c, referencing_nodes },
           });
         }
-        return ok(
-          {
-            preview: true,
-            node_id: node.node_id,
-            file_path: node.file_path,
-            title: node.title,
-            types,
-            field_count: fieldCount,
-            relationship_count: outRels,
-            incoming_reference_count: incomingCount.c,
-            referencing_nodes,
-          },
-          warnings,
-        );
+        const payload: Record<string, unknown> = {
+          preview: true,
+          node_id: node.node_id,
+          file_path: node.file_path,
+          title: node.title,
+          types,
+          field_count: fieldCount,
+          relationship_count: outRels,
+          incoming_reference_count: incomingCount.c,
+          referencing_nodes,
+        };
+        if (params.dry_run) payload.dry_run = true;
+        return ok(payload, warnings);
       }
 
       // Confirmed deletion

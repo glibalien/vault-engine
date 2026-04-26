@@ -58,6 +58,56 @@ describe('mergeFieldClaims', () => {
     expect(ef.claiming_types).toEqual(['task']);
   });
 
+  it('default_source — global when no override applies', () => {
+    const globals = new Map([
+      ['status', makeGlobal({ name: 'status', default_value: 'draft' })],
+    ]);
+    const claims = new Map([
+      ['task', [makeClaim({ schema_name: 'task', field: 'status' })]],
+    ]);
+
+    const result = mergeFieldClaims(['task'], claims, globals);
+
+    expect(result.ok).toBe(true);
+    if (!result.ok) return;
+    expect(result.effective_fields.get('status')!.default_source).toBe('global');
+  });
+
+  it('default_source — claim when a single override applies', () => {
+    const globals = new Map([
+      ['status', makeGlobal({ name: 'status', default_value: 'draft', overrides_allowed: { required: false, default_value: true, enum_values: false } })],
+    ]);
+    const claims = new Map([
+      ['task', [makeClaim({ schema_name: 'task', field: 'status', default_value_override: { kind: 'override', value: 'open' } })]],
+    ]);
+
+    const result = mergeFieldClaims(['task'], claims, globals);
+
+    expect(result.ok).toBe(true);
+    if (!result.ok) return;
+    const ef = result.effective_fields.get('status')!;
+    expect(ef.resolved_default_value).toBe('open');
+    expect(ef.default_source).toBe('claim');
+  });
+
+  it('default_source — global when overrides cancel on disagreement', () => {
+    const globals = new Map([
+      ['status', makeGlobal({ name: 'status', default_value: 'draft', overrides_allowed: { required: false, default_value: true, enum_values: false } })],
+    ]);
+    const claims = new Map([
+      ['task', [makeClaim({ schema_name: 'task', field: 'status', default_value_override: { kind: 'override', value: 'open' } })]],
+      ['project', [makeClaim({ schema_name: 'project', field: 'status', default_value_override: { kind: 'override', value: 'active' } })]],
+    ]);
+
+    const result = mergeFieldClaims(['task', 'project'], claims, globals);
+
+    expect(result.ok).toBe(true);
+    if (!result.ok) return;
+    const ef = result.effective_fields.get('status')!;
+    expect(ef.resolved_default_value).toBe('draft');
+    expect(ef.default_source).toBe('global');
+  });
+
   it('multi-type union — two types claiming different fields, union both', () => {
     const globals = new Map([
       ['priority', makeGlobal({ name: 'priority' })],

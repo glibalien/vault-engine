@@ -46,6 +46,10 @@ export interface EffectiveField {
   resolved_order: number;
   resolved_required: boolean;
   resolved_default_value: unknown;
+  /** Where `resolved_default_value` came from: 'claim' iff a per-type override
+   *  actually won (single override or all overrides agreed). 'global' otherwise,
+   *  including the cancel-to-global case when overrides disagreed. */
+  default_source: 'global' | 'claim';
   claiming_types: string[];
   per_type_enum_values?: PerTypeEnumValues[];
 }

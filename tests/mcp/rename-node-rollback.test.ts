@@ -1,11 +1,13 @@
-import { describe, it, expect, beforeEach, afterEach } from 'vitest';
+import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import { mkdtempSync, rmSync, existsSync } from 'node:fs';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 import Database from 'better-sqlite3';
 import * as sqliteVec from 'sqlite-vec';
+import type { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import { createSchema } from '../../src/db/schema.js';
-import { executeRename } from '../../src/mcp/tools/rename-node.js';
+import { addUndoTables, addNodeTypesSortOrder } from '../../src/db/migrate.js';
+import { executeRename, registerRenameNode } from '../../src/mcp/tools/rename-node.js';
 import { WriteLockManager } from '../../src/sync/write-lock.js';
 import { executeMutation } from '../../src/pipeline/execute.js';
 
@@ -82,6 +84,85 @@ describe('rename-node filesystem rollback', () => {
     expect(row.title).toBe('old');
 
     // Filesystem: file should be back at the old path, not at the new path.
+    expect(existsSync(join(vaultPath, oldFilePath))).toBe(true);
+    expect(existsSync(join(vaultPath, newFilePath))).toBe(false);
+  });
+
+  it('registerRenameNode catch path: rolls back file and returns INTERNAL_ERROR', async () => {
+    // Add undo tables + sort-order column (required by registerRenameNode →
+    // createOperation and node_types sort_order queries).
+    addUndoTables(db);
+    addNodeTypesSortOrder(db);
+
+    // Use a normal lock for setup so the node is created cleanly.
+    const setupLock = new WriteLockManager();
+
+    // Create the node. After this, Notes/RollbackOrig.md is on disk and in the DB.
+    const oldFilePath = 'Notes/RollbackOrig.md';
+    executeMutation(db, setupLock, vaultPath, {
+      source: 'tool',
+      node_id: null,
+      file_path: oldFilePath,
+      title: 'RollbackOrig',
+      types: [],
+      fields: {},
+      body: '',
+    });
+    expect(existsSync(join(vaultPath, oldFilePath))).toBe(true);
+
+    // Stale the DB content_hash so the no-op guard in executeMutation doesn't
+    // short-circuit the write path inside executeRename's re-render step.
+    // Without this, rendered content is identical to disk content and the
+    // pipeline exits early, never reaching writeLock.withLockSync().
+    db.prepare("UPDATE nodes SET content_hash = 'stale' WHERE file_path = ?")
+      .run(oldFilePath);
+
+    // Now build a WriteLockManager that throws on its very first withLockSync
+    // call. Since the setup executeMutation used a separate lock, the first
+    // call this lock sees is the re-render inside executeRename (after
+    // renameSync has already moved the file to the new path).
+    class FailingWriteLockManager extends WriteLockManager {
+      override withLockSync<T>(filePath: string, fn: () => T): T {
+        throw new Error('simulated write-lock failure on re-render');
+      }
+    }
+    const failingLock = new FailingWriteLockManager();
+
+    // Capture the registered handler via a fake McpServer (same pattern as
+    // rename-node-directory.test.ts).
+    let handler!: (args: Record<string, unknown>) => Promise<unknown>;
+    const fakeServer = {
+      tool: (_n: string, _d: string, _s: unknown, h: (...a: unknown[]) => unknown) => {
+        handler = (args) => h(args) as Promise<unknown>;
+      },
+    } as unknown as McpServer;
+    registerRenameNode(fakeServer, db, failingLock, vaultPath);
+
+    const newFilePath = 'Notes/RollbackNew.md';
+    const errorSpy = vi.spyOn(console, 'error').mockImplementation(() => {});
+
+    // Invoke the full handler. Inside executeRename:
+    //   step 1 — renameSync moves the file to RollbackNew.md (already on disk)
+    //   step 2 — UPDATE nodes SET file_path … (in txn)
+    //   step 3 — executeMutation re-renders → withLockSync throws → txn rolls back
+    // The catch block in registerRenameNode runs fsUndos in reverse, restoring the file.
+    const raw = await handler({ title: 'RollbackOrig', new_title: 'RollbackNew' });
+    const result = JSON.parse(
+      (raw as { content: Array<{ text: string }> }).content[0].text,
+    );
+
+    errorSpy.mockRestore();
+
+    // 1. Handler returns INTERNAL_ERROR.
+    expect(result.ok).toBe(false);
+    expect(result.error.code).toBe('INTERNAL_ERROR');
+
+    // 2. DB row still points at the old path.
+    const row = db.prepare('SELECT file_path FROM nodes WHERE title = ?')
+      .get('RollbackOrig') as { file_path: string } | undefined;
+    expect(row?.file_path).toBe(oldFilePath);
+
+    // 3. File restored on disk.
     expect(existsSync(join(vaultPath, oldFilePath))).toBe(true);
     expect(existsSync(join(vaultPath, newFilePath))).toBe(false);
   });

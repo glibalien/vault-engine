@@ -278,25 +278,13 @@ export function propagateSchemaChange(
         });
       }
 
-      // Resolve default source ('global' vs 'claim') for each adoption default.
+      // Resolve default source ('global' vs 'claim') for each adoption default
+      // from the already-computed mergeResult.effective_fields.
       const adoptionDefaults: Record<string, unknown> = {};
       const adoptionSources: Record<string, 'global' | 'claim'> = {};
-      if (adoptionFieldsToDefault.length > 0) {
-        const ctx = loadSchemaContext(db, state.types);
-        for (const { field, value } of adoptionFieldsToDefault) {
-          adoptionDefaults[field] = value;
-          let src: 'global' | 'claim' = 'global';
-          for (const claims of ctx.claimsByType.values()) {
-            for (const c of claims) {
-              if (c.field === field && c.default_value_override.kind === 'override') {
-                src = 'claim';
-                break;
-              }
-            }
-            if (src === 'claim') break;
-          }
-          adoptionSources[field] = src;
-        }
+      for (const { field, value } of adoptionFieldsToDefault) {
+        adoptionDefaults[field] = value;
+        adoptionSources[field] = effectiveFields.get(field)?.default_source ?? 'global';
       }
 
       // Pipeline call — collect validation failures instead of re-throwing

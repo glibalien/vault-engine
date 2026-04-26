@@ -75,6 +75,32 @@ describe('add-type-to-node dry_run', () => {
     expect(types).toEqual(['note']);
   });
 
+  it('would_add_fields (dry-run) matches added_fields (live run) for the same op', async () => {
+    createGlobalField(db, { name: 'priority', field_type: 'string', default_value: 'normal', required: true });
+    createSchemaDefinition(db, { name: 'note', field_claims: [] });
+    createSchemaDefinition(db, { name: 'task', field_claims: [{ field: 'priority' }] });
+    const created = executeMutation(db, writeLock, vaultPath, {
+      source: 'tool', node_id: null, file_path: 'P.md',
+      title: 'P', types: ['note'], fields: {}, body: '',
+    });
+
+    const handler = getHandler();
+    const dryResult = parseResult(await handler({
+      node_id: created.node_id, type: 'task', dry_run: true,
+    }));
+    const liveResult = parseResult(await handler({
+      node_id: created.node_id, type: 'task', dry_run: false,
+    }));
+
+    expect(dryResult.ok).toBe(true);
+    expect(liveResult.ok).toBe(true);
+
+    // The dry-run preview's would_add_fields keys should equal the live run's added_fields entries.
+    const dryFields = Object.keys(dryResult.data?.would_add_fields as Record<string, unknown>).sort();
+    const liveFields = ([...((liveResult.data?.added_fields as string[]) ?? [])]).sort();
+    expect(dryFields).toEqual(liveFields);
+  });
+
   it('dry_run: true on already-present type returns would_be_no_op: true', async () => {
     createSchemaDefinition(db, { name: 'note', field_claims: [] });
     const created = executeMutation(db, writeLock, vaultPath, {

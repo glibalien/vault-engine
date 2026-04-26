@@ -19,6 +19,7 @@ const paramsShape = {
   title: z.string().optional(),
   type: z.string(),
   confirm: z.boolean().default(false),
+  dry_run: z.boolean().default(false),
 };
 
 export function registerRemoveTypeFromNode(
@@ -30,7 +31,7 @@ export function registerRemoveTypeFromNode(
 ): void {
   server.tool(
     'remove-type-from-node',
-    'Remove a type from a node, orphaning its exclusively-claimed fields. Requires confirm: true when removing the last type.',
+    'Remove a type from a node, orphaning its exclusively-claimed fields. Requires confirm: true when removing the last type. Use dry_run: true to preview the removal and orphaned fields without applying.',
     paramsShape,
     async (params) => {
       const resolved = resolveNodeIdentity(db, {
@@ -68,6 +69,31 @@ export function registerRemoveTypeFromNode(
       const wouldOrphanFields = removedClaims
         .map(c => c.field)
         .filter(f => !remainingClaims.has(f) && nodeFieldNames.has(f));
+
+      // Dry-run preview branch — fires for any removal before the confirmation gate
+      if (params.dry_run) {
+        const warnings: Issue[] = [];
+        if (resultingTypes.length === 0) {
+          warnings.push({
+            code: 'LAST_TYPE_REMOVAL',
+            severity: 'warning',
+            message: 'Removing this type leaves the node with no types. All fields will become orphans.',
+            details: { would_orphan_fields: wouldOrphanFields },
+          });
+        }
+        return ok(
+          {
+            dry_run: true,
+            node_id: node.node_id,
+            file_path: node.file_path,
+            current_types: currentTypes,
+            removing_type: params.type,
+            resulting_types: resultingTypes,
+            would_orphan_fields: wouldOrphanFields,
+          },
+          warnings,
+        );
+      }
 
       // Confirmation gate for typeless result
       if (resultingTypes.length === 0 && !params.confirm) {

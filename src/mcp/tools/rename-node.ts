@@ -23,6 +23,17 @@ import type { WriteLockManager } from '../../sync/write-lock.js';
 import type { SyncLogger } from '../../sync/sync-logger.js';
 import { createOperation, finalizeOperation } from '../../undo/operation.js';
 
+/**
+ * A pending filesystem mutation that should be reversed if the surrounding
+ * DB transaction throws. Currently only the file-rename in step 1 of
+ * `executeRename` is tracked; `executeMutation`'s atomic file writes are
+ * not (would require pre-write content snapshots — a larger change).
+ * See §2d in the 2026-04-25 backlog.
+ */
+export interface FsRollback {
+  push(undo: () => void): void;
+}
+
 const SKIP_TYPES = new Set(['code', 'inlineCode', 'yaml']);
 
 /**
@@ -83,6 +94,7 @@ export function executeRename(
   newFilePath: string,
   syncLogger?: SyncLogger,
   undoContext?: { operation_id: string },
+  fsRollback?: FsRollback,
 ): { refsUpdated: number } {
   const oldTitle = node.title;
   const oldFilePath = node.file_path;
@@ -115,7 +127,7 @@ export function executeRename(
     captureRenameSnapshot(db, undoContext.operation_id, node.node_id);
   }
 
-  // 1. Rename file on disk
+  // 1. Rename file on disk (tracked for filesystem rollback).
   if (newFilePath !== oldFilePath) {
     const oldAbs = join(vaultPath, oldFilePath);
     const newAbs = safeVaultPath(vaultPath, newFilePath);
@@ -123,6 +135,14 @@ export function executeRename(
       const newDirPath = dirname(newAbs);
       if (!existsSync(newDirPath)) mkdirSync(newDirPath, { recursive: true });
       renameSync(oldAbs, newAbs);
+      fsRollback?.push(() => {
+        // Best-effort: only restore if the file is still where we left it
+        // and the original slot is free. The aim is to recover the common
+        // case where executeMutation never reached its file-write stage.
+        if (existsSync(newAbs) && !existsSync(oldAbs)) {
+          renameSync(newAbs, oldAbs);
+        }
+      });
     }
   }
 
@@ -273,13 +293,17 @@ export function registerRenameNode(
         description: `rename-node: '${oldTitle}' -> '${params.new_title}' (references pending)`,
       });
 
-      // Execute in a single transaction
+      // Execute in a single transaction. Track filesystem mutations so we can
+      // reverse the on-disk rename if the txn throws (DB rolls back, but the
+      // file is already at the new path otherwise).
+      const fsUndos: Array<() => void> = [];
+      const fsRollback: FsRollback = { push: (u) => fsUndos.push(u) };
       const txn = db.transaction(() => {
         return executeRename(db, writeLock, vaultPath, {
           node_id: node.node_id,
           file_path: oldFilePath,
           title: oldTitle,
-        }, params.new_title, newFilePath, syncLogger, { operation_id });
+        }, params.new_title, newFilePath, syncLogger, { operation_id }, fsRollback);
       });
 
       try {
@@ -310,6 +334,17 @@ export function registerRenameNode(
           issues.map(adaptIssue),
         );
       } catch (err) {
+        // DB rolled back; reverse any filesystem mutations performed during
+        // the txn so disk state matches the rolled-back DB. Reverse order so
+        // multi-step mutations unwind correctly.
+        for (let i = fsUndos.length - 1; i >= 0; i--) {
+          try {
+            fsUndos[i]();
+          } catch (undoErr) {
+            const msg = undoErr instanceof Error ? undoErr.message : String(undoErr);
+            console.error(`[rename-node] fs rollback failed: ${msg}`);
+          }
+        }
         return fail('INTERNAL_ERROR', err instanceof Error ? err.message : String(err));
       } finally {
         finalizeOperation(db, operation_id);

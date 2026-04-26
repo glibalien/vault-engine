@@ -23,7 +23,8 @@ function parse(result: { content: Array<{ type: string; text: string }> }): Enve
   return JSON.parse(result.content[0].text) as Envelope;
 }
 
-function captureHandler(registerFn: (server: McpServer, ...args: unknown[]) => void, ...extras: unknown[]) {
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
+function captureHandler(registerFn: (server: McpServer, ...args: any[]) => void, ...extras: unknown[]) {
   let captured: (args: Record<string, unknown>) => unknown;
   const fakeServer = {
     tool: (_name: string, _desc: string, _schema: unknown, handler: (...a: unknown[]) => unknown) => {

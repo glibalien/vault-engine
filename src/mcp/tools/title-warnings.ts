@@ -1,7 +1,13 @@
 const WIKILINK_UNSAFE = ['(', ')', '[', ']', '|', '#', '^'];
 
+export type ToolIssueCode =
+  | 'TITLE_WIKILINK_UNSAFE'
+  | 'FRONTMATTER_IN_BODY'
+  | 'TYPE_OP_CONFLICT'
+  | 'TITLE_FILENAME_SANITIZED';
+
 export interface ToolIssue {
-  code: string;
+  code: ToolIssueCode;
   message: string;
   characters?: string[];
 }

@@ -3,10 +3,10 @@
 // Structured validation errors for schema-ops tools.
 // Sets the error-shape contract surfaced in MCP envelope details.
 
-import type { IssueCode } from '../validation/types.js';
+import type { ValidationIssueCode } from '../validation/types.js';
 
 // ClaimValidationReason is the outward-facing reason enum. It collapses the
-// pipeline's fine-grained IssueCode set into reasons that are meaningful to a
+// pipeline's fine-grained ValidationIssueCode set into reasons that are meaningful to a
 // schema-change caller (e.g., COERCION_FAILED + TYPE_MISMATCH both surface as
 // TYPE_MISMATCH).
 export type ClaimValidationReason =
@@ -30,7 +30,7 @@ export interface PerNodeIssue {
   node_id: string;
   title: string;
   field: string;
-  code: IssueCode;
+  code: ValidationIssueCode;
   value?: unknown;
 }
 
@@ -42,7 +42,7 @@ export class SchemaValidationError extends Error {
   }
 }
 
-const ISSUE_TO_REASON: Record<IssueCode, ClaimValidationReason | null> = {
+const ISSUE_TO_REASON: Record<ValidationIssueCode, ClaimValidationReason | null> = {
   REQUIRED_MISSING: 'REQUIRED_MISSING',
   ENUM_MISMATCH: 'ENUM_INVALID',
   TYPE_MISMATCH: 'TYPE_MISMATCH',

@@ -5,7 +5,7 @@ import type { RenderInput, FieldOrderEntry } from '../../src/renderer/types.js';
 
 // ── Helpers ──────────────────────────────────────────────────────────────
 
-function makeInput(overrides: Partial<RenderInput> = {}): RenderInput {
+function makeInput(overrides: Partial<RenderInput> & Record<string, unknown> = {}): RenderInput {
   return {
     types: ['note'],
     fields: {},

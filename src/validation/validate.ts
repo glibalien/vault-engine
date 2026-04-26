@@ -6,7 +6,7 @@ import type {
   CoercedValue,
   ValidationIssue,
   ValidationResult,
-  IssueCode,
+  ValidationIssueCode,
   RequiredMissingDetails,
 } from './types.js';
 import { mergeFieldClaims } from './merge.js';
@@ -164,7 +164,7 @@ export function validateProposedState(
       coerced_state[fieldName] = entry;
     } else {
       const fail = result as CoercionFailure;
-      let code: IssueCode;
+      let code: ValidationIssueCode;
       if (fail.to_type === 'enum' || fail.closest_matches) {
         code = 'ENUM_MISMATCH';
       } else if (fail.element_errors) {

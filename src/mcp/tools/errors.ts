@@ -1,5 +1,5 @@
-import type { ValidationIssue } from '../../validation/types.js';
-import type { ToolIssue } from './title-warnings.js';
+import type { ValidationIssue, ValidationIssueCode } from '../../validation/types.js';
+import type { ToolIssue, ToolIssueCode } from './title-warnings.js';
 
 export type ErrorCode =
   | 'NOT_FOUND'
@@ -15,8 +15,18 @@ export type ErrorCode =
   | 'OPERATION_NOT_FOUND'
   | 'CONFIRMATION_REQUIRED';
 
+export type IssueCode =
+  | ValidationIssueCode
+  | ToolIssueCode
+  | 'CROSS_NODE_FILTER_UNRESOLVED'
+  | 'DEPRECATED_PARAM'
+  | 'FIELD_OPERATOR_MISMATCH'
+  | 'LAST_TYPE_REMOVAL'
+  | 'PENDING_REFERENCES'
+  | 'RESULT_TRUNCATED';
+
 export interface Issue {
-  code: string;
+  code: IssueCode;
   message: string;
   severity: 'error' | 'warning';
   field?: string;

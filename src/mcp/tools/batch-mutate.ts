@@ -7,7 +7,7 @@ import { existsSync, unlinkSync } from 'node:fs';
 import { join } from 'node:path';
 import { safeVaultPath } from '../../pipeline/safe-path.js';
 import { resolveDirectory } from '../../schema/paths.js';
-import { ok, fail, adaptIssue } from './errors.js';
+import { ok, fail, adaptIssue, type Issue } from './errors.js';
 import { resolveNodeIdentity } from './resolve-identity.js';
 import { executeMutation } from '../../pipeline/execute.js';
 import { PipelineError } from '../../pipeline/types.js';
@@ -102,7 +102,7 @@ export function registerBatchMutate(
     async (params) => {
       const results: Array<{ op: string; node_id: string; file_path: string }> = [];
       const tmpDir = join(vaultPath, '.vault-engine', 'tmp');
-      const deprecationWarnings: Array<{ severity: 'warning'; code: string; message: string }> = [];
+      const deprecationWarnings: Issue[] = [];
 
       // Track file state for rollback: files that existed before (backed up)
       // and files that were created new (to be deleted on rollback)

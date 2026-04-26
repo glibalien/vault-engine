@@ -100,6 +100,7 @@ describe('full lifecycle end-to-end', () => {
     const applied = updateGlobalField(db, 'priority', {
       field_type: 'number',
       confirm: true,
+      discard_uncoercible: true,
     });
 
     expect(applied.preview).toBe(false);

@@ -140,6 +140,7 @@ describe('batch-mutate dry_run', () => {
     expect(result.data?.failed_at).toBe(1);
     expect(result.data?.op).toBe('create');
     expect(typeof result.data?.message).toBe('string');
+    expect(result.data?.op_count).toBeUndefined();
     const wouldApply = result.data?.would_apply as Array<Record<string, unknown>>;
     expect(wouldApply).toHaveLength(1);
     expect(wouldApply[0].op).toBe('create');
@@ -159,6 +160,22 @@ describe('batch-mutate dry_run', () => {
     expect(entry.fields_changed).toEqual([]);
     expect(entry.body_changed).toBe(false);
     expect(entry.types_after).toBeUndefined();
+  });
+
+  it('update dry_run with set_title differing from current → title_changed: true', async () => {
+    const created = parseResult(await getHandler()({
+      operations: [{ op: 'create', params: { title: 'OldName', types: ['note'] } }],
+    })).data!.results[0];
+    const handler = getHandler();
+    const result = parseResult(await handler({
+      dry_run: true,
+      operations: [{ op: 'update', params: { node_id: created.node_id, set_title: 'NewName' } }],
+    }));
+    expect(result.ok).toBe(true);
+    const entry = (result.data?.would_apply as Array<Record<string, unknown>>)[0];
+    expect(entry.title_changed).toBe(true);
+    expect(entry.body_changed).toBe(false);
+    expect(entry.fields_changed).toEqual([]);
   });
 
   it('delete dry_run with > 10 inbound refs caps referencing_nodes at 10 but reports full count', async () => {

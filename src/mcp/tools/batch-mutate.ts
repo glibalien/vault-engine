@@ -396,11 +396,7 @@ export function registerBatchMutate(
                 would_apply,
               }, deprecationWarnings);
             }
-            return ok({
-              dry_run: true,
-              op_count: params.operations.length,
-              would_apply,
-            }, deprecationWarnings);
+            return fail('INTERNAL_ERROR', err instanceof Error ? err.message : 'Batch dry-run failed', { warnings: deprecationWarnings });
           }
 
           // Live-path rollback: DB transaction rolled back. Now revert file writes.

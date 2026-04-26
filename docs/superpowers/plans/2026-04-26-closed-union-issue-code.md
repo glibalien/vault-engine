@@ -163,8 +163,11 @@ Sites currently in scope (relevant rows from those greps):
   export type ToolIssueCode =
     | 'TITLE_WIKILINK_UNSAFE'
     | 'FRONTMATTER_IN_BODY'
-    | 'TYPE_OP_CONFLICT';
+    | 'TYPE_OP_CONFLICT'
+    | 'TITLE_FILENAME_SANITIZED';
   ```
+
+  **Note (correction from initial plan draft):** `TITLE_FILENAME_SANITIZED` belongs to `ToolIssueCode`, not the wider tool-only-warnings list. Pre-flight grep classified it as a tool-only warning code, but the actual emission sites at `rename-node.ts:320`, `update-node.ts:266,328`, and `create-node.ts:94` all push into variables typed `ToolIssue[]`. Task 3's `IssueCode` definition therefore composes it via `ToolIssueCode` rather than re-listing it.
 
 - [ ] **Step 2: Retype `ToolIssue.code`**
 
@@ -245,9 +248,10 @@ Sites currently in scope (relevant rows from those greps):
     | 'FIELD_OPERATOR_MISMATCH'
     | 'LAST_TYPE_REMOVAL'
     | 'PENDING_REFERENCES'
-    | 'RESULT_TRUNCATED'
-    | 'TITLE_FILENAME_SANITIZED';
+    | 'RESULT_TRUNCATED';
   ```
+
+  Note: `TITLE_FILENAME_SANITIZED` is **not** listed here — it lives in `ToolIssueCode` (per the Task 2 correction) and is union-included via composition.
 
   **Note:** Do **not** include `INVALID_PARAMS`, `NOT_FOUND`, `UNKNOWN_TYPE`, `BATCH_FAILED`, `OPERATION_NOT_FOUND`, `CONFIRMATION_REQUIRED`, `INTERNAL_ERROR`, `EXTRACTOR_UNAVAILABLE`, `AMBIGUOUS_FILENAME`, `AMBIGUOUS_MATCH`, `VALIDATION_FAILED`, `CONFLICT`. Those are `ErrorCode` (failure-envelope codes), not Issue codes. Keeping them separate preserves the existing two-union split.
 
@@ -362,14 +366,14 @@ Sites currently in scope (relevant rows from those greps):
     TITLE_WIKILINK_UNSAFE: true,
     FRONTMATTER_IN_BODY: true,
     TYPE_OP_CONFLICT: true,
-    // Tool-only warning codes
+    TITLE_FILENAME_SANITIZED: true,
+    // Tool-only warning codes (errors.ts)
     CROSS_NODE_FILTER_UNRESOLVED: true,
     DEPRECATED_PARAM: true,
     FIELD_OPERATOR_MISMATCH: true,
     LAST_TYPE_REMOVAL: true,
     PENDING_REFERENCES: true,
     RESULT_TRUNCATED: true,
-    TITLE_FILENAME_SANITIZED: true,
   };
 
   describe('IssueCode union', () => {

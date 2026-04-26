@@ -2,7 +2,7 @@ import type { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import type Database from 'better-sqlite3';
 import { z } from 'zod';
 import { ok, fail } from './errors.js';
-import { updateGlobalField } from '../../global-fields/crud.js';
+import { updateGlobalField, TypeChangeRequiresDiscardError } from '../../global-fields/crud.js';
 import { renderFieldsFile, renderSchemaFile } from '../../schema/render.js';
 import { rerenderNodesWithField } from '../../schema/propagate.js';
 import type { WriteLockManager } from '../../sync/write-lock.js';
@@ -13,7 +13,7 @@ const fieldTypeEnum = z.enum(['string', 'number', 'date', 'boolean', 'reference'
 export function registerUpdateGlobalField(server: McpServer, db: Database.Database, ctx?: { writeLock?: WriteLockManager; vaultPath?: string; syncLogger?: SyncLogger }): void {
   server.tool(
     'update-global-field',
-    'Updates an existing global field definition. For type changes, omit confirm to preview impact; set confirm=true to apply.',
+    'Updates an existing global field definition. For type changes, omit confirm to preview impact; set confirm=true to apply. If existing values cannot coerce to the new type, the apply is refused with CONFIRMATION_REQUIRED unless discard_uncoercible: true is also set.',
     {
       name: z.string().describe('Field name to update'),
       field_type: fieldTypeEnum.optional().describe('New field type (triggers type-change flow if different)'),
@@ -29,6 +29,7 @@ export function registerUpdateGlobalField(server: McpServer, db: Database.Databa
         enum_values: z.boolean().optional(),
       }).optional().describe('Per-property override permissions for schema claims'),
       confirm: z.boolean().optional().describe('Set true to apply a type change (otherwise previews impact)'),
+      discard_uncoercible: z.boolean().optional().describe('When applying a type change with uncoercible values, set true to delete those values. Default: refuse the change with CONFIRMATION_REQUIRED.'),
     },
     async ({ name, ...rest }) => {
       try {
@@ -36,13 +37,11 @@ export function registerUpdateGlobalField(server: McpServer, db: Database.Databa
 
         if (ctx?.vaultPath) {
           renderFieldsFile(db, ctx.vaultPath);
-          // Re-render schema files that have claims on this field
           const claimingSchemas = db.prepare('SELECT DISTINCT schema_name FROM schema_field_claims WHERE field = ?')
             .all(name) as Array<{ schema_name: string }>;
           for (const { schema_name } of claimingSchemas) {
             renderSchemaFile(db, ctx.vaultPath, schema_name);
           }
-          // If type change was confirmed, re-render affected nodes
           if (rest.confirm && rest.field_type && ctx.writeLock) {
             // Pass uncoercible node IDs so they get re-rendered even though
             // their node_fields rows for this field were deleted
@@ -54,6 +53,17 @@ export function registerUpdateGlobalField(server: McpServer, db: Database.Databa
 
         return ok(result);
       } catch (err) {
+        if (err instanceof TypeChangeRequiresDiscardError) {
+          return fail(
+            'CONFIRMATION_REQUIRED',
+            `${err.details.uncoercible.length} value(s) cannot coerce to the new type. Set discard_uncoercible: true to delete them, or omit confirm to preview.`,
+            { details: {
+                affected_nodes: err.details.affected_nodes,
+                coercible_count: err.details.coercible_count,
+                uncoercible: err.details.uncoercible,
+              } },
+          );
+        }
         return fail('INVALID_PARAMS', err instanceof Error ? err.message : String(err));
       }
     },

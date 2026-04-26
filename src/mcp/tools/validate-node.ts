@@ -130,6 +130,7 @@ export function registerValidateNode(server: McpServer, db: Database.Database): 
             resolved_order: ef.resolved_order,
             resolved_required: ef.resolved_required,
             resolved_default_value: ef.resolved_default_value,
+            default_source: ef.default_source,
             claiming_types: ef.claiming_types,
           };
         }

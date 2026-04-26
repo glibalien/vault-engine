@@ -1,5 +1,4 @@
-import type { ValidationIssue } from '../../validation/types.js';
-import type { ValidationIssueCode } from '../../validation/types.js';
+import type { ValidationIssue, ValidationIssueCode } from '../../validation/types.js';
 import type { ToolIssue, ToolIssueCode } from './title-warnings.js';
 
 export type ErrorCode =

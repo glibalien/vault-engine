@@ -14,6 +14,7 @@ describe('ok()', () => {
   });
 
   it('includes provided warnings', () => {
+    // The specific code is incidental; this test verifies envelope thread-through.
     const warnings = [{ code: 'DEPRECATED_PARAM' as const, message: 'm', severity: 'warning' as const }];
     const env = parseEnvelope(ok({ foo: 1 }, warnings));
     expect(env).toEqual({ ok: true, data: { foo: 1 }, warnings });
@@ -43,6 +44,7 @@ describe('fail()', () => {
   });
 
   it('includes warnings when provided', () => {
+    // The specific code is incidental; this test verifies envelope thread-through.
     const warnings = [{ code: 'DEPRECATED_PARAM' as const, message: 'm', severity: 'warning' as const }];
     const env = parseEnvelope(fail('INVALID_PARAMS', 'bad', { warnings }));
     expect(env.warnings).toEqual(warnings);

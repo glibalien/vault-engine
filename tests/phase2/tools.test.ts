@@ -181,6 +181,16 @@ describe('validate-node', () => {
     expect(priorityCoerced.changed).toBe(true);
     expect(priorityCoerced.value).toBe(5);
   });
+
+  it('exposes default_source on each effective field', async () => {
+    const handler = getToolHandler('validate-node');
+    const body = parseResult(await handler({ node_id: 'n1' }));
+    expect(body.ok).toBe(true);
+    const status = body.data.effective_fields.status;
+    expect(status).toBeDefined();
+    // No per-type override is configured in seedData, so the source is global.
+    expect(status.default_source).toBe('global');
+  });
 });
 
 describe('vault-stats orphan_count lifecycle', () => {

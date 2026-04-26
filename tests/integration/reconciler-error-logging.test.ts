@@ -63,4 +63,37 @@ describe('reconciler error logging', () => {
       chmodSync(bad, 0o644);
     }
   });
+
+  it('emits a console.error tagged [reconciler] when a per-file sweep throws', async () => {
+    const bad = join(vaultPath, 'unreadable.md');
+    writeFileSync(bad, '---\ntypes:\n---\n# X\n', 'utf-8');
+    chmodSync(bad, 0o000);
+
+    const errors: string[] = [];
+    const originalError = console.error;
+    console.error = (...args: unknown[]) => {
+      errors.push(args.map(a => (a instanceof Error ? a.message : String(a))).join(' '));
+    };
+
+    try {
+      const mutex = new IndexMutex();
+      const writeLock = new WriteLockManager();
+      const reconciler = startReconciler(
+        vaultPath,
+        db,
+        mutex,
+        writeLock,
+        undefined,
+        undefined,
+        { initialDelayMs: 10, intervalMs: 60_000 },
+      );
+      await new Promise(resolve => setTimeout(resolve, 150));
+      reconciler.stop();
+
+      expect(errors.some(line => line.includes('[reconciler]') && line.includes('unreadable.md'))).toBe(true);
+    } finally {
+      console.error = originalError;
+      chmodSync(bad, 0o644);
+    }
+  });
 });

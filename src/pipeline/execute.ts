@@ -167,17 +167,8 @@ export function executeMutation(
       // Track defaulted fields for edits log
       for (const [, cv] of Object.entries(validation.coerced_state)) {
         if (cv.source === 'defaulted') {
-          // Determine source
-          let source: 'global' | 'claim' = 'global';
-          for (const claims of claimsByType.values()) {
-            for (const c of claims) {
-              if (c.field === cv.field && c.default_value_override.kind === 'override') {
-                source = 'claim';
-                break;
-              }
-            }
-            if (source === 'claim') break;
-          }
+          const ef = validation.effective_fields.get(cv.field);
+          const source: 'global' | 'claim' = ef?.default_source ?? 'global';
           defaultedFields.push({ field: cv.field, default_value: cv.value, default_source: source });
         }
       }
@@ -234,16 +225,8 @@ export function executeMutation(
       // Track defaulted fields
       for (const [, cv] of Object.entries(validation.coerced_state)) {
         if (cv.source === 'defaulted') {
-          let source: 'global' | 'claim' = 'global';
-          for (const claims of claimsByType.values()) {
-            for (const c of claims) {
-              if (c.field === cv.field && c.default_value_override.kind === 'override') {
-                source = 'claim';
-                break;
-              }
-            }
-            if (source === 'claim') break;
-          }
+          const ef = validation.effective_fields.get(cv.field);
+          const source: 'global' | 'claim' = ef?.default_source ?? 'global';
           defaultedFields.push({ field: cv.field, default_value: cv.value, default_source: source });
         }
       }

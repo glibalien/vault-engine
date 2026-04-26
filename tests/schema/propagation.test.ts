@@ -82,6 +82,64 @@ describe('propagateSchemaChange — adoption', () => {
     expect(details.default_source).toBe('global');
   });
 
+  it("conflicting per-type default overrides cancel to global: adoption default_source='global'", () => {
+    // Two types both claim 'priority' with DIFFERENT default overrides. The
+    // cancellation rule means the effective default falls back to the global
+    // value and default_source must be 'global', not 'claim'.
+    //
+    // Bug: the old re-derivation loop in propagate.ts returned 'claim' the
+    // moment *any* override existed, ignoring cancellation. The fix reads
+    // ef.default_source from the already-computed mergeResult.effective_fields.
+    createGlobalField(db, {
+      name: 'priority',
+      field_type: 'string',
+      default_value: 'normal',
+      required: true,
+      overrides_allowed: { default_value: true },
+    });
+    // typeB claims priority with override 'low'
+    createSchemaDefinition(db, {
+      name: 'typeB',
+      field_claims: [{ field: 'priority', sort_order: 1000, default_value: 'low', default_value_overridden: true }],
+    });
+    // typeA starts with NO priority claim
+    createSchemaDefinition(db, { name: 'typeA', field_claims: [] });
+
+    // Create via normalizer source so defaults are NOT populated at creation time.
+    // This ensures propagation must handle the adoption itself.
+    const node = executeMutation(db, writeLock, vaultPath, {
+      source: 'normalizer',
+      node_id: null,
+      file_path: 'conflict.md',
+      title: 'Conflict',
+      types: ['typeA', 'typeB'],
+      fields: {},
+      body: '',
+    });
+
+    // Now add priority claim to typeA with override 'urgent' — conflicts with typeB's 'low'
+    const oldClaims: Array<{ field: string; sort_order?: number }> = [];
+    const newClaims = [{ field: 'priority', sort_order: 1000, default_value: 'urgent', default_value_overridden: true }];
+    updateSchemaDefinition(db, 'typeA', { field_claims: newClaims });
+    const diff = diffClaims(oldClaims, newClaims);
+
+    const result = propagateSchemaChange(db, writeLock, vaultPath, 'typeA', diff);
+
+    expect(result.defaults_populated).toBe(1);
+
+    // Field value must be the global default ('normal'), not either override
+    const field = db.prepare('SELECT value_text FROM node_fields WHERE node_id = ? AND field_name = ?')
+      .get(node.node_id, 'priority') as { value_text: string } | undefined;
+    expect(field?.value_text).toBe('normal');
+
+    // field-defaulted row must report default_source='global' (cancellation)
+    const logRow = db.prepare(
+      "SELECT details FROM edits_log WHERE node_id = ? AND event_type = 'field-defaulted' ORDER BY id DESC LIMIT 1",
+    ).get(node.node_id) as { details: string };
+    const details = readDetails(logRow);
+    expect(details.default_source).toBe('global');
+  });
+
   it('added non-required claim: no default populated, no field-defaulted row', () => {
     createGlobalField(db, { name: 'notes', field_type: 'string', default_value: 'n/a' });
     createSchemaDefinition(db, { name: 'task', field_claims: [] });

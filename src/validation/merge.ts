@@ -82,15 +82,18 @@ export function mergeFieldClaims(
 
     // --- Resolve default_value: cancellation on conflict ---
     let resolvedDefaultValue = globalField.default_value;
+    let defaultSource: 'global' | 'claim' = 'global';
     const defaultOverrides = claimEntries.filter(e => e.claim.default_value_override.kind === 'override');
     if (defaultOverrides.length > 0) {
       const first = JSON.stringify((defaultOverrides[0].claim.default_value_override as { kind: 'override'; value: unknown }).value);
       const allAgree = defaultOverrides.every(e =>
         JSON.stringify((e.claim.default_value_override as { kind: 'override'; value: unknown }).value) === first
       );
-      resolvedDefaultValue = allAgree
-        ? (defaultOverrides[0].claim.default_value_override as { kind: 'override'; value: unknown }).value
-        : globalField.default_value;
+      if (allAgree) {
+        resolvedDefaultValue = (defaultOverrides[0].claim.default_value_override as { kind: 'override'; value: unknown }).value;
+        defaultSource = 'claim';
+      }
+      // disagreement: keep globalField.default_value AND defaultSource='global'
     }
 
     // --- Resolve enum_values: per-type values ---
@@ -111,6 +114,7 @@ export function mergeFieldClaims(
       resolved_order: resolvedOrder,
       resolved_required: resolvedRequired,
       resolved_default_value: resolvedDefaultValue,
+      default_source: defaultSource,
       claiming_types: claimingTypes,
       per_type_enum_values: perTypeEnumValues,
     });

@@ -83,6 +83,7 @@ export function startReconciler(
           stats.indexed++;
         } catch (err) {
           const msg = err instanceof Error ? err.message : String(err);
+          console.error(`[reconciler] sweep error for ${relPath}: ${msg}`);
           db.prepare(
             'INSERT INTO edits_log (node_id, timestamp, event_type, details) VALUES (?, ?, ?, ?)',
           ).run(null, Date.now(), 'reconciler-error', `${relPath}: ${msg}`);
@@ -116,7 +117,9 @@ function walkDir(dir: string, vaultPath: string, results: Set<string>): void {
   let entries;
   try {
     entries = readdirSync(dir, { withFileTypes: true });
-  } catch {
+  } catch (err) {
+    const msg = err instanceof Error ? err.message : String(err);
+    console.error(`[reconciler] walkDir failed for ${dir}: ${msg}`);
     return;
   }
   for (const entry of entries) {

@@ -7,6 +7,7 @@ import {
   updateGlobalField,
   renameGlobalField,
   deleteGlobalField,
+  TypeChangeRequiresDiscardError,
 } from '../../src/global-fields/crud.js';
 
 let db: Database.Database;
@@ -247,12 +248,10 @@ describe('updateGlobalField', () => {
     expect(field!.field_type).toBe('string');
   });
 
-  it('type change with confirm applies coercion to node_fields', () => {
+  it('type change with confirm and all-coercible values applies coercion', () => {
     createGlobalField(db, { name: 'count', field_type: 'string' });
     insertNode('n1', '/n1.md');
     insertNodeField('n1', 'count', { value_text: '42' });
-    insertNode('n2', '/n2.md');
-    insertNodeField('n2', 'count', { value_text: 'not-a-number' });
 
     const result = updateGlobalField(db, 'count', {
       field_type: 'number',
@@ -262,24 +261,104 @@ describe('updateGlobalField', () => {
     expect(result.preview).toBe(false);
     expect(result.applied).toBe(true);
     expect(result.coercible!.length).toBe(1);
-    expect(result.uncoercible!.length).toBe(1);
+    expect(result.uncoercible!.length).toBe(0);
 
-    // global_fields updated
     const field = getGlobalField(db, 'count');
     expect(field!.field_type).toBe('number');
 
-    // n1: coerced to number
     const n1 = db.prepare(
       `SELECT value_number, value_text FROM node_fields WHERE node_id = 'n1' AND field_name = 'count'`,
     ).get() as { value_number: number | null; value_text: string | null };
     expect(n1.value_number).toBe(42);
     expect(n1.value_text).toBeNull();
+  });
 
-    // n2: uncoercible, removed from node_fields
+  it('type change with confirm and uncoercible values throws without discard_uncoercible flag — DB unchanged', () => {
+    createGlobalField(db, { name: 'count', field_type: 'string' });
+    insertNode('n1', '/n1.md');
+    insertNodeField('n1', 'count', { value_text: '42' });
+    insertNode('n2', '/n2.md');
+    insertNodeField('n2', 'count', { value_text: 'not-a-number' });
+
+    expect(() =>
+      updateGlobalField(db, 'count', { field_type: 'number', confirm: true }),
+    ).toThrow(TypeChangeRequiresDiscardError);
+
+    const field = getGlobalField(db, 'count');
+    expect(field!.field_type).toBe('string');
+
+    const n1 = db.prepare(
+      `SELECT value_text FROM node_fields WHERE node_id = 'n1' AND field_name = 'count'`,
+    ).get() as { value_text: string };
+    expect(n1.value_text).toBe('42');
     const n2 = db.prepare(
       `SELECT value_text FROM node_fields WHERE node_id = 'n2' AND field_name = 'count'`,
+    ).get() as { value_text: string };
+    expect(n2.value_text).toBe('not-a-number');
+
+    const editsCount = (
+      db.prepare(`SELECT COUNT(*) as c FROM edits_log WHERE event_type = 'value-removed'`).get() as { c: number }
+    ).c;
+    expect(editsCount).toBe(0);
+  });
+
+  it('TypeChangeRequiresDiscardError carries affected_nodes, coercible_count, and uncoercible array', () => {
+    createGlobalField(db, { name: 'count', field_type: 'string' });
+    insertNode('n1', '/n1.md');
+    insertNodeField('n1', 'count', { value_text: '42' });
+    insertNode('n2', '/n2.md');
+    insertNodeField('n2', 'count', { value_text: 'not-a-number' });
+
+    let caught: TypeChangeRequiresDiscardError | undefined;
+    try {
+      updateGlobalField(db, 'count', { field_type: 'number', confirm: true });
+    } catch (err) {
+      if (err instanceof TypeChangeRequiresDiscardError) caught = err;
+    }
+    expect(caught).toBeDefined();
+    expect(caught!.details.affected_nodes).toBe(2);
+    expect(caught!.details.coercible_count).toBe(1);
+    expect(caught!.details.uncoercible).toHaveLength(1);
+    expect(caught!.details.uncoercible[0].node_id).toBe('n2');
+    expect(caught!.details.uncoercible[0].value).toBe('not-a-number');
+  });
+
+  it('type change with confirm and discard_uncoercible:true applies and removes uncoercible row', () => {
+    createGlobalField(db, { name: 'count', field_type: 'string' });
+    insertNode('n1', '/n1.md');
+    insertNodeField('n1', 'count', { value_text: '42' });
+    insertNode('n2', '/n2.md');
+    insertNodeField('n2', 'count', { value_text: 'not-a-number' });
+
+    const result = updateGlobalField(db, 'count', {
+      field_type: 'number',
+      confirm: true,
+      discard_uncoercible: true,
+    });
+
+    expect(result.preview).toBe(false);
+    expect(result.applied).toBe(true);
+    expect(result.coercible!.length).toBe(1);
+    expect(result.uncoercible!.length).toBe(1);
+
+    const field = getGlobalField(db, 'count');
+    expect(field!.field_type).toBe('number');
+
+    const n1 = db.prepare(
+      `SELECT value_number FROM node_fields WHERE node_id = 'n1' AND field_name = 'count'`,
+    ).get() as { value_number: number };
+    expect(n1.value_number).toBe(42);
+
+    const n2 = db.prepare(
+      `SELECT * FROM node_fields WHERE node_id = 'n2' AND field_name = 'count'`,
     ).get();
     expect(n2).toBeUndefined();
+
+    const log = db
+      .prepare(`SELECT event_type, details FROM edits_log WHERE event_type = 'value-removed'`)
+      .get() as { event_type: string; details: string };
+    expect(log).toBeDefined();
+    expect(JSON.parse(log.details).removed_value).toBe('not-a-number');
   });
 
   it('rejects clearing enum_values on an enum field', () => {

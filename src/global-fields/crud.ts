@@ -28,6 +28,7 @@ export interface UpdateGlobalFieldInput {
   list_item_type?: FieldType;
   overrides_allowed?: { required?: boolean; default_value?: boolean; enum_values?: boolean };
   confirm?: boolean;
+  discard_uncoercible?: boolean;
 }
 
 export interface TypeChangeResult {
@@ -38,6 +39,23 @@ export interface TypeChangeResult {
   coercible?: Array<{ node_id: string; old_value: unknown; new_value: unknown }>;
   uncoercible?: Array<{ node_id: string; value: unknown; reason: string }>;
   would_orphan?: number;
+}
+
+export class TypeChangeRequiresDiscardError extends Error {
+  readonly details: {
+    affected_nodes: number;
+    coercible_count: number;
+    uncoercible: Array<{ node_id: string; value: unknown; reason: string }>;
+  };
+
+  constructor(details: TypeChangeRequiresDiscardError['details']) {
+    super(
+      `Type change would discard ${details.uncoercible.length} uncoercible value(s); ` +
+        `set discard_uncoercible: true to proceed`,
+    );
+    this.name = 'TypeChangeRequiresDiscardError';
+    this.details = details;
+  }
 }
 
 const VALID_FIELD_TYPES: Set<string> = new Set([
@@ -305,6 +323,16 @@ export function updateGlobalField(
       uncoercible,
       would_orphan: uncoercible.length,
     };
+  }
+
+  // Gate: refuse to discard uncoercible values without explicit opt-in.
+  // The operator must acknowledge data loss via discard_uncoercible: true.
+  if (uncoercible.length > 0 && !input.discard_uncoercible) {
+    throw new TypeChangeRequiresDiscardError({
+      affected_nodes: rows.length,
+      coercible_count: coercible.length,
+      uncoercible,
+    });
   }
 
   // Apply mode

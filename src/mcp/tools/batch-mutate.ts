@@ -58,7 +58,34 @@ const operationSchema = z.discriminatedUnion('op', [
 
 const paramsShape = {
   operations: z.array(operationSchema),
+  dry_run: z.boolean().default(false),
 };
+
+type WouldApplyEntry =
+  | { op: 'create'; node_id: string; file_path: string; title: string }
+  | {
+      op: 'update';
+      node_id: string;
+      file_path: string;
+      fields_changed: string[];
+      types_after?: string[];
+      body_changed: boolean;
+      title_changed: boolean;
+    }
+  | {
+      op: 'delete';
+      node_id: string;
+      file_path: string;
+      incoming_reference_count: number;
+      referencing_nodes: Array<{ node_id: string; title: string; file_path: string }>;
+    };
+
+class DryRunRollback extends Error {
+  constructor() {
+    super('DryRunRollback');
+    this.name = 'DryRunRollback';
+  }
+}
 
 export function registerBatchMutate(
   server: McpServer,
@@ -70,7 +97,7 @@ export function registerBatchMutate(
 ): void {
   server.tool(
     'batch-mutate',
-    'Execute multiple mutation operations atomically. All operations succeed or all roll back. Rename is not supported in batch. Create ops use schema default_directory when directory is omitted — pass override_default_directory: true to place elsewhere. The legacy path alias is deprecated; use directory.',
+    'Execute multiple mutation operations atomically. All operations succeed or all roll back. Rename is not supported in batch. Create ops use schema default_directory when directory is omitted — pass override_default_directory: true to place elsewhere. The legacy path alias is deprecated; use directory. Use dry_run: true to preview the entire batch atomically (composed effects via SAVEPOINT-style rollback) without applying.',
     paramsShape,
     async (params) => {
       const results: Array<{ op: string; node_id: string; file_path: string }> = [];
@@ -86,10 +113,13 @@ export function registerBatchMutate(
 
       let batchError: { failed_at: number; op: string; message: string; details: Record<string, unknown> } | null = null as { failed_at: number; op: string; message: string; details: Record<string, unknown> } | null;
 
-      const operation_id = createOperation(db, {
+      const dryRun = params.dry_run;
+      const operation_id: string | undefined = dryRun ? undefined : createOperation(db, {
         source_tool: 'batch-mutate',
         description: `batch-mutate: ${params.operations.length} ops (${countKinds(params.operations)})`,
       });
+
+      const would_apply: WouldApplyEntry[] = [];
 
       const txn = db.transaction(() => {
         for (let i = 0; i < params.operations.length; i++) {
@@ -146,9 +176,18 @@ export function registerBatchMutate(
                 types,
                 fields,
                 body,
-              }, syncLogger, { operation_id });
-              if (result.file_written) createdFiles.push(absPath);
+                ...(dryRun ? { db_only: true } : {}),
+              }, syncLogger, operation_id ? { operation_id } : undefined);
+              if (!dryRun && result.file_written) createdFiles.push(absPath);
               results.push({ op: 'create', node_id: result.node_id, file_path: result.file_path });
+              if (dryRun) {
+                would_apply.push({
+                  op: 'create',
+                  node_id: result.node_id,
+                  file_path: result.file_path,
+                  title,
+                });
+              }
 
             } else if (op === 'update') {
               const resolved = resolveNodeIdentity(db, {
@@ -161,9 +200,11 @@ export function registerBatchMutate(
               const { node } = resolved;
               const absPath = join(vaultPath, node.file_path);
 
-              // Back up the existing file before mutation
-              const bp = backupFile(absPath, tmpDir);
-              if (bp) backups.push({ filePath: absPath, backupPath: bp });
+              // Back up the existing file before mutation (skip in dry-run — file is never written)
+              if (!dryRun) {
+                const bp = backupFile(absPath, tmpDir);
+                if (bp) backups.push({ filePath: absPath, backupPath: bp });
+              }
 
               const currentTypes = (db.prepare('SELECT schema_type FROM node_types WHERE node_id = ?')
                 .all(node.node_id) as Array<{ schema_type: string }>).map(t => t.schema_type);
@@ -225,8 +266,34 @@ export function registerBatchMutate(
                 types: finalTypes,
                 fields: finalFields,
                 body: finalBody,
-              }, syncLogger, { operation_id });
+                ...(dryRun ? { db_only: true } : {}),
+              }, syncLogger, operation_id ? { operation_id } : undefined);
               results.push({ op: 'update', node_id: result.node_id, file_path: result.file_path });
+
+              if (dryRun) {
+                // Compute change-indicators by diffing against pre-update DB state we already loaded.
+                const fields_changed: string[] = [];
+                const allKeys = new Set([
+                  ...Object.keys(currentFields),
+                  ...Object.keys(finalFields),
+                ]);
+                for (const k of allKeys) {
+                  const before = currentFields[k];
+                  const after = finalFields[k];
+                  if (JSON.stringify(before) !== JSON.stringify(after)) fields_changed.push(k);
+                }
+                const typesChanged = JSON.stringify([...currentTypes].sort()) !== JSON.stringify([...finalTypes].sort());
+                const entry: WouldApplyEntry = {
+                  op: 'update',
+                  node_id: result.node_id,
+                  file_path: result.file_path,
+                  fields_changed,
+                  body_changed: finalBody !== currentBody,
+                  title_changed: (opParams.set_title ?? node.title) !== node.title,
+                };
+                if (typesChanged) entry.types_after = finalTypes;
+                would_apply.push(entry);
+              }
 
             } else if (op === 'delete') {
               const resolved = resolveNodeIdentity(db, {
@@ -239,19 +306,44 @@ export function registerBatchMutate(
               const { node } = resolved;
               const absPath = join(vaultPath, node.file_path);
 
-              // Back up the file before deleting
-              const bp = backupFile(absPath, tmpDir);
-              if (bp) backups.push({ filePath: absPath, backupPath: bp });
+              // Back up the file before deleting (skip in dry-run — file is never unlinked)
+              if (!dryRun) {
+                const bp = backupFile(absPath, tmpDir);
+                if (bp) backups.push({ filePath: absPath, backupPath: bp });
+              }
+
+              let preview_refs: { count: number; nodes: Array<{ node_id: string; title: string; file_path: string }> } | undefined;
+              if (dryRun) {
+                const incomingCount = (db.prepare(
+                  'SELECT COUNT(*) as c FROM relationships WHERE target = ? OR target = ?'
+                ).get(node.title, node.file_path) as { c: number }).c;
+                const incomingRows = db.prepare(`
+                  SELECT r.source_id as node_id, n.title, n.file_path
+                  FROM relationships r JOIN nodes n ON n.id = r.source_id
+                  WHERE r.target = ? OR r.target = ?
+                  LIMIT 10
+                `).all(node.title, node.file_path) as Array<{ node_id: string; title: string; file_path: string }>;
+                preview_refs = { count: incomingCount, nodes: incomingRows };
+              }
 
               executeDeletion(db, writeLock, vaultPath, {
                 source: 'batch',
                 node_id: node.node_id,
                 file_path: node.file_path,
-                unlink_file: true,
-              }, { operation_id });
-              deletedNodeIds.push(node.node_id);
+                unlink_file: !dryRun,
+              }, operation_id ? { operation_id } : undefined);
+              if (!dryRun) deletedNodeIds.push(node.node_id);
 
               results.push({ op: 'delete', node_id: node.node_id, file_path: node.file_path });
+              if (dryRun && preview_refs) {
+                would_apply.push({
+                  op: 'delete',
+                  node_id: node.node_id,
+                  file_path: node.file_path,
+                  incoming_reference_count: preview_refs.count,
+                  referencing_nodes: preview_refs.nodes,
+                });
+              }
             }
           } catch (err) {
             if (err instanceof PipelineError) {
@@ -270,6 +362,7 @@ export function registerBatchMutate(
           }
         }
 
+        if (dryRun) throw new DryRunRollback();
         return results;
       });
 
@@ -282,8 +375,35 @@ export function registerBatchMutate(
             embeddingIndexer?.removeNode(nodeId);
           }
           return ok({ applied: true, results: applied }, deprecationWarnings);
-        } catch {
-          // DB transaction rolled back. Now revert file writes.
+        } catch (err) {
+          // Dry-run paths: both successful preview (sentinel) and mid-batch failure.
+          if (dryRun) {
+            // No file restoration needed: backups[] and createdFiles[] are empty under dry_run gating.
+            if (err instanceof DryRunRollback) {
+              return ok({
+                dry_run: true,
+                op_count: params.operations.length,
+                would_apply,
+              }, deprecationWarnings);
+            }
+            // Real op failure inside dry-run txn.
+            if (batchError) {
+              return ok({
+                dry_run: true,
+                failed_at: batchError.failed_at,
+                op: batchError.op,
+                message: batchError.message,
+                would_apply,
+              }, deprecationWarnings);
+            }
+            return ok({
+              dry_run: true,
+              op_count: params.operations.length,
+              would_apply,
+            }, deprecationWarnings);
+          }
+
+          // Live-path rollback: DB transaction rolled back. Now revert file writes.
           const rollbackFailures: string[] = [];
 
           // 1. Restore backed-up files (updates and deletes)
@@ -323,7 +443,7 @@ export function registerBatchMutate(
           return fail('INTERNAL_ERROR', 'Batch operation failed', { warnings: deprecationWarnings });
         }
       } finally {
-        finalizeOperation(db, operation_id);
+        if (operation_id) finalizeOperation(db, operation_id);
       }
     },
   );

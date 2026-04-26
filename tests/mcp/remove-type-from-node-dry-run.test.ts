@@ -73,6 +73,25 @@ describe('remove-type-from-node dry_run', () => {
     expect(types.sort()).toEqual(['a', 'b']);
   });
 
+  it('dry_run: true wins over confirm: true (still previews, no mutation)', async () => {
+    createSchemaDefinition(db, { name: 'a', field_claims: [] });
+    createSchemaDefinition(db, { name: 'b', field_claims: [] });
+    const created = executeMutation(db, writeLock, vaultPath, {
+      source: 'tool', node_id: null, file_path: 'W.md',
+      title: 'W', types: ['a', 'b'], fields: {}, body: '',
+    });
+    const handler = getHandler();
+    const result = parseResult(await handler({
+      node_id: created.node_id, type: 'a',
+      dry_run: true, confirm: true,
+    }));
+
+    expect(result.ok).toBe(true);
+    expect(result.data?.dry_run).toBe(true);
+    const types = (db.prepare('SELECT schema_type FROM node_types WHERE node_id = ?').all(created.node_id) as Array<{ schema_type: string }>).map(t => t.schema_type);
+    expect(types.sort()).toEqual(['a', 'b']);
+  });
+
   it('dry_run: true on last-type emits LAST_TYPE_REMOVAL warning', async () => {
     createSchemaDefinition(db, { name: 'a', field_claims: [] });
     const created = executeMutation(db, writeLock, vaultPath, {

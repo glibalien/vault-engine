@@ -43,6 +43,8 @@ export function registerUpdateGlobalField(server: McpServer, db: Database.Databa
             renderSchemaFile(db, ctx.vaultPath, schema_name);
           }
           if (rest.confirm && rest.field_type && ctx.writeLock) {
+            // Pass uncoercible node IDs so they get re-rendered even though
+            // their node_fields rows for this field were deleted
             const uncoercibleIds = result.uncoercible?.map(u => u.node_id);
             const nodes_rerendered = rerenderNodesWithField(db, ctx.writeLock, ctx.vaultPath, name, uncoercibleIds, ctx.syncLogger);
             return ok({ ...result, nodes_rerendered });

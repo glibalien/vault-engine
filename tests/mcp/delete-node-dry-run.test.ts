@@ -1,5 +1,5 @@
 import { describe, it, expect, beforeEach, afterEach } from 'vitest';
-import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
+import type { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import Database from 'better-sqlite3';
 import { existsSync } from 'node:fs';
 import { join } from 'node:path';
@@ -15,7 +15,6 @@ let db: Database.Database;
 let vaultPath: string;
 let cleanup: () => void;
 let writeLock: WriteLockManager;
-let server: McpServer;
 
 interface Response {
   ok: boolean;
@@ -24,16 +23,20 @@ interface Response {
   warnings: Array<{ code: string; message: string; severity?: string }>;
 }
 
-// The MCP SDK handler does not run Zod parsing when called directly, so we
-// must supply all params that have defaults explicitly. referencing_nodes_limit
-// defaults to 20 in the schema — pass it here so the SQL LIMIT is always a
-// number, not undefined.
-async function callTool(name: string, args: Record<string, unknown>): Promise<Response> {
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any
-  const tool = (server as any)._registeredTools[name];
-  if (!tool) throw new Error(`Tool ${name} not registered`);
-  const raw = await tool.handler(args) as { content: Array<{ type: string; text: string }> };
-  return JSON.parse(raw.content[0].text) as Response;
+function parseResult(result: unknown): Response {
+  const r = result as { content: Array<{ type: string; text: string }> };
+  return JSON.parse(r.content[0].text) as Response;
+}
+
+function getHandler() {
+  let captured: (args: Record<string, unknown>) => Promise<unknown>;
+  const fakeServer = {
+    tool: (_n: string, _d: string, _s: unknown, h: (...a: unknown[]) => unknown) => {
+      captured = (args) => h(args) as Promise<unknown>;
+    },
+  } as unknown as McpServer;
+  registerDeleteNode(fakeServer, db, writeLock, vaultPath);
+  return captured!;
 }
 
 beforeEach(() => {
@@ -44,9 +47,7 @@ beforeEach(() => {
   createSchema(db);
   addUndoTables(db);
   writeLock = new WriteLockManager();
-  server = new McpServer({ name: 'test', version: '0' });
   createSchemaDefinition(db, { name: 'note', field_claims: [] });
-  registerDeleteNode(server, db, writeLock, vaultPath);
 });
 
 afterEach(() => { db.close(); cleanup(); });
@@ -57,18 +58,18 @@ describe('delete-node dry_run', () => {
       source: 'tool', node_id: null, file_path: 'A.md',
       title: 'A', types: ['note'], fields: {}, body: '',
     });
-    const result = await callTool('delete-node', {
+    const handler = getHandler();
+    const result = parseResult(await handler({
       node_id: created.node_id,
       dry_run: true,
       confirm: false,
       referencing_nodes_limit: 20,
-    });
+    }));
 
     expect(result.ok).toBe(true);
     expect(result.data?.dry_run).toBe(true);
     expect(result.data?.node_id).toBe(created.node_id);
     expect(result.data?.file_path).toBe('A.md');
-    // Side-effect checks: file present, DB row present, no undo op recorded.
     expect(existsSync(join(vaultPath, 'A.md'))).toBe(true);
     const dbRow = db.prepare('SELECT id FROM nodes WHERE id = ?').get(created.node_id);
     expect(dbRow).toBeDefined();
@@ -81,12 +82,13 @@ describe('delete-node dry_run', () => {
       source: 'tool', node_id: null, file_path: 'B.md',
       title: 'B', types: ['note'], fields: {}, body: '',
     });
-    const result = await callTool('delete-node', {
+    const handler = getHandler();
+    const result = parseResult(await handler({
       node_id: created.node_id,
       dry_run: true,
       confirm: true,
       referencing_nodes_limit: 20,
-    });
+    }));
 
     expect(result.ok).toBe(true);
     expect(result.data?.dry_run).toBe(true);
@@ -98,22 +100,25 @@ describe('delete-node dry_run', () => {
       source: 'tool', node_id: null, file_path: 'C.md',
       title: 'C', types: ['note'], fields: {}, body: '',
     });
-    // confirm:false → existing preview shape (no dry_run field)
-    const previewResult = await callTool('delete-node', {
+    const handler = getHandler();
+    // confirm:false (with dry_run:false explicit) → existing preview shape, no dry_run field
+    const previewResult = parseResult(await handler({
       node_id: created.node_id,
+      dry_run: false,
       confirm: false,
       referencing_nodes_limit: 20,
-    });
+    }));
     expect(previewResult.ok).toBe(true);
     expect(previewResult.data?.dry_run).toBeUndefined();
     expect(previewResult.data?.preview).toBe(true);
 
     // confirm:true → actual deletion
-    const deleteResult = await callTool('delete-node', {
+    const deleteResult = parseResult(await handler({
       node_id: created.node_id,
+      dry_run: false,
       confirm: true,
       referencing_nodes_limit: 20,
-    });
+    }));
     expect(deleteResult.ok).toBe(true);
     expect(deleteResult.data?.deleted).toBe(true);
     expect(existsSync(join(vaultPath, 'C.md'))).toBe(false);

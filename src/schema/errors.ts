@@ -6,7 +6,7 @@
 import type { ValidationIssueCode } from '../validation/types.js';
 
 // ClaimValidationReason is the outward-facing reason enum. It collapses the
-// pipeline's fine-grained IssueCode set into reasons that are meaningful to a
+// pipeline's fine-grained ValidationIssueCode set into reasons that are meaningful to a
 // schema-change caller (e.g., COERCION_FAILED + TYPE_MISMATCH both surface as
 // TYPE_MISMATCH).
 export type ClaimValidationReason =

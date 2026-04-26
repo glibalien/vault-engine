@@ -7,7 +7,7 @@ import { existsSync } from 'node:fs';
 import { join } from 'node:path';
 import { safeVaultPath } from '../../pipeline/safe-path.js';
 import { ok, fail, adaptIssue } from './errors.js';
-import { checkTitleSafety, checkBodyFrontmatter, sanitizeFilename } from './title-warnings.js';
+import { checkTitleSafety, checkBodyFrontmatter, sanitizeFilename, type ToolIssue } from './title-warnings.js';
 import { executeMutation } from '../../pipeline/execute.js';
 import { PipelineError } from '../../pipeline/types.js';
 import type { WriteLockManager } from '../../sync/write-lock.js';
@@ -89,7 +89,7 @@ export function registerCreateNode(
       // ── Compute warnings ────────────────────────────────────────
       const titleIssues = checkTitleSafety(title);
       const bodyIssues = checkBodyFrontmatter(body);
-      const sanitizeIssues = sanitize.sanitized
+      const sanitizeIssues: ToolIssue[] = sanitize.sanitized
         ? [{
             code: 'TITLE_FILENAME_SANITIZED',
             message: `Title contains path-separator characters; replaced with '-' in filename: ${sanitize.characters.join(' ')}`,

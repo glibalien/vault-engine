@@ -125,7 +125,8 @@ describe('query-count discipline', () => {
     // Wrap db.prepare to count statement executions
     let queryCount = 0;
     const originalPrepare = db.prepare.bind(db);
-    db.prepare = (...args: Parameters<typeof db.prepare>) => {
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    db.prepare = (...args: Parameters<typeof db.prepare>): any => {
       const stmt = originalPrepare(...args);
       const originalGet = stmt.get.bind(stmt);
       const originalAll = stmt.all.bind(stmt);

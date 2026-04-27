@@ -2,26 +2,30 @@ import { describe, it, expect } from 'vitest';
 import type { ValidationResult, EffectiveField, GlobalFieldDefinition } from '../../src/validation/types.js';
 import { defaultedFieldsFrom } from '../../src/validation/validate.js';
 
-function makeEffectiveField(overrides: Partial<EffectiveField> = {}): EffectiveField {
-  const gf: GlobalFieldDefinition = {
-    name: 'f',
+// The helper only reads default_source from EffectiveField. The fixture
+// asserts the real interface shape via Partial<EffectiveField>, so a future
+// rename of an EffectiveField property surfaces here at compile time rather
+// than being silently shed by an as-cast.
+function makeEffectiveField(field: string, overrides: Partial<EffectiveField> = {}): EffectiveField {
+  const global_field: GlobalFieldDefinition = {
+    name: field,
     field_type: 'string',
     required: true,
     default_value: 'g',
     overrides_allowed: { required: false, default_value: false, enum_values: false },
   } as GlobalFieldDefinition;
-  return {
-    field_name: 'f',
-    global_field: gf,
+  const base: Partial<EffectiveField> = {
+    field,
+    global_field,
+    resolved_label: null,
+    resolved_description: null,
+    resolved_order: 0,
     resolved_required: true,
     resolved_default_value: 'g',
-    resolved_enum_values: null,
-    resolved_order: 0,
     default_source: 'global',
-    default_value_overridden: false,
     claiming_types: ['T'],
-    ...overrides,
-  } as EffectiveField;
+  };
+  return { ...base, ...overrides } as EffectiveField;
 }
 
 describe('defaultedFieldsFrom', () => {
@@ -40,7 +44,7 @@ describe('defaultedFieldsFrom', () => {
   });
 
   it("extracts defaulted entries with default_source from effective_fields", () => {
-    const ef = makeEffectiveField({ field_name: 'priority', default_source: 'claim' });
+    const ef = makeEffectiveField('priority', { default_source: 'claim' });
     const result: ValidationResult = {
       valid: true,
       effective_fields: new Map([['priority', ef]]),

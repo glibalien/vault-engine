@@ -555,6 +555,21 @@ function computeNewTypes(currentTypes: string[], ops: QueryModeOps): string[] {
   return types;
 }
 
+function countAlreadyPresentAddTypes(currentTypes: string[], addTypes: string[] | undefined): number {
+  if (!addTypes) return 0;
+  return addTypes.filter(t => currentTypes.includes(t)).length;
+}
+
+function buildAddTypeConflictWarning(count: number): Issue | undefined {
+  if (count <= 0) return undefined;
+  return {
+    code: 'TYPE_OP_CONFLICT',
+    severity: 'warning',
+    message: `${count} (node, type) combination(s) in add_types were already present — no-op for those.`,
+    details: { count },
+  };
+}
+
 function computeNewFields(currentFields: Record<string, unknown>, ops: QueryModeOps): Record<string, unknown> {
   const finalFields = { ...currentFields };
   if (ops.set_fields) {
@@ -643,10 +658,12 @@ function handleDryRun(
   let wouldUpdate = 0;
   let wouldSkip = 0;
   let wouldFail = 0;
+  let alreadyPresentAddTypes = 0;
 
   for (let i = 0; i < matchedNodes.length; i++) {
     const node = matchedNodes[i];
     const { types: currentTypes, fields: currentFields } = loadNodeState(db, node.id);
+    alreadyPresentAddTypes += countAlreadyPresentAddTypes(currentTypes, ops.add_types);
     const newTypes = computeNewTypes(currentTypes, ops);
     const newFields = computeNewFields(currentFields, ops);
 
@@ -707,6 +724,8 @@ function handleDryRun(
 
   const warnings: Issue[] = [];
   if (joinWarning) warnings.push(joinWarning);
+  const conflictWarning = buildAddTypeConflictWarning(alreadyPresentAddTypes);
+  if (conflictWarning) warnings.push(conflictWarning);
   return ok(
     {
       dry_run: true,
@@ -733,10 +752,12 @@ function handleExecution(
 ) {
   let updated = 0;
   let skipped = 0;
+  let alreadyPresentAddTypes = 0;
   const errors: Array<{ node_id: string; file_path: string; error: string }> = [];
 
   for (const node of matchedNodes) {
     const { types: currentTypes, fields: currentFields } = loadNodeState(db, node.id);
+    alreadyPresentAddTypes += countAlreadyPresentAddTypes(currentTypes, ops.add_types);
     const newTypes = computeNewTypes(currentTypes, ops);
     const newFields = computeNewFields(currentFields, ops);
 
@@ -826,6 +847,9 @@ function handleExecution(
     }
   }
 
+  const warnings: Issue[] = [];
+  const conflictWarning = buildAddTypeConflictWarning(alreadyPresentAddTypes);
+  if (conflictWarning) warnings.push(conflictWarning);
   return ok({
     dry_run: false,
     batch_id: batchId,
@@ -833,5 +857,5 @@ function handleExecution(
     updated,
     skipped,
     errors,
-  });
+  }, warnings);
 }

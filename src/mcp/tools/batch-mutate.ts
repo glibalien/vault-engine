@@ -8,6 +8,7 @@ import { join } from 'node:path';
 import { safeVaultPath } from '../../pipeline/safe-path.js';
 import { resolveDirectory } from '../../schema/paths.js';
 import { ok, fail, adaptIssue, type Issue } from './errors.js';
+import { checkTitleSafety, checkBodyFrontmatter, sanitizeFilename } from './title-warnings.js';
 import { resolveNodeIdentity } from './resolve-identity.js';
 import { executeMutation } from '../../pipeline/execute.js';
 import { PipelineError } from '../../pipeline/types.js';
@@ -102,7 +103,7 @@ export function registerBatchMutate(
     async (params) => {
       const results: Array<{ op: string; node_id: string; file_path: string }> = [];
       const tmpDir = join(vaultPath, '.vault-engine', 'tmp');
-      const deprecationWarnings: Issue[] = [];
+      const warnings: Issue[] = [];
 
       // Track file state for rollback: files that existed before (backed up)
       // and files that were created new (to be deleted on rollback)
@@ -142,7 +143,7 @@ export function registerBatchMutate(
               let directoryParam = opParams.directory;
               if (opParams.path !== undefined && opParams.directory === undefined) {
                 directoryParam = opParams.path;
-                deprecationWarnings.push({
+                warnings.push({
                   severity: 'warning',
                   code: 'DEPRECATED_PARAM',
                   message: "Param 'path' is deprecated in batch-mutate create; use 'directory' instead.",
@@ -160,7 +161,18 @@ export function registerBatchMutate(
               const dirResult = resolveDirectory(db, { types, directory: directoryParam, override_default_directory });
               if (!dirResult.ok) throw new PipelineError(dirResult.code, dirResult.message);
 
-              const filePath = dirResult.directory ? `${dirResult.directory}/${title}.md` : `${title}.md`;
+              const sanitize = sanitizeFilename(`${title}.md`);
+              if (sanitize.sanitized) {
+                warnings.push(adaptIssue({
+                  code: 'TITLE_FILENAME_SANITIZED',
+                  message: `Title contains path-separator characters; replaced with '-' in filename: ${sanitize.characters.join(' ')}`,
+                  characters: sanitize.characters,
+                }));
+              }
+              for (const issue of checkTitleSafety(title)) warnings.push(adaptIssue(issue));
+              for (const issue of checkBodyFrontmatter(body)) warnings.push(adaptIssue(issue));
+
+              const filePath = dirResult.directory ? `${dirResult.directory}/${sanitize.filename}` : sanitize.filename;
               const absPath = safeVaultPath(vaultPath, filePath);
 
               const existing = db.prepare('SELECT id FROM nodes WHERE file_path = ?').get(filePath);
@@ -374,7 +386,7 @@ export function registerBatchMutate(
           for (const nodeId of deletedNodeIds) {
             embeddingIndexer?.removeNode(nodeId);
           }
-          return ok({ applied: true, results: applied }, deprecationWarnings);
+          return ok({ applied: true, results: applied }, warnings);
         } catch (err) {
           // Dry-run paths: both successful preview (sentinel) and mid-batch failure.
           if (dryRun) {
@@ -384,7 +396,7 @@ export function registerBatchMutate(
                 dry_run: true,
                 op_count: params.operations.length,
                 would_apply,
-              }, deprecationWarnings);
+              }, warnings);
             }
             // Real op failure inside dry-run txn.
             if (batchError) {
@@ -394,9 +406,9 @@ export function registerBatchMutate(
                 op: batchError.op,
                 message: batchError.message,
                 would_apply,
-              }, deprecationWarnings);
+              }, warnings);
             }
-            return fail('INTERNAL_ERROR', err instanceof Error ? err.message : 'Batch dry-run failed', { warnings: deprecationWarnings });
+            return fail('INTERNAL_ERROR', err instanceof Error ? err.message : 'Batch dry-run failed', { warnings: warnings });
           }
 
           // Live-path rollback: DB transaction rolled back. Now revert file writes.
@@ -434,9 +446,9 @@ export function registerBatchMutate(
             }
             // Surface DEPRECATED_PARAM warnings even on failure — a caller using a
             // deprecated param should see the warning regardless of whether the op succeeded.
-            return fail('BATCH_FAILED', batchError.message, { details, warnings: deprecationWarnings });
+            return fail('BATCH_FAILED', batchError.message, { details, warnings: warnings });
           }
-          return fail('INTERNAL_ERROR', 'Batch operation failed', { warnings: deprecationWarnings });
+          return fail('INTERNAL_ERROR', 'Batch operation failed', { warnings: warnings });
         }
       } finally {
         if (operation_id) finalizeOperation(db, operation_id);

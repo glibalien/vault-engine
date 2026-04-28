@@ -83,10 +83,11 @@ describe('add-type-to-node — field-defaulted edits-log emission', () => {
     expect(response.ok).toBe(true);
     expect(response.data?.added_fields).toEqual(['category']);
 
-    const row = db.prepare(
-      "SELECT details FROM edits_log WHERE node_id = ? AND event_type = 'field-defaulted' ORDER BY id DESC LIMIT 1"
-    ).get(nodeId) as { details: string };
-    const details = JSON.parse(row.details);
+    const rows = db.prepare(
+      "SELECT details FROM edits_log WHERE node_id = ? AND event_type = 'field-defaulted' ORDER BY id ASC"
+    ).all(nodeId) as Array<{ details: string }>;
+    expect(rows).toHaveLength(1);
+    const details = JSON.parse(rows[0].details);
     expect(details.source).toBe('tool');
     expect(details.field).toBe('category');
     expect(details.default_value).toBe('general');
@@ -121,10 +122,11 @@ describe('add-type-to-node — field-defaulted edits-log emission', () => {
     const response = parseResult(await handler({ node_id: nodeId, type: 'Urgent' }));
     expect(response.ok).toBe(true);
 
-    const row = db.prepare(
-      "SELECT details FROM edits_log WHERE node_id = ? AND event_type = 'field-defaulted' ORDER BY id DESC LIMIT 1"
-    ).get(nodeId) as { details: string };
-    const details = JSON.parse(row.details);
+    const rows = db.prepare(
+      "SELECT details FROM edits_log WHERE node_id = ? AND event_type = 'field-defaulted' ORDER BY id ASC"
+    ).all(nodeId) as Array<{ details: string }>;
+    expect(rows).toHaveLength(1);
+    const details = JSON.parse(rows[0].details);
     expect(details.source).toBe('tool');
     expect(details.field).toBe('priority');
     expect(details.default_value).toBe('high');

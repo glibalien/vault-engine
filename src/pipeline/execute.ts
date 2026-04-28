@@ -8,7 +8,7 @@ import { statSync } from 'node:fs';
 import { safeVaultPath } from './safe-path.js';
 import type Database from 'better-sqlite3';
 import { nanoid } from 'nanoid';
-import { validateProposedState } from '../validation/validate.js';
+import { validateProposedState, defaultedFieldsFrom } from '../validation/validate.js';
 import type { CoercedValue, ValidationResult, EffectiveFieldSet, ConflictedFieldSet } from '../validation/types.js';
 import { renderNode } from '../renderer/render.js';
 import type { RenderInput, FieldOrderEntry } from '../renderer/types.js';
@@ -143,8 +143,6 @@ export function executeMutation(
     let finalFields: Record<string, unknown>;
     let finalRawFieldTexts: Record<string, string> = {};
     const retainedValues: Record<string, { retained_value: unknown; rejected_value: unknown }> = {};
-    const defaultedFields: Array<{ field: string; default_value: unknown; default_source: 'global' | 'claim' }> = [];
-
     if (mutation.source === 'tool' || mutation.source === 'normalizer' || mutation.source === 'propagation' || mutation.source === 'undo') {
       // Tool path: check for blocking errors. Normalizer, propagation, and undo
       // also tolerate REQUIRED_MISSING since they re-render / restore DB state
@@ -164,14 +162,6 @@ export function executeMutation(
         finalFields[fieldName] = cv.value;
       }
 
-      // Track defaulted fields for edits log
-      for (const [, cv] of Object.entries(validation.coerced_state)) {
-        if (cv.source === 'defaulted') {
-          const ef = validation.effective_fields.get(cv.field);
-          const source: 'global' | 'claim' = ef?.default_source ?? 'global';
-          defaultedFields.push({ field: cv.field, default_value: cv.value, default_source: source });
-        }
-      }
     } else {
       // Watcher path: absorb what we can
       finalFields = {};
@@ -222,15 +212,9 @@ export function executeMutation(
         }
       }
 
-      // Track defaulted fields
-      for (const [, cv] of Object.entries(validation.coerced_state)) {
-        if (cv.source === 'defaulted') {
-          const ef = validation.effective_fields.get(cv.field);
-          const source: 'global' | 'claim' = ef?.default_source ?? 'global';
-          defaultedFields.push({ field: cv.field, default_value: cv.value, default_source: source });
-        }
-      }
     }
+
+    const defaultedFields = defaultedFieldsFrom(validation);
 
     // ── Stage 4: Compute final state → RenderInput ──────────────────
     const effectiveFields = validation.effective_fields;

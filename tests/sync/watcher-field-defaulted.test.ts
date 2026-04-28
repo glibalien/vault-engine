@@ -73,6 +73,7 @@ describe('watcher — field-defaulted emission', () => {
       'utf-8',
     );
     await delay(DEBOUNCE_MS + MAX_WAIT_MS + 200);
+    await mutex.onIdle();
 
     const node = db.prepare('SELECT id FROM nodes WHERE file_path = ?')
       .get('new-doc.md') as { id: string } | undefined;
@@ -82,7 +83,7 @@ describe('watcher — field-defaulted emission', () => {
     const rows = db.prepare(
       "SELECT details FROM edits_log WHERE node_id = ? AND event_type = 'field-defaulted'"
     ).all(node.id) as Array<{ details: string }>;
-    expect(rows.length).toBeGreaterThan(0);
+    expect(rows).toHaveLength(1);
 
     const details = JSON.parse(rows[0].details);
     expect(details.source).toBe('watcher');
@@ -98,6 +99,7 @@ describe('watcher — field-defaulted emission', () => {
       'utf-8',
     );
     await delay(DEBOUNCE_MS + MAX_WAIT_MS + 200);
+    await mutex.onIdle();
 
     const node = db.prepare('SELECT id FROM nodes WHERE file_path = ?')
       .get('already-set.md') as { id: string } | undefined;

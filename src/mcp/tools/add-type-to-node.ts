@@ -7,17 +7,14 @@ import { ok, fail, adaptIssue } from './errors.js';
 import { resolveNodeIdentity } from './resolve-identity.js';
 import { executeMutation } from '../../pipeline/execute.js';
 import { PipelineError } from '../../pipeline/types.js';
-import { populateDefaults } from '../../pipeline/populate-defaults.js';
 import { reconstructValue } from '../../pipeline/classify-value.js';
-import { writeEditsLogEntries } from '../../pipeline/edits-log.js';
-import type { EditsLogEntry } from '../../pipeline/edits-log.js';
 import type { WriteLockManager } from '../../sync/write-lock.js';
 import type { SyncLogger } from '../../sync/sync-logger.js';
 import { checkTypesHaveSchemas } from '../../pipeline/check-types.js';
 import { buildFixable } from '../../validation/fixable.js';
 import { createOperation, finalizeOperation } from '../../undo/operation.js';
 import { loadSchemaContext } from '../../pipeline/schema-context.js';
-import { validateProposedState } from '../../validation/validate.js';
+import { validateProposedState, defaultedFieldsFrom } from '../../validation/validate.js';
 
 const paramsShape = {
   node_id: z.string().optional(),
@@ -95,24 +92,24 @@ export function registerAddTypeToNode(
       // New type set
       const newTypes = [...currentTypes, params.type];
 
-      // Populate defaults via merge algorithm
-      const { defaults, populated } = populateDefaults(db, newTypes, currentFields);
+      // Run validation once. validate.ts populates missing required-with-default
+      // fields into coerced_state with source='defaulted'.
+      const { claimsByType, globalFields } = loadSchemaContext(db, newTypes);
+      const validation = validateProposedState(currentFields, newTypes, claimsByType, globalFields);
+      const populated = defaultedFieldsFrom(validation);
 
-      // Detect re-adopted fields (orphan fields that are now claimed by the new type)
+      // Detect re-adopted fields (orphan fields now claimed by the new type)
+      const populatedSet = new Set(populated.map(p => p.field));
       const readoptedFields: string[] = [];
       const newClaims = db.prepare('SELECT field FROM schema_field_claims WHERE schema_name = ?')
         .all(params.type) as Array<{ field: string }>;
       for (const claim of newClaims) {
-        if (claim.field in currentFields && !(claim.field in defaults)) {
+        if (claim.field in currentFields && !populatedSet.has(claim.field)) {
           readoptedFields.push(claim.field);
         }
       }
 
-      const mergedFields = { ...currentFields, ...defaults };
-
       if (params.dry_run) {
-        const { claimsByType, globalFields } = loadSchemaContext(db, newTypes);
-        const validation = validateProposedState(mergedFields, newTypes, claimsByType, globalFields);
         const wouldAddFields = populated.reduce<Record<string, unknown>>((acc, p) => {
           acc[p.field] = p.default_value;
           return acc;
@@ -141,34 +138,21 @@ export function registerAddTypeToNode(
           file_path: node.file_path,
           title: node.title,
           types: newTypes,
-          fields: mergedFields,
+          fields: currentFields,
           body: currentBody,
         }, syncLogger, { operation_id });
 
-        // Log field-defaulted entries for defaults populated by add-type-to-node.
-        // The pipeline sees these as 'provided' since they're pre-merged, so we
-        // log them here with the correct source information.
-        if (populated.length > 0) {
-          const entries: EditsLogEntry[] = populated.map(p => ({
-            node_id: result.node_id,
-            event_type: 'field-defaulted',
-            details: {
-              source: 'tool' as const,
-              field: p.field,
-              default_value: p.default_value,
-              default_source: p.default_source,
-              node_types: newTypes,
-            },
-          }));
-          writeEditsLogEntries(db, entries);
-        }
+        // The pipeline emits field-defaulted edits-log entries automatically
+        // because validate.ts produces source='defaulted' entries in coerced_state
+        // when required-with-default fields are missing.
+        const addedFields = defaultedFieldsFrom(result.validation).map(p => p.field);
 
         return ok(
           {
             node_id: result.node_id,
             file_path: result.file_path,
             types: newTypes,
-            added_fields: populated.map(p => p.field),
+            added_fields: addedFields,
             readopted_fields: readoptedFields,
             already_present: false,
           },

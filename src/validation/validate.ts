@@ -224,3 +224,26 @@ export function validateProposedState(
     orphan_fields,
   };
 }
+
+/**
+ * Extract the list of fields that were populated with defaults during validation,
+ * along with their resolved default_source ('global' or 'claim'). Pure function
+ * over a ValidationResult — no DB access.
+ */
+export function defaultedFieldsFrom(result: ValidationResult): Array<{
+  field: string;
+  default_value: unknown;
+  default_source: 'global' | 'claim';
+}> {
+  const out: Array<{ field: string; default_value: unknown; default_source: 'global' | 'claim' }> = [];
+  for (const cv of Object.values(result.coerced_state)) {
+    if (cv.source !== 'defaulted') continue;
+    const ef = result.effective_fields.get(cv.field);
+    out.push({
+      field: cv.field,
+      default_value: cv.value,
+      default_source: ef?.default_source ?? 'global',
+    });
+  }
+  return out;
+}

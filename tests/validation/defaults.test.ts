@@ -1,16 +1,26 @@
-// tests/pipeline/populate-defaults.test.ts
+// tests/validation/defaults.test.ts
 //
-// Unit tests for populateDefaults — focusing on correct default_source
+// Unit tests for default-population — focusing on correct default_source
 // reporting when per-type overrides agree, disagree, or are absent.
+//
+// Replaces tests/pipeline/populate-defaults.test.ts; same scenarios,
+// asserted via validateProposedState + defaultedFieldsFrom.
 
 import { describe, it, expect, beforeEach, afterEach } from 'vitest';
 import Database from 'better-sqlite3';
 import { createSchema } from '../../src/db/schema.js';
-import { populateDefaults } from '../../src/pipeline/populate-defaults.js';
 import { createGlobalField } from '../../src/global-fields/crud.js';
 import { createSchemaDefinition } from '../../src/schema/crud.js';
+import { loadSchemaContext } from '../../src/pipeline/schema-context.js';
+import { validateProposedState, defaultedFieldsFrom } from '../../src/validation/validate.js';
 
 let db: Database.Database;
+
+function populate(types: string[], currentFields: Record<string, unknown>) {
+  const { claimsByType, globalFields } = loadSchemaContext(db, types);
+  const result = validateProposedState(currentFields, types, claimsByType, globalFields);
+  return defaultedFieldsFrom(result);
+}
 
 beforeEach(() => {
   db = new Database(':memory:');
@@ -23,9 +33,8 @@ afterEach(() => {
   db.close();
 });
 
-describe('populateDefaults — default_source', () => {
+describe('default-population — default_source', () => {
   it("reports 'global' when multiple types have conflicting per-type default overrides (cancellation path)", () => {
-    // Global field: required=true, default_value='normal', overrides_allowed.default_value=true
     createGlobalField(db, {
       name: 'priority',
       field_type: 'string',
@@ -33,27 +42,20 @@ describe('populateDefaults — default_source', () => {
       default_value: 'normal',
       overrides_allowed: { default_value: true },
     });
-
-    // TypeA claims priority with default_value='high'
     createSchemaDefinition(db, {
       name: 'TypeA',
       field_claims: [{ field: 'priority', default_value: 'high', default_value_overridden: true }],
     });
-
-    // TypeB claims priority with default_value='low' — disagrees with TypeA
     createSchemaDefinition(db, {
       name: 'TypeB',
       field_claims: [{ field: 'priority', default_value: 'low', default_value_overridden: true }],
     });
 
-    const { populated } = populateDefaults(db, ['TypeA', 'TypeB'], {});
+    const populated = populate(['TypeA', 'TypeB'], {});
 
     expect(populated).toHaveLength(1);
     expect(populated[0].field).toBe('priority');
-    // Overrides cancelled due to disagreement → resolves to global default 'normal'
     expect(populated[0].default_value).toBe('normal');
-    // BUG: old code returns 'claim' because it finds any claim with an override
-    // FIX: should return 'global' because ef.default_source is 'global' after cancellation
     expect(populated[0].default_source).toBe('global');
   });
 
@@ -65,8 +67,6 @@ describe('populateDefaults — default_source', () => {
       default_value: 'pending',
       overrides_allowed: { default_value: true },
     });
-
-    // Both types agree on the same override
     createSchemaDefinition(db, {
       name: 'TypeX',
       field_claims: [{ field: 'status', default_value: 'active', default_value_overridden: true }],
@@ -76,7 +76,7 @@ describe('populateDefaults — default_source', () => {
       field_claims: [{ field: 'status', default_value: 'active', default_value_overridden: true }],
     });
 
-    const { populated } = populateDefaults(db, ['TypeX', 'TypeY'], {});
+    const populated = populate(['TypeX', 'TypeY'], {});
 
     expect(populated).toHaveLength(1);
     expect(populated[0].field).toBe('status');
@@ -91,13 +91,12 @@ describe('populateDefaults — default_source', () => {
       required: true,
       default_value: 'general',
     });
-
     createSchemaDefinition(db, {
       name: 'TypeZ',
       field_claims: [{ field: 'category' }],
     });
 
-    const { populated } = populateDefaults(db, ['TypeZ'], {});
+    const populated = populate(['TypeZ'], {});
 
     expect(populated).toHaveLength(1);
     expect(populated[0].field).toBe('category');
@@ -112,15 +111,12 @@ describe('populateDefaults — default_source', () => {
       required: true,
       default_value: 'draft',
     });
-
     createSchemaDefinition(db, {
       name: 'Doc',
       field_claims: [{ field: 'tag' }],
     });
 
-    const { populated, defaults } = populateDefaults(db, ['Doc'], { tag: 'published' });
-
+    const populated = populate(['Doc'], { tag: 'published' });
     expect(populated).toHaveLength(0);
-    expect(defaults['tag']).toBeUndefined();
   });
 });

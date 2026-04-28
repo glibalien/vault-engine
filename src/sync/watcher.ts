@@ -10,8 +10,6 @@ import { executeDeletion } from '../pipeline/delete.js';
 import { parseMarkdown } from '../parser/parse.js';
 import { splitFrontmatter } from '../parser/frontmatter.js';
 import { executeMutation } from '../pipeline/execute.js';
-import { populateDefaults } from '../pipeline/populate-defaults.js';
-import { reconstructValue } from '../pipeline/classify-value.js';
 import type { IndexMutex } from './mutex.js';
 import type { WriteLockManager } from './write-lock.js';
 import type { SyncLogger } from './sync-logger.js';
@@ -197,8 +195,8 @@ export function startWatcher(
 
 /**
  * Process a file change through the Phase 3 write pipeline.
- * Parses the file, diffs against DB state, populates defaults for
- * newly-added types, and calls executeMutation.
+ * Parses the file and calls executeMutation with source='watcher';
+ * the pipeline handles default population, validation, and rendering.
  */
 export function processFileChange(
   absPath: string,
@@ -258,44 +256,6 @@ export function processFileChange(
   // Load current DB state for diff
   const existing = db.prepare('SELECT id FROM nodes WHERE file_path = ?').get(relPath) as { id: string } | undefined;
   const nodeId = existing?.id ?? null;
-
-  // Detect type additions and populate defaults
-  if (nodeId) {
-    const currentTypes = (db.prepare('SELECT schema_type FROM node_types WHERE node_id = ?')
-      .all(nodeId) as Array<{ schema_type: string }>).map(t => t.schema_type);
-
-    const newTypes = parsed.types.filter(t => !currentTypes.includes(t));
-    if (newTypes.length > 0) {
-      // Load current fields from DB for default population
-      const currentFields: Record<string, unknown> = {};
-      const fieldRows = db.prepare('SELECT field_name, value_text, value_number, value_date, value_json FROM node_fields WHERE node_id = ?')
-        .all(nodeId) as Array<{ field_name: string; value_text: string | null; value_number: number | null; value_date: string | null; value_json: string | null }>;
-      for (const row of fieldRows) {
-        currentFields[row.field_name] = reconstructValue(row);
-      }
-
-      // Merge parsed fields on top of current fields (parsed wins)
-      const mergedForDefaults = { ...currentFields, ...parsedFields };
-
-      // Populate defaults for the full new type set
-      const { defaults } = populateDefaults(db, parsed.types, mergedForDefaults);
-
-      // Add defaults for fields not already in parsed output
-      for (const [field, value] of Object.entries(defaults)) {
-        if (!(field in parsedFields)) {
-          parsedFields[field] = value;
-        }
-      }
-    }
-  } else {
-    // New file: all types are "newly added"
-    const { defaults } = populateDefaults(db, parsed.types, parsedFields);
-    for (const [field, value] of Object.entries(defaults)) {
-      if (!(field in parsedFields)) {
-        parsedFields[field] = value;
-      }
-    }
-  }
 
   const sourceContentHash = sha256(content);
 

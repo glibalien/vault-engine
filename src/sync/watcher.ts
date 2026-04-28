@@ -195,8 +195,8 @@ export function startWatcher(
 
 /**
  * Process a file change through the Phase 3 write pipeline.
- * Parses the file, diffs against DB state, populates defaults for
- * newly-added types, and calls executeMutation.
+ * Parses the file and calls executeMutation with source='watcher';
+ * the pipeline handles default population, validation, and rendering.
  */
 export function processFileChange(
   absPath: string,

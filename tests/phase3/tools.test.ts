@@ -11,7 +11,6 @@ import { createSchemaDefinition } from '../../src/schema/crud.js';
 import { createTempVault, addFileToVault } from '../helpers/vault.js';
 import { resolveNodeIdentity } from '../../src/mcp/tools/resolve-identity.js';
 import { reconstructValue } from '../../src/pipeline/classify-value.js';
-import { populateDefaults } from '../../src/pipeline/populate-defaults.js';
 import { propagateSchemaChange, diffClaims } from '../../src/schema/propagate.js';
 import { updateSchemaDefinition } from '../../src/schema/crud.js';
 
@@ -128,15 +127,15 @@ describe('add-type-to-node behavior', () => {
 
     const created = createNode();
 
-    // Simulate add-type: set types to ['task'] with populated defaults
-    const { defaults } = populateDefaults(db, ['task'], {});
+    // The pipeline defaults missing required-with-default fields itself
+    // (skipDefaults=false for source='tool'), so no pre-merge is needed.
     const result = executeMutation(db, writeLock, vaultPath, {
       source: 'tool',
       node_id: created.node_id,
       file_path: 'test.md',
       title: 'Test',
       types: ['task'],
-      fields: { ...defaults },
+      fields: {},
       body: '',
     });
 

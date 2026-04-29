@@ -152,7 +152,7 @@ Internal callers of `updateGlobalField` (the function): the test file and the MC
 The following are explicitly *not* part of this work and are tracked separately:
 
 - **Exposing `edits_log` via MCP** (e.g. a `query-edits-log` tool). Discussed during this design and decided against. If preservation visibility becomes important later, file as its own ticket.
-- **`update-global-field` undo capture** (deferred Bundle B v2 item — global-field undo). Touching the same tool but at a different layer. Will inherit whatever this design ships.
+- **`update-global-field` undo capture** shipped 2026-04-29 as part of global-field undo v2 (`7ef5f01 feat(undo): add global-field snapshots`). It touches the same tool but at a different layer.
 - **Other "silent data loss" paths.** This spec only addresses `update-global-field` type-change. If similar patterns exist elsewhere (e.g. `update-schema` claim removal already has its own gate; other code paths would need their own audits), they are separate work.
 - **Undo atomicity ticket** (postmortem §"Systemic issue"). Independent.
 

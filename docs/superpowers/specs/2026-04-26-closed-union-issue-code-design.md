@@ -6,10 +6,10 @@
 
 ## Background
 
-This was originally one of three "Bundle B v2" tool-surface-symmetry items spec'd alongside `op_index` on batch-mutate warnings and a global-field undo system. After value review, the other two were dropped:
+This was originally one of three "Bundle B v2" tool-surface-symmetry items spec'd alongside `op_index` on batch-mutate warnings and a global-field undo system. After value review, the other two were split into independent work:
 
 - **`op_index` on batch-mutate** — deferred. Today batch-mutate's only per-op warning is `DEPRECATED_PARAM`, and `failed_at: i` already identifies the failing op on errors. The warnings that would benefit (`TITLE_FILENAME_SANITIZED`, `TITLE_WIKILINK_UNSAFE` from `executeMutation`) aren't surfaced through batch-mutate today; surfacing them is its own work. `op_index` should bundle with that surfacing fix when it lands.
-- **Global-field undo** — deferred to backlog. Real symmetry gap, real complexity, low expected use frequency, and inherits a pre-existing atomicity gap in `restoreOperation`. File as backlog; let demand drive priority.
+- **Global-field undo** — shipped 2026-04-29 via `7ef5f01 feat(undo): add global-field snapshots`.
 
 This spec covers only the closed-union narrowing of `Issue.code`.
 

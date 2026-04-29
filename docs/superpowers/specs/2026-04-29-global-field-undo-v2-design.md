@@ -1,6 +1,6 @@
 # Global-field undo v2 - Design
 
-**Status:** draft, ready for implementation planning
+**Status:** shipped 2026-04-29 via `7ef5f01 feat(undo): add global-field snapshots`
 **Date:** 2026-04-29
 **Source backlog:** `Vault Engine - Deferred Backlog 2026-04-25`
 **Predecessor postmortem:** `docs/superpowers/specs/2026-04-25-bundle-b-postmortem.md`

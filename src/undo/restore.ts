@@ -4,17 +4,32 @@
 // docs/superpowers/specs/2026-04-19-undo-system-design.md
 
 import type Database from 'better-sqlite3';
+import { existsSync, unlinkSync } from 'node:fs';
+import { join } from 'node:path';
 import { executeMutation } from '../pipeline/execute.js';
 import { executeDeletion } from '../pipeline/delete.js';
 import type { WriteLockManager } from '../sync/write-lock.js';
 import { reconstructValue } from '../pipeline/classify-value.js';
 import type { Conflict, ConflictReason, RestoreResult, UndoSnapshotRow } from './types.js';
 import { getSnapshots, getOperation, markUndone } from './operation.js';
-import { restoreSchemaSnapshot } from './schema-snapshot.js';
+import { restoreSchemaSnapshot, type SchemaRestoreFileAction } from './schema-snapshot.js';
+import { safeVaultPath } from '../pipeline/safe-path.js';
+import { atomicWriteFile } from '../pipeline/file-writer.js';
+import { loadSchemaContext } from '../pipeline/schema-context.js';
+import { validateProposedState } from '../validation/validate.js';
+import { renderNode } from '../renderer/render.js';
+import type { FieldOrderEntry } from '../renderer/types.js';
+import { renderSchemaFile } from '../schema/render.js';
 
 export interface RestoreOptions {
   dry_run?: boolean;
   resolve_conflicts?: Array<{ node_id: string; action: 'revert' | 'skip' }>;
+}
+
+interface RestoreFileEffects {
+  nodeWrites: Map<string, string>;
+  nodeDeletes: string[];
+  schemaActions: SchemaRestoreFileAction[];
 }
 
 export function detectConflicts(
@@ -131,33 +146,55 @@ export function restoreOperation(
 
   let undone = 0;
   let skipped = 0;
+  const fileEffects: RestoreFileEffects = {
+    nodeWrites: new Map(),
+    nodeDeletes: [],
+    schemaActions: [],
+  };
 
   if (!opts.dry_run) {
-    // Schema-first pass: restore schema state before any node work so
-    // node restores re-validate against the pre-change schema.
-    for (const snap of schemaSnaps) {
-      restoreSchemaSnapshot(db, vaultPath, operation_id, snap.schema_name);
-    }
-
-    // Creates first, then updates, then deletes (within this op)
-    const buckets = { create: [] as UndoSnapshotRow[], update: [] as UndoSnapshotRow[], delete: [] as UndoSnapshotRow[] };
-    for (const s of snapshots) {
-      const resolution = resolveMap.get(s.node_id);
-      if (conflictedIds.has(s.node_id) && resolution !== 'revert') {
-        if (resolution === 'skip') skipped++;
-        continue;
+    const txn = db.transaction(() => {
+      // Schema-first pass: restore schema state before any node work so
+      // node restores re-validate against the pre-change schema.
+      for (const snap of schemaSnaps) {
+        const action = restoreSchemaSnapshot(db, vaultPath, operation_id, snap.schema_name, { render: false });
+        if (action) fileEffects.schemaActions.push(action);
       }
-      const currentNode = db.prepare('SELECT 1 FROM nodes WHERE id = ?').get(s.node_id);
-      if (s.was_deleted === 1) buckets.delete.push(s);
-      else if (!currentNode) buckets.create.push(s);
-      else buckets.update.push(s);
-    }
 
-    for (const s of buckets.create) { restoreCreate(db, writeLock, vaultPath, s); undone++; }
-    for (const s of buckets.update) { restoreUpdate(db, writeLock, vaultPath, s); undone++; }
-    for (const s of buckets.delete) { restoreDelete(db, writeLock, vaultPath, s); undone++; }
+      // Creates first, then updates, then deletes (within this op)
+      const buckets = { create: [] as UndoSnapshotRow[], update: [] as UndoSnapshotRow[], delete: [] as UndoSnapshotRow[] };
+      for (const s of snapshots) {
+        const resolution = resolveMap.get(s.node_id);
+        if (conflictedIds.has(s.node_id) && resolution !== 'revert') {
+          if (resolution === 'skip') skipped++;
+          continue;
+        }
+        const currentNode = db.prepare('SELECT 1 FROM nodes WHERE id = ?').get(s.node_id);
+        if (s.was_deleted === 1) buckets.delete.push(s);
+        else if (!currentNode) buckets.create.push(s);
+        else buckets.update.push(s);
+      }
 
-    markUndone(db, operation_id);
+      for (const s of buckets.create) {
+        const written = restoreCreate(db, writeLock, vaultPath, s);
+        if (written) fileEffects.nodeWrites.set(written.node_id, written.file_path);
+        undone++;
+      }
+      for (const s of buckets.update) {
+        const written = restoreUpdate(db, writeLock, vaultPath, s);
+        if (written) fileEffects.nodeWrites.set(written.node_id, written.file_path);
+        undone++;
+      }
+      for (const s of buckets.delete) {
+        restoreDelete(db, writeLock, vaultPath, s);
+        fileEffects.nodeDeletes.push(s.file_path);
+        undone++;
+      }
+
+      markUndone(db, operation_id);
+    });
+    txn();
+    applyRestoreFileEffects(db, writeLock, vaultPath, fileEffects);
   }
 
   return {
@@ -179,8 +216,8 @@ function restoreCreate(
   writeLock: WriteLockManager,
   vaultPath: string,
   snap: UndoSnapshotRow,
-): void {
-  if (snap.types === null) return;
+): { node_id: string; file_path: string } | null {
+  if (snap.types === null) return null;
   const types = JSON.parse(snap.types) as string[];
   const fieldsRows = JSON.parse(snap.fields ?? '[]') as Array<{
     field_name: string; value_text: string | null; value_number: number | null; value_date: string | null; value_json: string | null; value_raw_text: string | null;
@@ -188,7 +225,7 @@ function restoreCreate(
   const fields: Record<string, unknown> = {};
   for (const r of fieldsRows) fields[r.field_name] = reconstructValue(r);
 
-  executeMutation(db, writeLock, vaultPath, {
+  const result = executeMutation(db, writeLock, vaultPath, {
     source: 'undo',
     node_id: snap.node_id,
     file_path: snap.file_path,
@@ -196,7 +233,9 @@ function restoreCreate(
     types,
     fields,
     body: snap.body ?? '',
+    db_only: true,
   });
+  return { node_id: result.node_id, file_path: result.file_path };
 }
 
 /** Restore an updated node to its pre-state. */
@@ -205,8 +244,8 @@ function restoreUpdate(
   writeLock: WriteLockManager,
   vaultPath: string,
   snap: UndoSnapshotRow,
-): void {
-  if (snap.types === null) return;
+): { node_id: string; file_path: string } | null {
+  if (snap.types === null) return null;
   const types = JSON.parse(snap.types) as string[];
   const fieldsRows = JSON.parse(snap.fields ?? '[]') as Array<{
     field_name: string; value_text: string | null; value_number: number | null; value_date: string | null; value_json: string | null; value_raw_text: string | null;
@@ -214,7 +253,7 @@ function restoreUpdate(
   const fields: Record<string, unknown> = {};
   for (const r of fieldsRows) fields[r.field_name] = reconstructValue(r);
 
-  executeMutation(db, writeLock, vaultPath, {
+  const result = executeMutation(db, writeLock, vaultPath, {
     source: 'undo',
     node_id: snap.node_id,
     file_path: snap.file_path,
@@ -222,7 +261,9 @@ function restoreUpdate(
     types,
     fields,
     body: snap.body ?? '',
+    db_only: true,
   });
+  return { node_id: result.node_id, file_path: result.file_path };
 }
 
 /** Undo a create by deleting the node that was created. */
@@ -236,8 +277,153 @@ function restoreDelete(
     source: 'undo',
     node_id: snap.node_id,
     file_path: snap.file_path,
-    unlink_file: true,
+    unlink_file: false,
   });
+}
+
+function applyRestoreFileEffects(
+  db: Database.Database,
+  writeLock: WriteLockManager,
+  vaultPath: string,
+  effects: RestoreFileEffects,
+): void {
+  for (const action of effects.schemaActions) {
+    if (action.type === 'render') {
+      renderRestoredSchemaFile(db, vaultPath, action.schema_name);
+    } else {
+      deleteRestoredSchemaFile(vaultPath, action.schema_name);
+    }
+  }
+
+  for (const filePath of effects.nodeDeletes) {
+    unlinkRestoredNodeFile(writeLock, vaultPath, filePath);
+  }
+
+  for (const [nodeId] of effects.nodeWrites) {
+    renderRestoredNodeFile(db, writeLock, vaultPath, nodeId);
+  }
+}
+
+function renderRestoredSchemaFile(db: Database.Database, vaultPath: string, schemaName: string): void {
+  renderSchemaFile(db, vaultPath, schemaName);
+}
+
+function deleteRestoredSchemaFile(vaultPath: string, schemaName: string): void {
+  try {
+    const absPath = safeVaultPath(vaultPath, join('.schemas', `${schemaName}.yaml`));
+    if (existsSync(absPath)) unlinkSync(absPath);
+  } catch {
+    // Preserve the historical best-effort behavior for schema YAML deletion.
+  }
+}
+
+function unlinkRestoredNodeFile(writeLock: WriteLockManager, vaultPath: string, filePath: string): void {
+  const absPath = safeVaultPath(vaultPath, filePath);
+  writeLock.withLockSync(absPath, () => {
+    try {
+      unlinkSync(absPath);
+    } catch (err) {
+      const code = (err as NodeJS.ErrnoException).code;
+      if (code !== 'ENOENT') throw err;
+    }
+  });
+}
+
+function renderRestoredNodeFile(
+  db: Database.Database,
+  writeLock: WriteLockManager,
+  vaultPath: string,
+  nodeId: string,
+): void {
+  const node = db.prepare('SELECT file_path, title, body FROM nodes WHERE id = ?').get(nodeId) as
+    | { file_path: string; title: string | null; body: string | null }
+    | undefined;
+  if (!node) return;
+
+  const types = (db.prepare('SELECT schema_type FROM node_types WHERE node_id = ? ORDER BY sort_order')
+    .all(nodeId) as Array<{ schema_type: string }>).map(r => r.schema_type);
+  const fieldRows = db.prepare(
+    'SELECT field_name, value_text, value_number, value_date, value_json, value_raw_text FROM node_fields WHERE node_id = ?'
+  ).all(nodeId) as Array<{
+    field_name: string; value_text: string | null; value_number: number | null; value_date: string | null; value_json: string | null; value_raw_text: string | null;
+  }>;
+
+  const fields: Record<string, unknown> = {};
+  const rawFieldTexts: Record<string, string> = {};
+  for (const row of fieldRows) {
+    fields[row.field_name] = reconstructValue(row);
+    if (row.value_raw_text !== null) rawFieldTexts[row.field_name] = row.value_raw_text;
+  }
+
+  const { claimsByType, globalFields } = loadSchemaContext(db, types);
+  const validation = validateProposedState(fields, types, claimsByType, globalFields, { skipDefaults: true });
+  const finalFields: Record<string, unknown> = {};
+  for (const [fieldName, cv] of Object.entries(validation.coerced_state)) {
+    finalFields[fieldName] = cv.value;
+  }
+
+  const referenceFields = new Set<string>();
+  const listReferenceFields = new Set<string>();
+  for (const [name, gf] of globalFields) {
+    if (gf.field_type === 'reference') referenceFields.add(name);
+    if (gf.field_type === 'list' && gf.list_item_type === 'reference') listReferenceFields.add(name);
+  }
+
+  const orphanRawValues: Record<string, string> = {};
+  for (const fieldName of validation.orphan_fields) {
+    if (fieldName in rawFieldTexts) orphanRawValues[fieldName] = rawFieldTexts[fieldName];
+  }
+
+  const content = renderNode({
+    types,
+    fields: finalFields,
+    body: node.body ?? '',
+    fieldOrdering: computeFieldOrdering(validation.effective_fields, validation.orphan_fields, finalFields),
+    referenceFields,
+    listReferenceFields,
+    orphanRawValues,
+  });
+
+  const absPath = safeVaultPath(vaultPath, node.file_path);
+  const tmpDir = join(vaultPath, '.vault-engine', 'tmp');
+  writeLock.withLockSync(absPath, () => {
+    atomicWriteFile(absPath, content, tmpDir);
+  });
+}
+
+function computeFieldOrdering(
+  effectiveFields: ReturnType<typeof validateProposedState>['effective_fields'],
+  orphanFieldNames: string[],
+  finalFields: Record<string, unknown>,
+): FieldOrderEntry[] {
+  const ordering: FieldOrderEntry[] = [];
+
+  const claimed = Array.from(effectiveFields.entries())
+    .filter(([name]) => name in finalFields)
+    .sort((a, b) => {
+      const orderDiff = a[1].resolved_order - b[1].resolved_order;
+      if (orderDiff !== 0) return orderDiff;
+      return a[0] < b[0] ? -1 : a[0] > b[0] ? 1 : 0;
+    });
+
+  for (const [name] of claimed) {
+    ordering.push({ field: name, category: 'claimed' });
+  }
+
+  const orphans = orphanFieldNames
+    .filter(name => name in finalFields)
+    .sort();
+
+  for (const name of orphans) {
+    ordering.push({ field: name, category: 'orphan' });
+  }
+
+  for (const name of Object.keys(finalFields)) {
+    if (ordering.some(e => e.field === name)) continue;
+    ordering.push({ field: name, category: 'claimed' });
+  }
+
+  return ordering;
 }
 
 export interface RestoreManyParams {

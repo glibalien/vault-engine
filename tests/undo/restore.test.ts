@@ -1,4 +1,6 @@
 import { describe, it, expect, beforeEach, afterEach } from 'vitest';
+import { readFileSync } from 'node:fs';
+import { join } from 'node:path';
 import { createTestDb } from '../helpers/db.js';
 import { createTempVault } from '../helpers/vault.js';
 import { addUndoTables } from '../../src/db/migrate.js';
@@ -186,5 +188,38 @@ describe('restoreOperation', () => {
     expect(result.operations[0].status).toBe('would_undo');
     const row = db.prepare('SELECT body FROM nodes WHERE id = ?').get(r1.node_id) as { body: string };
     expect(row.body).toBe('v2'); // not changed
+  });
+
+  it('rolls back DB restores when a later snapshot restore fails', () => {
+    const a = executeMutation(db, writeLock, vaultPath, {
+      source: 'tool', node_id: null, file_path: 'a.md', title: 'A', types: ['note'], fields: {}, body: 'a1',
+    });
+    const b = executeMutation(db, writeLock, vaultPath, {
+      source: 'tool', node_id: null, file_path: 'b.md', title: 'B', types: ['note'], fields: {}, body: 'b1',
+    });
+
+    const opId = createOperation(db, { source_tool: 'batch-mutate', description: 'multi-update' });
+    executeMutation(db, writeLock, vaultPath, {
+      source: 'tool', node_id: a.node_id, file_path: 'a.md', title: 'A', types: ['note'], fields: {}, body: 'a2',
+    }, undefined, { operation_id: opId });
+    executeMutation(db, writeLock, vaultPath, {
+      source: 'tool', node_id: b.node_id, file_path: 'b.md', title: 'B', types: ['note'], fields: {}, body: 'b2',
+    }, undefined, { operation_id: opId });
+    finalizeOperation(db, opId);
+
+    db.prepare('UPDATE undo_snapshots SET file_path = ? WHERE operation_id = ? AND node_id = ?')
+      .run('../escape.md', opId, b.node_id);
+
+    expect(() => restoreOperation(db, writeLock, vaultPath, opId, new Set([opId])))
+      .toThrow('Path traversal blocked');
+
+    const aRow = db.prepare('SELECT body FROM nodes WHERE id = ?').get(a.node_id) as { body: string };
+    const bRow = db.prepare('SELECT body FROM nodes WHERE id = ?').get(b.node_id) as { body: string };
+    const opRow = db.prepare('SELECT status FROM undo_operations WHERE operation_id = ?').get(opId) as { status: string };
+    const aFile = readFileSync(join(vaultPath, 'a.md'), 'utf-8');
+    expect(aRow.body).toBe('a2');
+    expect(bRow.body).toBe('b2');
+    expect(opRow.status).toBe('active');
+    expect(aFile).toContain('a2');
   });
 });

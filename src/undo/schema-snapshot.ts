@@ -106,6 +106,14 @@ interface SnapshotRow {
   field_claims: string | null;
 }
 
+export interface RestoreSchemaSnapshotOptions {
+  render?: boolean;
+}
+
+export type SchemaRestoreFileAction =
+  | { type: 'render'; schema_name: string }
+  | { type: 'delete'; schema_name: string };
+
 /**
  * Restore a schema to its captured state.
  */
@@ -114,22 +122,26 @@ export function restoreSchemaSnapshot(
   vaultPath: string,
   operation_id: string,
   schema_name: string,
-): void {
+  opts: RestoreSchemaSnapshotOptions = {},
+): SchemaRestoreFileAction | null {
+  const shouldRender = opts.render !== false;
   const snap = db.prepare(
     'SELECT * FROM undo_schema_snapshots WHERE operation_id = ? AND schema_name = ?',
   ).get(operation_id, schema_name) as SnapshotRow | undefined;
-  if (!snap) return;
+  if (!snap) return null;
 
   if (snap.was_new === 1) {
     db.prepare('DELETE FROM schemas WHERE name = ?').run(schema_name);
-    try {
-      const absPath = safeVaultPath(vaultPath, join('.schemas', `${schema_name}.yaml`));
-      if (existsSync(absPath)) unlinkSync(absPath);
-      db.prepare('DELETE FROM schema_file_hashes WHERE file_path = ?').run(`.schemas/${schema_name}.yaml`);
-    } catch {
-      // Path traversal block or file-missing — don't propagate; restore continues.
+    db.prepare('DELETE FROM schema_file_hashes WHERE file_path = ?').run(`.schemas/${schema_name}.yaml`);
+    if (shouldRender) {
+      try {
+        const absPath = safeVaultPath(vaultPath, join('.schemas', `${schema_name}.yaml`));
+        if (existsSync(absPath)) unlinkSync(absPath);
+      } catch {
+        // Path traversal block or file-missing — don't propagate; restore continues.
+      }
     }
-    return;
+    return { type: 'delete', schema_name };
   }
 
   db.prepare(`
@@ -173,5 +185,6 @@ export function restoreSchemaSnapshot(
     }
   }
 
-  renderSchemaFile(db, vaultPath, schema_name);
+  if (shouldRender) renderSchemaFile(db, vaultPath, schema_name);
+  return { type: 'render', schema_name };
 }

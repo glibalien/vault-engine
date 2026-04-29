@@ -65,4 +65,15 @@ describe('list-undo-history', () => {
     expect(rows[0].operation_id).toBe(op);
     expect(rows[0].schema_count).toBe(1);
   });
+
+  it('includes global_field_count in each operation row', async () => {
+    const op = createOperation(db, { source_tool: 'update-global-field', description: 'u' });
+    db.prepare('UPDATE undo_operations SET global_field_count = 1 WHERE operation_id = ?').run(op);
+
+    const result = await callTool(server, 'list-undo-history', { source_tool: 'update-global-field' });
+    const payload = JSON.parse(result.content[0].text);
+    const rows = payload.data.operations as Array<{ operation_id: string; global_field_count: number }>;
+    expect(rows[0].operation_id).toBe(op);
+    expect(rows[0].global_field_count).toBe(1);
+  });
 });

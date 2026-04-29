@@ -9,6 +9,7 @@ export interface UndoOperationRow {
   description: string;
   node_count: number;
   schema_count: number;
+  global_field_count: number;
   status: 'active' | 'undone' | 'expired';
 }
 
@@ -44,6 +45,8 @@ export interface RestoreResult {
   operations: Array<{
     operation_id: string;
     node_count: number;
+    schema_count: number;
+    global_field_count: number;
     status: 'would_undo' | 'undone';
   }>;
   conflicts: Conflict[];

@@ -1,6 +1,6 @@
 import { describe, it, expect } from 'vitest';
 import { createTestDb } from '../helpers/db.js';
-import { addUndoTables } from '../../src/db/migrate.js';
+import { addGlobalFieldUndoSnapshots, addUndoTables } from '../../src/db/migrate.js';
 
 describe('addUndoTables', () => {
   it('creates undo_operations and undo_snapshots with expected columns and indexes', () => {
@@ -9,7 +9,7 @@ describe('addUndoTables', () => {
 
     const opCols = (db.prepare('PRAGMA table_info(undo_operations)').all() as Array<{ name: string; type: string; notnull: number; pk: number }>);
     expect(opCols.map(c => c.name).sort()).toEqual(
-      ['description', 'node_count', 'operation_id', 'schema_count', 'source_tool', 'status', 'timestamp'],
+      ['description', 'global_field_count', 'node_count', 'operation_id', 'schema_count', 'source_tool', 'status', 'timestamp'],
     );
     expect(opCols.find(c => c.name === 'operation_id')?.pk).toBe(1);
 
@@ -24,6 +24,27 @@ describe('addUndoTables', () => {
       'idx_undo_operations_status',
       'idx_undo_snapshots_node',
     ]));
+  });
+
+  it('creates global field undo snapshots and global_field_count idempotently', () => {
+    const db = createTestDb();
+    addGlobalFieldUndoSnapshots(db);
+    expect(() => addGlobalFieldUndoSnapshots(db)).not.toThrow();
+
+    const opCols = (db.prepare('PRAGMA table_info(undo_operations)').all() as Array<{ name: string }>);
+    expect(opCols.map(c => c.name)).toContain('global_field_count');
+
+    const snapCols = (db.prepare('PRAGMA table_info(undo_global_field_snapshots)').all() as Array<{ name: string }>);
+    expect(snapCols.map(c => c.name).sort()).toEqual([
+      'field_name',
+      'global_field',
+      'node_fields',
+      'operation_id',
+      'schema_claims',
+      'was_deleted',
+      'was_new',
+      'was_renamed_from',
+    ]);
   });
 
   it('is idempotent — safe to run twice', () => {

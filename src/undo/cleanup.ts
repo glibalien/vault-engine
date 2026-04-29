@@ -25,8 +25,14 @@ export function runUndoCleanup(db: Database.Database, opts: CleanupOptions = {})
     db.prepare("DELETE FROM undo_operations WHERE status = 'undone' AND timestamp < ?")
       .run(cutoff);
 
-    // 4. Delete orphans (node_count=0) older than the grace window.
-    db.prepare("DELETE FROM undo_operations WHERE node_count = 0 AND timestamp < ?")
+    // 4. Delete orphans (all snapshot counts = 0) older than the grace window.
+    db.prepare(`
+      DELETE FROM undo_operations
+      WHERE node_count = 0
+        AND COALESCE(schema_count, 0) = 0
+        AND COALESCE(global_field_count, 0) = 0
+        AND timestamp < ?
+    `)
       .run(orphanCutoff);
   });
   run();

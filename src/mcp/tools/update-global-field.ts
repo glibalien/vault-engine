@@ -2,11 +2,13 @@ import type { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import type Database from 'better-sqlite3';
 import { z } from 'zod';
 import { ok, fail } from './errors.js';
-import { updateGlobalField, TypeChangeRequiresDiscardError } from '../../global-fields/crud.js';
+import { getGlobalField, updateGlobalField, TypeChangeRequiresDiscardError } from '../../global-fields/crud.js';
 import { renderFieldsFile, renderSchemaFile } from '../../schema/render.js';
 import { rerenderNodesWithField } from '../../schema/propagate.js';
 import type { WriteLockManager } from '../../sync/write-lock.js';
 import type { SyncLogger } from '../../sync/sync-logger.js';
+import { createOperation, finalizeOperation } from '../../undo/operation.js';
+import { captureGlobalFieldSnapshot } from '../../undo/global-field-snapshot.js';
 
 const fieldTypeEnum = z.enum(['string', 'number', 'date', 'boolean', 'reference', 'enum', 'list']);
 
@@ -32,8 +34,25 @@ export function registerUpdateGlobalField(server: McpServer, db: Database.Databa
       discard_uncoercible: z.boolean().optional().describe('When applying a type change with uncoercible values, set true to delete those values. Default: refuse the change with CONFIRMATION_REQUIRED.'),
     },
     async ({ name, ...rest }) => {
+      let operation_id: string | null = null;
       try {
-        const result = updateGlobalField(db, name, rest);
+        const current = rest.field_type && !rest.confirm ? getGlobalField(db, name) : null;
+        if (current && current.field_type !== rest.field_type) {
+          const preview = updateGlobalField(db, name, rest);
+          return ok(preview);
+        }
+
+        operation_id = createOperation(db, {
+          source_tool: 'update-global-field',
+          description: `update-global-field: ${name}`,
+        });
+
+        let result: ReturnType<typeof updateGlobalField> | undefined;
+        const tx = db.transaction(() => {
+          captureGlobalFieldSnapshot(db, operation_id!, name);
+          result = updateGlobalField(db, name, rest);
+        });
+        tx();
 
         if (ctx?.vaultPath) {
           renderFieldsFile(db, ctx.vaultPath);
@@ -45,13 +64,13 @@ export function registerUpdateGlobalField(server: McpServer, db: Database.Databa
           if (rest.confirm && rest.field_type && ctx.writeLock) {
             // Pass uncoercible node IDs so they get re-rendered even though
             // their node_fields rows for this field were deleted
-            const uncoercibleIds = result.uncoercible?.map(u => u.node_id);
+            const uncoercibleIds = result!.uncoercible?.map(u => u.node_id);
             const nodes_rerendered = rerenderNodesWithField(db, ctx.writeLock, ctx.vaultPath, name, uncoercibleIds, ctx.syncLogger);
-            return ok({ ...result, nodes_rerendered });
+            return ok({ ...result!, operation_id, nodes_rerendered });
           }
         }
 
-        return ok(result);
+        return ok({ ...result!, operation_id });
       } catch (err) {
         if (err instanceof TypeChangeRequiresDiscardError) {
           return fail(
@@ -65,6 +84,8 @@ export function registerUpdateGlobalField(server: McpServer, db: Database.Databa
           );
         }
         return fail('INVALID_PARAMS', err instanceof Error ? err.message : String(err));
+      } finally {
+        if (operation_id) finalizeOperation(db, operation_id);
       }
     },
   );

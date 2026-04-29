@@ -92,12 +92,27 @@ export function listOperations(db: Database.Database, params: ListParams = {}): 
   }
 
   const where = clauses.length ? `WHERE ${clauses.join(' AND ')}` : '';
+  const schemaCountProjection = columnExists(db, 'undo_operations', 'schema_count')
+    ? 'schema_count'
+    : '0 AS schema_count';
+  const globalFieldCountProjection = columnExists(db, 'undo_operations', 'global_field_count')
+    ? 'global_field_count'
+    : '0 AS global_field_count';
+
   const rows = db.prepare(
-    `SELECT * FROM undo_operations ${where} ORDER BY timestamp DESC LIMIT ?`
+    `SELECT operation_id, timestamp, source_tool, description,
+            node_count, ${schemaCountProjection}, ${globalFieldCountProjection}, status
+     FROM undo_operations ${where}
+     ORDER BY timestamp DESC LIMIT ?`
   ).all(...values, limit + 1) as UndoOperationRow[];
 
   return {
     operations: rows.slice(0, limit),
     truncated: rows.length > limit,
   };
+}
+
+function columnExists(db: Database.Database, tableName: string, columnName: string): boolean {
+  return (db.prepare(`PRAGMA table_info(${tableName})`).all() as Array<{ name: string }>)
+    .some(c => c.name === columnName);
 }

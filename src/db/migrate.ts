@@ -417,6 +417,43 @@ export function addSchemaUndoSnapshots(db: Database.Database): void {
 }
 
 /**
+ * Migration: add undo_global_field_snapshots table +
+ * undo_operations.global_field_count column (2026-04-29).
+ *
+ * Captures pre-mutation global field state plus dependent schema claims and
+ * node field rows so global-field CRUD can participate in operation-level undo.
+ *
+ * Idempotent — safe to run on a database that already has the new schema.
+ */
+export function addGlobalFieldUndoSnapshots(db: Database.Database): void {
+  const run = db.transaction(() => {
+    db.prepare(`
+      CREATE TABLE IF NOT EXISTS undo_global_field_snapshots (
+        operation_id      TEXT NOT NULL,
+        field_name        TEXT NOT NULL,
+        was_new           INTEGER NOT NULL DEFAULT 0,
+        was_deleted       INTEGER NOT NULL DEFAULT 0,
+        was_renamed_from  TEXT,
+        global_field      TEXT,
+        schema_claims     TEXT NOT NULL DEFAULT '[]',
+        node_fields       TEXT NOT NULL DEFAULT '[]',
+        PRIMARY KEY (operation_id, field_name),
+        FOREIGN KEY (operation_id) REFERENCES undo_operations(operation_id) ON DELETE CASCADE
+      )
+    `).run();
+
+    const cols = (db.prepare('PRAGMA table_info(undo_operations)').all() as Array<{ name: string }>)
+      .map(c => c.name);
+    if (!cols.includes('global_field_count')) {
+      db.prepare('ALTER TABLE undo_operations ADD COLUMN global_field_count INTEGER NOT NULL DEFAULT 0').run();
+    }
+
+    db.prepare('CREATE INDEX IF NOT EXISTS idx_undo_global_field_snapshots_op ON undo_global_field_snapshots(operation_id)').run();
+  });
+  run();
+}
+
+/**
  * Migration: add node_types.sort_order column (2026-04-22, Phase A3).
  *
  * Enables deterministic "first type" lookup for multi-typed nodes — wins

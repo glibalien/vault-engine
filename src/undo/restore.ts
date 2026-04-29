@@ -13,13 +13,14 @@ import { reconstructValue } from '../pipeline/classify-value.js';
 import type { Conflict, ConflictReason, RestoreResult, UndoSnapshotRow } from './types.js';
 import { getSnapshots, getOperation, markUndone } from './operation.js';
 import { restoreSchemaSnapshot, type SchemaRestoreFileAction } from './schema-snapshot.js';
+import { restoreGlobalFieldSnapshot, type GlobalFieldRestoreFileAction } from './global-field-snapshot.js';
 import { safeVaultPath } from '../pipeline/safe-path.js';
 import { atomicWriteFile } from '../pipeline/file-writer.js';
 import { loadSchemaContext } from '../pipeline/schema-context.js';
 import { validateProposedState } from '../validation/validate.js';
 import { renderNode } from '../renderer/render.js';
 import type { FieldOrderEntry } from '../renderer/types.js';
-import { renderSchemaFile } from '../schema/render.js';
+import { renderFieldsFile, renderSchemaFile } from '../schema/render.js';
 
 export interface RestoreOptions {
   dry_run?: boolean;
@@ -30,6 +31,7 @@ interface RestoreFileEffects {
   nodeWrites: Map<string, string>;
   nodeDeletes: string[];
   schemaActions: SchemaRestoreFileAction[];
+  globalFieldActions: GlobalFieldRestoreFileAction[];
 }
 
 export function detectConflicts(
@@ -139,6 +141,11 @@ export function restoreOperation(
   const schemaSnaps = db.prepare(
     'SELECT schema_name FROM undo_schema_snapshots WHERE operation_id = ?',
   ).all(operation_id) as Array<{ schema_name: string }>;
+  const globalFieldSnaps = tableExists(db, 'undo_global_field_snapshots')
+    ? db.prepare(
+      'SELECT field_name FROM undo_global_field_snapshots WHERE operation_id = ?',
+    ).all(operation_id) as Array<{ field_name: string }>
+    : [];
 
   // Partition resolve_conflicts
   const resolveMap = new Map<string, 'revert' | 'skip'>();
@@ -150,6 +157,7 @@ export function restoreOperation(
     nodeWrites: new Map(),
     nodeDeletes: [],
     schemaActions: [],
+    globalFieldActions: [],
   };
 
   if (!opts.dry_run) {
@@ -159,6 +167,13 @@ export function restoreOperation(
       for (const snap of schemaSnaps) {
         const action = restoreSchemaSnapshot(db, vaultPath, operation_id, snap.schema_name, { render: false });
         if (action) fileEffects.schemaActions.push(action);
+      }
+
+      // Global fields before node snapshots so later node restores validate
+      // against restored global field definitions.
+      for (const snap of globalFieldSnaps) {
+        const action = restoreGlobalFieldSnapshot(db, operation_id, snap.field_name);
+        if (action) fileEffects.globalFieldActions.push(action);
       }
 
       // Creates first, then updates, then deletes (within this op)
@@ -201,6 +216,8 @@ export function restoreOperation(
     operations: [{
       operation_id,
       node_count: op.node_count,
+      schema_count: op.schema_count ?? 0,
+      global_field_count: op.global_field_count ?? 0,
       status: opts.dry_run ? 'would_undo' : 'undone',
     }],
     conflicts,
@@ -208,6 +225,11 @@ export function restoreOperation(
     total_conflicts: conflicts.length,
     total_skipped: skipped,
   };
+}
+
+function tableExists(db: Database.Database, tableName: string): boolean {
+  return db.prepare("SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = ?")
+    .get(tableName) !== undefined;
 }
 
 /** Restore a deleted node by re-creating it with its original id. */
@@ -295,11 +317,40 @@ function applyRestoreFileEffects(
     }
   }
 
+  applyGlobalFieldFileActions(db, writeLock, vaultPath, effects.globalFieldActions);
+
   for (const filePath of effects.nodeDeletes) {
     unlinkRestoredNodeFile(writeLock, vaultPath, filePath);
   }
 
   for (const [nodeId] of effects.nodeWrites) {
+    renderRestoredNodeFile(db, writeLock, vaultPath, nodeId);
+  }
+}
+
+function applyGlobalFieldFileActions(
+  db: Database.Database,
+  writeLock: WriteLockManager,
+  vaultPath: string,
+  actions: GlobalFieldRestoreFileAction[],
+): void {
+  if (actions.length === 0) return;
+
+  if (actions.some(action => action.renderFieldsCatalog)) {
+    renderFieldsFile(db, vaultPath);
+  }
+
+  const schemaNames = new Set<string>();
+  const nodeIds = new Set<string>();
+  for (const action of actions) {
+    for (const schemaName of action.schemaNames) schemaNames.add(schemaName);
+    for (const nodeId of action.nodeIds) nodeIds.add(nodeId);
+  }
+
+  for (const schemaName of [...schemaNames].sort()) {
+    renderRestoredSchemaFile(db, vaultPath, schemaName);
+  }
+  for (const nodeId of [...nodeIds].sort()) {
     renderRestoredNodeFile(db, writeLock, vaultPath, nodeId);
   }
 }

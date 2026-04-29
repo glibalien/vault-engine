@@ -4,6 +4,8 @@ import { z } from 'zod';
 import { ok, fail } from './errors.js';
 import { createGlobalField } from '../../global-fields/crud.js';
 import { renderFieldsFile } from '../../schema/render.js';
+import { createOperation, finalizeOperation } from '../../undo/operation.js';
+import { captureGlobalFieldSnapshot } from '../../undo/global-field-snapshot.js';
 
 const fieldTypeEnum = z.enum(['string', 'number', 'date', 'boolean', 'reference', 'enum', 'list']);
 
@@ -27,12 +29,24 @@ export function registerCreateGlobalField(server: McpServer, db: Database.Databa
       }).optional().describe('Per-property override permissions for schema claims'),
     },
     async (params) => {
+      const operation_id = createOperation(db, {
+        source_tool: 'create-global-field',
+        description: `create-global-field: ${params.name}`,
+      });
       try {
-        const result = createGlobalField(db, params);
+        let result: ReturnType<typeof createGlobalField> | undefined;
+        const tx = db.transaction(() => {
+          captureGlobalFieldSnapshot(db, operation_id, params.name, { was_new: true });
+          result = createGlobalField(db, params);
+        });
+        tx();
+
         if (ctx?.vaultPath) renderFieldsFile(db, ctx.vaultPath);
-        return ok(result);
+        return ok({ ...result!, operation_id });
       } catch (err) {
         return fail('INVALID_PARAMS', err instanceof Error ? err.message : String(err));
+      } finally {
+        finalizeOperation(db, operation_id);
       }
     },
   );

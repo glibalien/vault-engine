@@ -2,6 +2,7 @@ import { describe, it, expect, beforeEach, afterEach } from 'vitest';
 import type { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import Database from 'better-sqlite3';
 import { createSchema } from '../../src/db/schema.js';
+import { addGlobalFieldUndoSnapshots, addUndoTables } from '../../src/db/migrate.js';
 import { createGlobalField } from '../../src/global-fields/crud.js';
 import { registerUpdateGlobalField } from '../../src/mcp/tools/update-global-field.js';
 
@@ -34,6 +35,8 @@ beforeEach(() => {
   db.pragma('journal_mode = WAL');
   db.pragma('foreign_keys = ON');
   createSchema(db);
+  addUndoTables(db);
+  addGlobalFieldUndoSnapshots(db);
 
   createGlobalField(db, { name: 'count', field_type: 'string' });
 
@@ -69,6 +72,18 @@ describe('update-global-field discard gate', () => {
 
     const field = db.prepare(`SELECT field_type FROM global_fields WHERE name = 'count'`).get() as { field_type: string };
     expect(field.field_type).toBe('string');
+  });
+
+  it('preview mode does not create an undo operation', async () => {
+    const handler = getHandler();
+    const before = (db.prepare('SELECT COUNT(*) AS c FROM undo_operations').get() as { c: number }).c;
+    const result = await handler({ name: 'count', field_type: 'number' });
+    const env = parseResult(result);
+
+    expect(env.ok).toBe(true);
+    expect((env.data as { preview: boolean }).preview).toBe(true);
+    const after = (db.prepare('SELECT COUNT(*) AS c FROM undo_operations').get() as { c: number }).c;
+    expect(after).toBe(before);
   });
 
   it('applies the type change when discard_uncoercible:true is passed', async () => {

@@ -150,15 +150,26 @@ Tool writes reject unknown types with `UNKNOWN_TYPE` and the list of `available_
 
 ---
 
+## Data Integrity Semantics
+
+- **Orphans are preserved.** Removing a type or schema claim changes field classification, not field storage. The value remains in `node_fields` and renders after claimed fields.
+- **Re-adoption validates.** If a later schema claim re-adopts an orphan field, the pipeline validates/coerces the structured value through the normal claimed-field path.
+- **Raw text is orphan-only.** Editor-authored orphan wiki-links can preserve `value_raw_text` for round-tripping. Once the field is claimed again, the typed value becomes authoritative and stale orphan raw text is cleared.
+- **Defaults are not retroactive.** Defaults populate at creation, type addition, and schema propagation for newly-added claims. The normalizer never backfills defaults into existing nodes.
+- **Watcher is permissive; tools are strict.** The watcher accepts unknown types and retains prior DB values for rejected fields. Tool writes block on validation errors and unknown types.
+- **Batch query updates are best-effort.** `update-node` query mode reports per-node failures instead of wrapping the whole matched set in one transaction.
+
+---
+
 ## Database Schema
 
-SQLite with WAL mode and foreign keys enabled. 12 tables + 3 virtual tables:
+SQLite runs with WAL mode and foreign keys enabled. Core tables include:
 
 | Table | Purpose |
 |-------|---------|
 | `nodes` | Core node data: file path, title, body, content hash, timestamps |
 | `node_types` | Node ↔ schema type mapping (many-to-many) |
-| `node_fields` | Field values in columnar form (text, number, date, json) with raw text preserved for wiki-link round-tripping |
+| `node_fields` | Field values in columnar form (text, number, date, json) with orphan-only raw text for wiki-link round-tripping |
 | `relationships` | Wiki-links and references (raw targets, resolved at query time) |
 | `global_fields` | Global field pool: type, enum values, defaults, override permissions |
 | `schemas` | Type definitions: display name, icon, filename template, default directory |
@@ -219,7 +230,7 @@ npm run build
 | Variable | Required | Description |
 |----------|----------|-------------|
 | `VAULT_PATH` | Yes | Absolute path to the vault directory |
-| `DB_PATH` | No | SQLite path (default `<VAULT_PATH>/.vault-engine/vault.db`) |
+| `DB_PATH` | No | SQLite path (default `<VAULT_PATH>/.vault-engine/vault-new.db`) |
 | `OAUTH_OWNER_PASSWORD` | HTTP only | Password for the OAuth token endpoint |
 | `OAUTH_ISSUER_URL` | HTTP only | OAuth issuer URL for token validation |
 | `VISION_PROVIDER` | No | `gemini` (default) or `claude` |
@@ -230,7 +241,18 @@ npm run build
 | `NORMALIZE_QUIESCENCE_MINUTES` | No | Skip files modified within this window (default 60) |
 | `VAULT_EXCLUDE_DIRS` | No | Comma-separated folder prefixes to exclude entirely |
 
+Minimal `.env`:
+
+```env
+VAULT_PATH=/path/to/vault
+DB_PATH=/path/to/vault/.vault-engine/vault-new.db
+OAUTH_OWNER_PASSWORD=change-me
+OAUTH_ISSUER_URL=https://vault.example.com
+```
+
 ### Running
+
+Commands read `VAULT_PATH` and optional settings from `.env`; alternatively export them in the shell before running.
 
 ```bash
 npm run dev                                    # dev (auto-reload)
@@ -251,15 +273,17 @@ node dist/index.js --reindex-search            # clear + rebuild the search inde
 ```ini
 [Unit]
 Description=Vault Engine
-After=network.target
+After=network-online.target
+Wants=network-online.target
 
 [Service]
 Type=simple
 User=<your-user>
 WorkingDirectory=/path/to/vault-engine
 EnvironmentFile=/path/to/vault-engine/.env
-ExecStart=/usr/bin/node dist/index.js --transport http --port 3334
+ExecStart=/usr/bin/node /path/to/vault-engine/dist/index.js /path/to/vault/.vault-engine/vault-new.db --transport http --port 3334
 Restart=on-failure
+RestartSec=10
 
 [Install]
 WantedBy=multi-user.target
@@ -274,6 +298,47 @@ ingress:
 ```
 
 OAuth auth is enforced on the HTTP transport (Bearer token, rate-limited to 5 attempts / 60 s). Stdio transport has no auth — it trusts the local process.
+
+### Operational notes
+
+- The HTTP transport binds to `127.0.0.1`; expose it through a local reverse proxy or tunnel rather than binding the Node process publicly.
+- The embedding worker is subprocess-isolated but memory-heavy. Expect roughly 1.5 GB RSS while the ONNX model is loaded.
+- Unsupported embedded file types can log extraction failures during background embedding. These failures drop that extraction job but do not stop the service.
+- The normalizer skips recently modified files according to `NORMALIZE_QUIESCENCE_MINUTES` to avoid fighting active editor saves.
+- `--reindex-search` clears vector rows and re-enqueues nodes for background embedding; it does not rebuild the SQLite schema from scratch.
+
+### MCP smoke check
+
+For HTTP deployments, first obtain an OAuth bearer token from the configured authorization flow. Then initialize an MCP session and call a tool:
+
+```bash
+TOKEN=...
+
+curl -i http://127.0.0.1:3334/mcp \
+  -H "Authorization: Bearer $TOKEN" \
+  -H "Accept: application/json, text/event-stream" \
+  -H "Content-Type: application/json" \
+  -d '{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2025-03-26","capabilities":{},"clientInfo":{"name":"smoke","version":"0.0.1"}}}'
+
+MCP_SESSION_ID=... # copy from the Mcp-Session-Id response header
+
+curl http://127.0.0.1:3334/mcp \
+  -H "Authorization: Bearer $TOKEN" \
+  -H "Mcp-Session-Id: $MCP_SESSION_ID" \
+  -H "Accept: application/json, text/event-stream" \
+  -H "Content-Type: application/json" \
+  -d '{"jsonrpc":"2.0","id":2,"method":"tools/call","params":{"name":"vault-stats","arguments":{}}}'
+```
+
+---
+
+## Known Limitations
+
+- Wiki-link alias preservation is orphan-only. Claimed reference fields render from typed target values.
+- Extraction coverage is extension-dependent. Unknown extensions are skipped for extraction embeddings.
+- Query-mode bulk mutation is best-effort across matched nodes, not one all-or-nothing transaction.
+- The watcher accepts editor-authored unknown types; tool callers must define schemas before writing typed nodes.
+- The normalizer intentionally skips recently modified files, so canonical rendering may lag active edits.
 
 ---
 

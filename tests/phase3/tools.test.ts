@@ -229,6 +229,46 @@ describe('schema propagation', () => {
       .get(node.node_id, 'priority') as { value_text: string } | undefined;
     expect(field?.value_text).toBe('normal');
   });
+
+  it('clears orphan raw text when a schema claim re-adopts and coerces the field', () => {
+    createGlobalField(db, { name: 'effort', field_type: 'number' });
+    createSchemaDefinition(db, { name: 'task', field_claims: [] });
+
+    const created = executeMutation(db, writeLock, vaultPath, {
+      source: 'watcher',
+      node_id: null,
+      file_path: 'task1.md',
+      title: 'Task 1',
+      types: ['task'],
+      fields: { effort: '42' },
+      body: '',
+      raw_field_texts: { effort: '[[42]]' },
+    });
+
+    expect(created.validation.orphan_fields).toContain('effort');
+    expect(db.prepare('SELECT value_raw_text FROM node_fields WHERE node_id = ? AND field_name = ?')
+      .get(created.node_id, 'effort')).toMatchObject({ value_raw_text: '[[42]]' });
+
+    updateSchemaDefinition(db, 'task', {
+      field_claims: [{ field: 'effort' }],
+    });
+    propagateSchemaChange(db, writeLock, vaultPath, 'task', diffClaims([], [{ field: 'effort' }]));
+
+    const adopted = db.prepare(
+      'SELECT value_number, value_raw_text FROM node_fields WHERE node_id = ? AND field_name = ?',
+    ).get(created.node_id, 'effort') as { value_number: number | null; value_raw_text: string | null };
+    expect(adopted.value_number).toBe(42);
+    expect(adopted.value_raw_text).toBeNull();
+
+    updateSchemaDefinition(db, 'task', {
+      field_claims: [],
+    });
+    propagateSchemaChange(db, writeLock, vaultPath, 'task', diffClaims([{ field: 'effort' }], []));
+
+    const rendered = readFileSync(join(vaultPath, 'task1.md'), 'utf8');
+    expect(rendered).toContain('effort: 42');
+    expect(rendered).not.toContain('[[42]]');
+  });
 });
 
 // ── batch-mutate ──────────────────────────────────────────────────────

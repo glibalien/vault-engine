@@ -366,8 +366,9 @@ export function executeMutation(
       for (const [fieldName, value] of Object.entries(finalFields)) {
         if (value === null || value === undefined) continue;
         const cols = classifyValue(value);
-        const rawText = finalRawFieldTexts[fieldName]
-          ?? (mutation.raw_field_texts?.[fieldName] ?? null);
+        const rawText = validation.orphan_fields.includes(fieldName)
+          ? (finalRawFieldTexts[fieldName] ?? (mutation.raw_field_texts?.[fieldName] ?? null))
+          : null;
         insertField.run({
           node_id: nodeId,
           field_name: fieldName,

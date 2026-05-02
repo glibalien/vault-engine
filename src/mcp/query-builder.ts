@@ -27,6 +27,8 @@ export interface JoinFilter {
 }
 
 export interface NodeQueryFilter {
+  node_ids?: string[];
+  without_node_ids?: string[];
   types?: string[];
   without_types?: string[];
   fields?: Record<string, FieldFilter>;
@@ -34,6 +36,7 @@ export interface NodeQueryFilter {
   references?: ReferenceFilter;
   title_eq?: string;
   title_contains?: string;
+  without_titles?: string[];
   path_prefix?: string;
   without_path_prefix?: string;
   path_dir?: string;
@@ -78,6 +81,19 @@ export function buildFilterClauses(
   const joinParams: unknown[] = [];
   const whereClauses: string[] = [];
   const whereParams: unknown[] = [];
+
+  // Identity filters
+  if (filter.node_ids && filter.node_ids.length > 0) {
+    const placeholders = filter.node_ids.map(() => '?').join(', ');
+    whereClauses.push(`${alias}.id IN (${placeholders})`);
+    whereParams.push(...filter.node_ids);
+  }
+
+  if (filter.without_node_ids && filter.without_node_ids.length > 0) {
+    const placeholders = filter.without_node_ids.map(() => '?').join(', ');
+    whereClauses.push(`${alias}.id NOT IN (${placeholders})`);
+    whereParams.push(...filter.without_node_ids);
+  }
 
   // Type filter (intersection: node must have ALL specified types)
   if (filter.types && filter.types.length > 0) {
@@ -221,6 +237,11 @@ export function buildFilterClauses(
   if (filter.title_contains !== undefined) {
     whereClauses.push(`${alias}.title LIKE ? COLLATE NOCASE`);
     whereParams.push(`%${filter.title_contains}%`);
+  }
+  if (filter.without_titles && filter.without_titles.length > 0) {
+    const placeholders = filter.without_titles.map(() => '?').join(', ');
+    whereClauses.push(`${alias}.title COLLATE NOCASE NOT IN (${placeholders})`);
+    whereParams.push(...filter.without_titles);
   }
 
   // Path prefix filter

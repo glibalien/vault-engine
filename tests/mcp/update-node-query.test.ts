@@ -34,6 +34,17 @@ function captureHandler() {
   return capturedHandler!;
 }
 
+function captureRegistration() {
+  let captured: { description: string; schema: Record<string, unknown> } | undefined;
+  const fakeServer = {
+    tool: (_name: string, desc: string, schema: Record<string, unknown>, _h: (...args: unknown[]) => unknown) => {
+      captured = { description: desc, schema };
+    },
+  } as unknown as McpServer;
+  registerUpdateNode(fakeServer, db, writeLock, vaultPath);
+  return captured!;
+}
+
 function createNode(overrides: {
   file_path: string;
   title: string;
@@ -74,6 +85,24 @@ beforeEach(() => {
 afterEach(() => {
   db.close();
   cleanup();
+});
+
+describe('update-node metadata', () => {
+  it('advertises single-node set_directory and query exclusion filters', () => {
+    const registration = captureRegistration();
+    expect(registration.description).toContain('set_directory moves files to a target directory');
+    expect(registration.description).toContain('single-node mode');
+    expect(registration.description).toContain('without_node_ids');
+    expect(registration.description).toContain('without_titles');
+
+    const querySchema = registration.schema.query as { unwrap: () => { shape: Record<string, unknown> } };
+    const queryShape = querySchema.unwrap().shape;
+    expect(queryShape).toHaveProperty('node_ids');
+    expect(queryShape).toHaveProperty('without_node_ids');
+    expect(queryShape).toHaveProperty('title_eq');
+    expect(queryShape).toHaveProperty('title_contains');
+    expect(queryShape).toHaveProperty('without_titles');
+  });
 });
 
 describe('update-node query mode — add_types', () => {
@@ -328,17 +357,53 @@ describe('update-node query mode — requires operation', () => {
 });
 
 describe('update-node query mode — set_directory', () => {
-  it('rejects set_directory in single-node mode', async () => {
+  it('moves a single node and combines set_directory with add_types', async () => {
     createNode({ file_path: 'a.md', title: 'A', types: [] });
 
     const body = parseResult(await handler({
       title: 'A',
       set_directory: 'Persons',
+      add_types: ['person'],
+    }));
+
+    expect(body.ok).toBe(true);
+    const data = body.data as Record<string, unknown>;
+    expect(data.file_path).toBe('Persons/A.md');
+    expect(existsSync(join(vaultPath, 'Persons/A.md'))).toBe(true);
+    expect(existsSync(join(vaultPath, 'a.md'))).toBe(false);
+
+    const types = db.prepare("SELECT schema_type FROM node_types WHERE node_id = (SELECT id FROM nodes WHERE title = 'A')").all() as Array<{ schema_type: string }>;
+    expect(types.map(t => t.schema_type)).toContain('person');
+  });
+
+  it('dry-runs a single-node set_directory move', async () => {
+    createNode({ file_path: 'a.md', title: 'A', types: ['person'] });
+
+    const body = parseResult(await handler({
+      title: 'A',
+      set_directory: 'Persons',
+      dry_run: true,
+    }));
+
+    expect(body.ok).toBe(true);
+    const data = body.data as { dry_run: boolean; preview: { file_path: string } };
+    expect(data.dry_run).toBe(true);
+    expect(data.preview.file_path).toBe('Persons/A.md');
+    expect(existsSync(join(vaultPath, 'a.md'))).toBe(true);
+    expect(existsSync(join(vaultPath, 'Persons/A.md'))).toBe(false);
+  });
+
+  it('rejects single-node set_directory ending in .md', async () => {
+    createNode({ file_path: 'a.md', title: 'A', types: [] });
+
+    const body = parseResult(await handler({
+      title: 'A',
+      set_directory: 'Persons/A.md',
     }));
 
     expect(body.ok).toBe(false);
     const error = body.error as { code: string; message: string };
-    expect(error.message).toContain('rename-node');
+    expect(error.code).toBe('INVALID_PARAMS');
   });
 
   it('dry-run preview shows path_changed for moved nodes', async () => {
@@ -488,6 +553,42 @@ describe('update-node query mode — set_directory', () => {
     const alice = db.prepare("SELECT file_path FROM nodes WHERE title = 'Alice'").get() as { file_path: string };
     expect(alice.file_path).toBe('Alice.md');
     expect(existsSync(join(vaultPath, 'Alice.md'))).toBe(true);
+  });
+});
+
+describe('update-node query mode — exclusion filters', () => {
+  it('excludes keepers by without_titles during bulk update', async () => {
+    createNode({ file_path: 'CLAUDE.md', title: 'CLAUDE', types: ['note'] });
+    createNode({ file_path: 'Move Me.md', title: 'Move Me', types: ['note'] });
+
+    const body = parseResult(await handler({
+      query: { types: ['note'], without_titles: ['CLAUDE'] },
+      set_directory: 'Notes',
+      dry_run: false,
+    }));
+
+    expect(body.ok).toBe(true);
+    const data = body.data as Record<string, unknown>;
+    expect(data.updated).toBe(1);
+    expect(existsSync(join(vaultPath, 'CLAUDE.md'))).toBe(true);
+    expect(existsSync(join(vaultPath, 'Notes/Move Me.md'))).toBe(true);
+  });
+
+  it('excludes keepers by without_node_ids during bulk update', async () => {
+    const keeper = createNode({ file_path: 'Preferences.md', title: 'Preferences', types: ['note'] });
+    createNode({ file_path: 'Archive Me.md', title: 'Archive Me', types: ['note'] });
+
+    const body = parseResult(await handler({
+      query: { types: ['note'], without_node_ids: [keeper.node_id] },
+      set_directory: 'Notes',
+      dry_run: false,
+    }));
+
+    expect(body.ok).toBe(true);
+    const data = body.data as Record<string, unknown>;
+    expect(data.updated).toBe(1);
+    expect(existsSync(join(vaultPath, 'Preferences.md'))).toBe(true);
+    expect(existsSync(join(vaultPath, 'Notes/Archive Me.md'))).toBe(true);
   });
 });
 

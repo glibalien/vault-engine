@@ -4,7 +4,7 @@
 // Section 5 of the Phase 3 spec.
 
 import { join } from 'node:path';
-import { statSync } from 'node:fs';
+import { statSync, unlinkSync } from 'node:fs';
 import { safeVaultPath } from './safe-path.js';
 import type Database from 'better-sqlite3';
 import { nanoid } from 'nanoid';
@@ -43,6 +43,7 @@ export function executeMutation(
   mutation: ProposedMutation,
   syncLogger?: SyncLogger,
   undoContext?: UndoContext,
+  fsRollback?: { push(undo: () => void): void },
 ): PipelineResult {
   const absPath = safeVaultPath(vaultPath, mutation.file_path);
 
@@ -297,6 +298,18 @@ export function executeMutation(
       const shouldWriteFile = !mutation.db_only;
       if (shouldWriteFile) {
         atomicWriteFile(absPath, fileContent, tmpDir);
+        fsRollback?.push(() => {
+          const currentContent = readFileOrNull(absPath);
+          if (currentContent === null || sha256(currentContent) !== renderedHash) {
+            return;
+          }
+
+          if (existingContent === null) {
+            unlinkSync(absPath);
+          } else {
+            atomicWriteFile(absPath, existingContent, tmpDir);
+          }
+        });
         syncLogger?.fileWritten(mutation.file_path, mutation.source, renderedHash);
       }
 

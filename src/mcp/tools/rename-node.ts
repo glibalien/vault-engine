@@ -25,10 +25,7 @@ import { createOperation, finalizeOperation } from '../../undo/operation.js';
 
 /**
  * A pending filesystem mutation that should be reversed if the surrounding
- * DB transaction throws. Currently only the file-rename in step 1 of
- * `executeRename` is tracked; `executeMutation`'s atomic file writes are
- * not (would require pre-write content snapshots — a larger change).
- * See §2d in the 2026-04-25 backlog.
+ * DB transaction throws.
  */
 export interface FsRollback {
   push(undo: () => void): void;
@@ -170,7 +167,7 @@ export function executeRename(
     types,
     fields,
     body,
-  }, syncLogger, undoContext);
+  }, syncLogger, undoContext, fsRollback);
 
   // 4. Update references in referencing nodes
   let refsUpdated = 0;
@@ -211,7 +208,7 @@ export function executeRename(
         types: refTypes,
         fields: refFields,
         body: newBody,
-      }, syncLogger, undoContext);
+      }, syncLogger, undoContext, fsRollback);
       refsUpdated++;
     }
   }

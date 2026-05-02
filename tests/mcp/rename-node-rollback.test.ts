@@ -1,5 +1,5 @@
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
-import { mkdtempSync, rmSync, existsSync } from 'node:fs';
+import { mkdtempSync, rmSync, existsSync, readFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 import Database from 'better-sqlite3';
@@ -165,5 +165,65 @@ describe('rename-node filesystem rollback', () => {
     // 3. File restored on disk.
     expect(existsSync(join(vaultPath, oldFilePath))).toBe(true);
     expect(existsSync(join(vaultPath, newFilePath))).toBe(false);
+  });
+
+  it('registerRenameNode catch path: restores executeMutation file writes before rolling back the rename', async () => {
+    addUndoTables(db);
+    addNodeTypesSortOrder(db);
+
+    const setupLock = new WriteLockManager();
+
+    const oldFilePath = 'Notes/RollbackOrig.md';
+    executeMutation(db, setupLock, vaultPath, {
+      source: 'tool',
+      node_id: null,
+      file_path: oldFilePath,
+      title: 'RollbackOrig',
+      types: [],
+      fields: {},
+      body: '',
+    });
+
+    const refFilePath = 'Notes/Ref.md';
+    executeMutation(db, setupLock, vaultPath, {
+      source: 'tool',
+      node_id: null,
+      file_path: refFilePath,
+      title: 'Ref',
+      types: [],
+      fields: {},
+      body: 'See [[RollbackOrig]].',
+    });
+
+    class FailingAfterWriteLockManager extends WriteLockManager {
+      override withLockSync<T>(filePath: string, fn: () => T): T {
+        const result = fn();
+        throw new Error(`simulated post-write failure for ${filePath}`);
+      }
+    }
+    const failingLock = new FailingAfterWriteLockManager();
+
+    let handler!: (args: Record<string, unknown>) => Promise<unknown>;
+    const fakeServer = {
+      tool: (_n: string, _d: string, _s: unknown, h: (...a: unknown[]) => unknown) => {
+        handler = (args) => h(args) as Promise<unknown>;
+      },
+    } as unknown as McpServer;
+    registerRenameNode(fakeServer, db, failingLock, vaultPath);
+
+    const errorSpy = vi.spyOn(console, 'error').mockImplementation(() => {});
+    const raw = await handler({ title: 'RollbackOrig', new_title: 'RollbackNew' });
+    const result = JSON.parse(
+      (raw as { content: Array<{ text: string }> }).content[0].text,
+    );
+    errorSpy.mockRestore();
+
+    expect(result.ok).toBe(false);
+    expect(result.error.code).toBe('INTERNAL_ERROR');
+
+    expect(existsSync(join(vaultPath, oldFilePath))).toBe(true);
+    expect(existsSync(join(vaultPath, 'Notes/RollbackNew.md'))).toBe(false);
+    expect(readFileSync(join(vaultPath, refFilePath), 'utf-8')).toContain('[[RollbackOrig]]');
+    expect(readFileSync(join(vaultPath, refFilePath), 'utf-8')).not.toContain('[[RollbackNew]]');
   });
 });

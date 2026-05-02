@@ -60,7 +60,9 @@ export function previewSchemaChange(
       label: c.label,
       description: c.description,
       required: c.required ?? null,
-      default_value: c.default_value ?? null,
+      default_value: (c.default_value_overridden === true || c.default_value !== undefined)
+        ? (c.default_value ?? null)
+        : undefined,
       enum_values_override: c.enum_values_override ?? null,
     }));
     const diff = diffClaims(oldClaims, newClaimsShape);
@@ -114,4 +116,3 @@ export function previewSchemaChange(
     db.prepare('RELEASE SAVEPOINT preview_schema_change').run();
   }
 }
-

@@ -205,6 +205,152 @@ describe('update-schema dry_run', () => {
   });
 });
 
+describe('update-schema patch-style field claim ops', () => {
+  let handler: (args: Record<string, unknown>) => Promise<unknown>;
+
+  beforeEach(() => {
+    db.prepare('DELETE FROM global_fields').run();
+    createGlobalField(db, { name: 'status', field_type: 'string', default_value: 'open', required: true });
+    createGlobalField(db, { name: 'priority', field_type: 'string' });
+    createSchemaDefinition(db, { name: 'task', field_claims: [{ field: 'status', sort_order: 1 }] });
+    handler = getHandler();
+  });
+
+  it('add_field_claims appends claims without replacing existing claims', async () => {
+    const result = parseResult(await handler({
+      name: 'task',
+      add_field_claims: [{ field: 'priority', sort_order: 2 }],
+      dry_run: true,
+    }));
+
+    expect(result.ok).toBe(true);
+    const data = (result as { data: { claims_added: string[]; claims_removed: string[]; claims_modified: string[] } }).data;
+    expect(data.claims_added).toEqual(['priority']);
+    expect(data.claims_removed).toEqual([]);
+    expect(data.claims_modified).toEqual([]);
+
+    const dryClaims = db.prepare('SELECT field FROM schema_field_claims WHERE schema_name = ? ORDER BY sort_order').all('task') as Array<{ field: string }>;
+    expect(dryClaims.map(c => c.field)).toEqual(['status']);
+
+    const commit = parseResult(await handler({
+      name: 'task',
+      add_field_claims: [{ field: 'priority', sort_order: 2 }],
+    }));
+
+    expect(commit.ok).toBe(true);
+    const claims = db.prepare('SELECT field FROM schema_field_claims WHERE schema_name = ? ORDER BY sort_order').all('task') as Array<{ field: string }>;
+    expect(claims.map(c => c.field)).toEqual(['status', 'priority']);
+  });
+
+  it('update_field_claims patches only the named existing claim', async () => {
+    await handler({
+      name: 'task',
+      add_field_claims: [{ field: 'priority', sort_order: 2 }],
+    });
+
+    const result = parseResult(await handler({
+      name: 'task',
+      update_field_claims: [{ field: 'priority', label: 'Urgency' }],
+    }));
+
+    expect(result.ok).toBe(true);
+    const claims = db.prepare('SELECT field, sort_order, label FROM schema_field_claims WHERE schema_name = ? ORDER BY field').all('task') as Array<{
+      field: string;
+      sort_order: number;
+      label: string | null;
+    }>;
+    expect(claims).toEqual([
+      { field: 'priority', sort_order: 2, label: 'Urgency' },
+      { field: 'status', sort_order: 1, label: null },
+    ]);
+  });
+
+  it('remove_field_claims uses the same orphan confirmation gate as replace-all removal', async () => {
+    executeMutation(db, writeLock, vaultPath, {
+      source: 'tool',
+      node_id: null,
+      file_path: 'a.md',
+      title: 'A',
+      types: ['task'],
+      fields: { status: 'done' },
+      body: '',
+    });
+
+    const blocked = parseResult(await handler({
+      name: 'task',
+      remove_field_claims: ['status'],
+    }));
+
+    expect(blocked.ok).toBe(false);
+    expect((blocked as { error: { code: string } }).error.code).toBe('CONFIRMATION_REQUIRED');
+
+    const committed = parseResult(await handler({
+      name: 'task',
+      remove_field_claims: ['status'],
+      confirm_large_change: true,
+    }));
+
+    expect(committed.ok).toBe(true);
+    const claims = db.prepare('SELECT field FROM schema_field_claims WHERE schema_name = ?').all('task');
+    expect(claims).toEqual([]);
+  });
+
+  it('rejects mixing replace-all field_claims with patch-style claim ops', async () => {
+    const result = parseResult(await handler({
+      name: 'task',
+      field_claims: [],
+      add_field_claims: [{ field: 'priority' }],
+    }));
+
+    expect(result.ok).toBe(false);
+    const err = (result as { error: { code: string; message: string } }).error;
+    expect(err.code).toBe('INVALID_PARAMS');
+    expect(err.message).toContain('cannot be combined');
+  });
+
+  it('rejects patch ops that target the wrong claim state before mutating', async () => {
+    const duplicate = parseResult(await handler({
+      name: 'task',
+      add_field_claims: [{ field: 'status' }],
+    }));
+    expect(duplicate.ok).toBe(false);
+    expect((duplicate as { error: { code: string; message: string } }).error.message).toContain('already claims');
+
+    const missingUpdate = parseResult(await handler({
+      name: 'task',
+      update_field_claims: [{ field: 'priority' }],
+    }));
+    expect(missingUpdate.ok).toBe(false);
+    expect((missingUpdate as { error: { code: string; message: string } }).error.message).toContain('does not claim');
+
+    const missingRemove = parseResult(await handler({
+      name: 'task',
+      remove_field_claims: ['priority'],
+    }));
+    expect(missingRemove.ok).toBe(false);
+    expect((missingRemove as { error: { code: string; message: string } }).error.message).toContain('does not claim');
+
+    const claims = db.prepare('SELECT field FROM schema_field_claims WHERE schema_name = ?').all('task') as Array<{ field: string }>;
+    expect(claims.map(c => c.field)).toEqual(['status']);
+  });
+
+  it('surfaces validation details for invalid patch-added claims', async () => {
+    const result = parseResult(await handler({
+      name: 'task',
+      add_field_claims: [{ field: 'missing' }],
+      dry_run: true,
+    }));
+
+    expect(result.ok).toBe(false);
+    const err = (result as { error: { code: string; details: { groups: Array<{ reason: string; field: string }>; claims_added: string[] } } }).error;
+    expect(err.code).toBe('VALIDATION_FAILED');
+    expect(err.details.groups).toEqual([
+      expect.objectContaining({ reason: 'UNKNOWN_FIELD', field: 'missing' }),
+    ]);
+    expect(err.details.claims_added).toEqual(['missing']);
+  });
+});
+
 describe('update-schema confirm_large_change gate', () => {
   let handler: (args: Record<string, unknown>) => Promise<unknown>;
 

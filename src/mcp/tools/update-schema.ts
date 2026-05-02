@@ -2,10 +2,11 @@ import type { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import type Database from 'better-sqlite3';
 import { z } from 'zod';
 import { ok, fail } from './errors.js';
-import { updateSchemaDefinition } from '../../schema/crud.js';
+import { updateSchemaDefinition, type ClaimInput } from '../../schema/crud.js';
 import { propagateSchemaChange } from '../../schema/propagate.js';
 import { renderSchemaFile } from '../../schema/render.js';
 import { previewSchemaChange } from '../../schema/preview.js';
+import { readCurrentClaims } from '../../schema/claims.js';
 import { SchemaValidationError } from '../../schema/errors.js';
 import { createOperation, finalizeOperation } from '../../undo/operation.js';
 import { captureSchemaSnapshot } from '../../undo/schema-snapshot.js';
@@ -25,6 +26,7 @@ const fieldClaimSchema = z.object({
 
 const TOOL_DESC =
   'Updates an existing schema definition. If field_claims is provided, it replaces all existing claims. ' +
+  'Alternatively, use add_field_claims, update_field_claims, and remove_field_claims for patch-style claim edits. ' +
   'When dry_run=true, returns a preview (claim diff, orphan counts, propagation numbers) without committing — ' +
   'a response with ok:false on a dry-run means the change WOULD BE REJECTED if committed, not that the dry-run itself failed; ' +
   'preview data is then in error.details alongside groups. ' +
@@ -46,6 +48,9 @@ export function registerUpdateSchema(
       filename_template: z.string().optional().describe('New filename template (name only, e.g. "{date} - {title}.md")'),
       default_directory: z.string().optional().describe('New default directory for files of this type'),
       field_claims: z.array(fieldClaimSchema).optional().describe('New field claims (replaces existing)'),
+      add_field_claims: z.array(fieldClaimSchema).optional().describe('Field claims to add without replacing existing claims'),
+      update_field_claims: z.array(fieldClaimSchema).optional().describe('Existing field claims to patch by field name without changing other claims'),
+      remove_field_claims: z.array(z.string()).optional().describe('Field names to remove from this schema without replacing other claims'),
       metadata: z.unknown().optional().describe('New metadata'),
       dry_run: z.boolean().optional().describe('Preview the effect without committing'),
       confirm_large_change: z.boolean().optional().describe('Acknowledge the change would orphan field values. Required when propagation would orphan any field.'),
@@ -57,10 +62,17 @@ export function registerUpdateSchema(
       const writeLock = ctx.writeLock;
       const vaultPath = ctx.vaultPath;
 
+      let normalizedRest;
+      try {
+        normalizedRest = normalizeSchemaUpdate(db, name, rest);
+      } catch (err) {
+        return fail('INVALID_PARAMS', err instanceof Error ? err.message : String(err));
+      }
+
       // Preview first — no operation created, no side effects.
       let preview;
       try {
-        preview = previewSchemaChange(db, writeLock, vaultPath, name, rest);
+        preview = previewSchemaChange(db, writeLock, vaultPath, name, normalizedRest);
       } catch (err) {
         return fail('INVALID_PARAMS', err instanceof Error ? err.message : String(err));
       }
@@ -110,7 +122,7 @@ export function registerUpdateSchema(
       // Live-commit path.
       const operation_id = createOperation(db, {
         source_tool: 'update-schema',
-        description: buildDescription(name, rest, preview),
+        description: buildDescription(name, normalizedRest, preview),
       });
 
       let finalResult: ReturnType<typeof updateSchemaDefinition> | undefined;
@@ -118,8 +130,8 @@ export function registerUpdateSchema(
       try {
         const tx = db.transaction(() => {
           captureSchemaSnapshot(db, operation_id, name);
-          finalResult = updateSchemaDefinition(db, name, rest);
-          if (rest.field_claims) {
+          finalResult = updateSchemaDefinition(db, name, normalizedRest);
+          if (normalizedRest.field_claims) {
             const preDiff = {
               added: preview.claims_added,
               removed: preview.claims_removed,
@@ -149,6 +161,98 @@ export function registerUpdateSchema(
       }
     },
   );
+}
+
+type RawUpdateRest = {
+  display_name?: string;
+  icon?: string;
+  filename_template?: string;
+  default_directory?: string;
+  field_claims?: z.infer<typeof fieldClaimSchema>[];
+  add_field_claims?: z.infer<typeof fieldClaimSchema>[];
+  update_field_claims?: z.infer<typeof fieldClaimSchema>[];
+  remove_field_claims?: string[];
+  metadata?: unknown;
+};
+
+type NormalizedUpdateRest = {
+  display_name?: string;
+  icon?: string;
+  filename_template?: string;
+  default_directory?: string;
+  field_claims?: z.infer<typeof fieldClaimSchema>[];
+  metadata?: unknown;
+};
+
+function normalizeSchemaUpdate(
+  db: Database.Database,
+  name: string,
+  rest: RawUpdateRest,
+): NormalizedUpdateRest {
+  const {
+    add_field_claims,
+    update_field_claims,
+    remove_field_claims,
+    ...base
+  } = rest;
+
+  const hasPatchOps =
+    add_field_claims !== undefined ||
+    update_field_claims !== undefined ||
+    remove_field_claims !== undefined;
+
+  if (base.field_claims !== undefined && hasPatchOps) {
+    throw new Error('field_claims replaces all claims and cannot be combined with add_field_claims, update_field_claims, or remove_field_claims.');
+  }
+
+  if (!hasPatchOps) return base;
+
+  const existing: ClaimInput[] = readCurrentClaims(db, name).map(claim => ({
+    field: claim.field,
+    sort_order: claim.sort_order,
+    label: claim.label,
+    description: claim.description,
+    required: claim.required ?? undefined,
+    default_value: claim.default_value,
+    default_value_overridden: claim.default_value !== undefined,
+    enum_values_override: claim.enum_values_override ?? undefined,
+  }));
+
+  const claimsByField = new Map(existing.map(claim => [claim.field, claim]));
+
+  for (const claim of add_field_claims ?? []) {
+    if (claimsByField.has(claim.field)) {
+      throw new Error(`Cannot add claim '${claim.field}' because schema '${name}' already claims it. Use update_field_claims to modify it.`);
+    }
+    claimsByField.set(claim.field, claim);
+  }
+
+  for (const claim of update_field_claims ?? []) {
+    const current = claimsByField.get(claim.field);
+    if (!current) {
+      throw new Error(`Cannot update claim '${claim.field}' because schema '${name}' does not claim it. Use add_field_claims to add it.`);
+    }
+    const merged: ClaimInput = {
+      ...current,
+      ...claim,
+      default_value_overridden: claim.default_value !== undefined
+        ? true
+        : claim.default_value_overridden ?? current.default_value_overridden,
+    };
+    claimsByField.set(claim.field, merged);
+  }
+
+  for (const field of remove_field_claims ?? []) {
+    if (!claimsByField.has(field)) {
+      throw new Error(`Cannot remove claim '${field}' because schema '${name}' does not claim it.`);
+    }
+    claimsByField.delete(field);
+  }
+
+  return {
+    ...base,
+    field_claims: Array.from(claimsByField.values()),
+  };
 }
 
 function buildDescription(

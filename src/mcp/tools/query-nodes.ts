@@ -29,12 +29,15 @@ const referenceSchema = z.object({
 });
 
 const targetFilterSchema = z.object({
+  node_ids: z.array(z.string()).optional(),
+  without_node_ids: z.array(z.string()).optional(),
   types: z.array(z.string()).optional(),
   without_types: z.array(z.string()).optional(),
   fields: z.record(z.string(), fieldFilterSchema).optional(),
   without_fields: z.array(z.string()).optional(),
   title_eq: z.string().optional(),
   title_contains: z.string().optional(),
+  without_titles: z.array(z.string()).optional(),
   references: referenceSchema.optional(),
   path_prefix: z.string().optional(),
   without_path_prefix: z.string().optional(),
@@ -53,12 +56,15 @@ const joinFilterSchema = z.object({
 );
 
 const paramsShape = {
+  node_ids: z.array(z.string()).optional(),
+  without_node_ids: z.array(z.string()).optional(),
   types: z.array(z.string()).optional(),
   without_types: z.array(z.string()).optional(),
   fields: z.record(z.string(), fieldFilterSchema).optional(),
   without_fields: z.array(z.string()).optional(),
   title_eq: z.string().optional(),
   title_contains: z.string().optional(),
+  without_titles: z.array(z.string()).optional(),
   query: z.string().optional(),
   references: referenceSchema.optional(),
   path_prefix: z.string().optional(),
@@ -236,7 +242,7 @@ export function registerQueryNodes(
 ): void {
   server.tool(
     'query-nodes',
-    'Search and query nodes across the vault: semantic (vector) search, full-text search, and structured filters on type, fields, references, path, date, and cross-node joins. Use the query param for hybrid ranked results combining FTS and semantic retrieval. Scores use Reciprocal Rank Fusion (RRF) — absolute values are not meaningful, only relative ordering matters. match_sources indicates retrieval method: "fts" (full-text match), "semantic" (vector/embedding match), or both. Returns paginated results. Use include_fields to return field values inline (e.g. ["project","status"] or ["*"] for all). When you know the exact title, prefer get-node with title param. For partial title matching, use title_contains. For exact title filtering combined with other constraints, use title_eq. Cross-node filtering: join_filters narrows results to nodes linked to a target matching a nested filter; without_joins excludes them. Each filter has optional direction ("outgoing" default, or "incoming"), optional rel_type (string or array for OR), and optional target (nested NodeQueryFilter without its own join_filters). Example — open tasks whose linked project is done: {"types":["task"],"fields":{"status":{"eq":"open"}},"join_filters":[{"rel_type":"project","target":{"types":["project"],"fields":{"status":{"eq":"done"}}}}]}. Differs from references: references matches by identity (a specific target), join_filters matches by pattern (any node matching the target filter). When a join filter has a target, unresolved edges are invisible to it; a CROSS_NODE_FILTER_UNRESOLVED warning surfaces in the envelope warnings array if such edges existed and could have affected the answer.\n\nField operator cheatsheet (use describe-global-field if unsure of a field type):\n- scalar string / enum: eq, ne, one_of, exists\n- number / date: eq, ne, gt, gte, lt, lte, exists (dates are ISO 8601 strings)\n- list of strings / list of refs: includes (element match), exists\n- any field: contains (substring, searches both text and JSON values)\nNote: includes is for list fields only; on scalars it silently returns no rows. eq/ne on list fields likewise won\'t match. For reference fields, prefer the top-level `references:{target,rel_type}` filter over `includes` — it resolves title/path/id variants correctly.\n\nCommon query recipes:\n- Open tasks: {"types":["task"],"fields":{"status":{"eq":"open"}}}\n- Tasks with multiple statuses: {"types":["task"],"fields":{"status":{"one_of":["open","pending"]}}}\n- Tasks in project X: {"types":["task"],"references":{"target":"X","rel_type":"project"}}\n- Overdue tasks: {"types":["task"],"fields":{"due":{"lt":"2026-04-20"},"status":{"ne":"done"}}}\n- Tasks with no project: {"types":["task"],"without_fields":["project"]}\n- Recently modified notes: {"types":["note"],"modified_since":"2026-04-13"}',
+    'Search and query nodes across the vault: semantic (vector) search, full-text search, and structured filters on identity, type, fields, references, path, date, and cross-node joins. Use the query param for hybrid ranked results combining FTS and semantic retrieval. Scores use Reciprocal Rank Fusion (RRF) — absolute values are not meaningful, only relative ordering matters. match_sources indicates retrieval method: "fts" (full-text match), "semantic" (vector/embedding match), or both. Returns paginated results. Use include_fields to return field values inline (e.g. ["project","status"] or ["*"] for all). When you know the exact title, prefer get-node with title param. For partial title matching, use title_contains. For exact title filtering combined with other constraints, use title_eq. Use without_node_ids or without_titles to exclude known keepers from broader filters. Cross-node filtering: join_filters narrows results to nodes linked to a target matching a nested filter; without_joins excludes them. Each filter has optional direction ("outgoing" default, or "incoming"), optional rel_type (string or array for OR), and optional target (nested NodeQueryFilter without its own join_filters). Example — open tasks whose linked project is done: {"types":["task"],"fields":{"status":{"eq":"open"}},"join_filters":[{"rel_type":"project","target":{"types":["project"],"fields":{"status":{"eq":"done"}}}}]}. Differs from references: references matches by identity (a specific target), join_filters matches by pattern (any node matching the target filter). When a join filter has a target, unresolved edges are invisible to it; a CROSS_NODE_FILTER_UNRESOLVED warning surfaces in the envelope warnings array if such edges existed and could have affected the answer.\n\nField operator cheatsheet (use describe-global-field if unsure of a field type):\n- scalar string / enum: eq, ne, one_of, exists\n- number / date: eq, ne, gt, gte, lt, lte, exists (dates are ISO 8601 strings)\n- list of strings / list of refs: includes (element match), exists\n- any field: contains (substring, searches both text and JSON values)\nNote: includes is for list fields only; on scalars it silently returns no rows. eq/ne on list fields likewise won\'t match. For reference fields, prefer the top-level `references:{target,rel_type}` filter over `includes` — it resolves title/path/id variants correctly.\n\nCommon query recipes:\n- Open tasks: {"types":["task"],"fields":{"status":{"eq":"open"}}}\n- Tasks with multiple statuses: {"types":["task"],"fields":{"status":{"one_of":["open","pending"]}}}\n- Tasks in project X: {"types":["task"],"references":{"target":"X","rel_type":"project"}}\n- Overdue tasks: {"types":["task"],"fields":{"due":{"lt":"2026-04-20"},"status":{"ne":"done"}}}\n- Tasks with no project: {"types":["task"],"without_fields":["project"]}\n- Recently modified notes: {"types":["note"],"modified_since":"2026-04-13"}',
     paramsShape,
     async (params) => {
       const sortBy = params.sort_by ?? 'title';
@@ -248,12 +254,15 @@ export function registerQueryNodes(
 
       const hasStructuredFilters = Boolean(
         params.types?.length ||
+        params.node_ids?.length ||
+        params.without_node_ids?.length ||
         params.without_types?.length ||
         params.fields ||
         params.without_fields?.length ||
         params.references ||
         params.title_eq ||
         params.title_contains ||
+        params.without_titles?.length ||
         params.path_prefix ||
         params.without_path_prefix ||
         params.path_dir !== undefined ||
@@ -268,6 +277,8 @@ export function registerQueryNodes(
 
         if (hasStructuredFilters) {
           const filter: NodeQueryFilter = {
+            node_ids: params.node_ids,
+            without_node_ids: params.without_node_ids,
             types: params.types,
             without_types: params.without_types,
             fields: params.fields as NodeQueryFilter['fields'],
@@ -275,6 +286,7 @@ export function registerQueryNodes(
             references: params.references,
             title_eq: params.title_eq,
             title_contains: params.title_contains,
+            without_titles: params.without_titles,
             path_prefix: params.path_prefix,
             without_path_prefix: params.without_path_prefix,
             path_dir: params.path_dir,
@@ -334,6 +346,8 @@ export function registerQueryNodes(
 
       // Standard structured query path (no query param, or no embedder)
       const filter: NodeQueryFilter = {
+        node_ids: params.node_ids,
+        without_node_ids: params.without_node_ids,
         types: params.types,
         without_types: params.without_types,
         fields: params.fields as NodeQueryFilter['fields'],
@@ -341,6 +355,7 @@ export function registerQueryNodes(
         references: params.references,
         title_eq: params.title_eq,
         title_contains: params.title_contains,
+        without_titles: params.without_titles,
         path_prefix: params.path_prefix,
         without_path_prefix: params.without_path_prefix,
         path_dir: params.path_dir,

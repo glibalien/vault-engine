@@ -26,12 +26,15 @@ import { checkTypesHaveSchemas } from '../../pipeline/check-types.js';
 import { createOperation, finalizeOperation } from '../../undo/operation.js';
 
 const _targetFilterSchema = z.object({
+  node_ids: z.array(z.string()).optional(),
+  without_node_ids: z.array(z.string()).optional(),
   types: z.array(z.string()).optional(),
   without_types: z.array(z.string()).optional(),
   fields: z.record(z.string(), z.record(z.string(), z.unknown())).optional(),
   without_fields: z.array(z.string()).optional(),
   title_eq: z.string().optional(),
   title_contains: z.string().optional(),
+  without_titles: z.array(z.string()).optional(),
   references: z.object({
     target: z.string(),
     rel_type: z.string().optional(),
@@ -66,10 +69,15 @@ const paramsShape = {
   append_body: z.string().optional(),
   // Query-mode bulk update (mutually exclusive with node identity)
   query: z.object({
+    node_ids: z.array(z.string()).optional(),
+    without_node_ids: z.array(z.string()).optional(),
     types: z.array(z.string()).optional(),
     without_types: z.array(z.string()).optional(),
     fields: z.record(z.string(), z.record(z.string(), z.unknown())).optional(),
     without_fields: z.array(z.string()).optional(),
+    title_eq: z.string().optional(),
+    title_contains: z.string().optional(),
+    without_titles: z.array(z.string()).optional(),
     full_text: z.string().optional(),
     references: z.object({
       target: z.string(),
@@ -89,7 +97,7 @@ const paramsShape = {
   // Batch controls
   confirm_large_batch: z.boolean().optional(),
   dry_run: z.boolean().optional(),
-  // Path operation (query mode only)
+  // Path operation
   set_directory: z.string().optional(),
 };
 
@@ -102,7 +110,7 @@ export function registerUpdateNode(
 ): void {
   server.tool(
     'update-node',
-    'Update a node, or bulk-update nodes via query-mode. Patch semantics for fields (null removes a field). set_body and append_body are mutually exclusive. Types can be changed with set_types (replace all), add_types (append), or remove_types (remove). All type changes require defined schemas — use list-schemas to see available types. set_title renames the file and rewrites wiki-link references vault-wide. For query mode, provide query instead of node identity. Query mode supports set_directory to move files to a target directory (title unchanged, no reference rewriting). Query mode accepts join_filters and without_joins (same shape as query-nodes) for cross-node filtering. When join filters have targets but unresolved edges exist, a `CROSS_NODE_FILTER_UNRESOLVED` warning surfaces in the envelope `warnings` array. Dry-run defaults to true in query mode.',
+    'Update a node, or bulk-update nodes via query-mode. Patch semantics for fields (null removes a field). set_body and append_body are mutually exclusive. Types can be changed with set_types (replace all), add_types (append), or remove_types (remove). All type changes require defined schemas — use list-schemas to see available types. set_title renames the file and rewrites wiki-link references vault-wide. set_directory moves files to a target directory; in single-node mode it can be combined with type, field, body, or title changes. Query mode accepts query filters including without_node_ids and without_titles for excluding known keepers, supports set_directory for bulk moves, and accepts join_filters/without_joins (same shape as query-nodes) for cross-node filtering. When join filters have targets but unresolved edges exist, a `CROSS_NODE_FILTER_UNRESOLVED` warning surfaces in the envelope `warnings` array. Dry-run defaults to true in query mode.',
     paramsShape,
     async (params) => {
       const hasIdentity = params.node_id !== undefined || params.file_path !== undefined || params.title !== undefined;
@@ -113,10 +121,6 @@ export function registerUpdateNode(
       }
       if (!hasIdentity && !hasQuery) {
         return fail('INVALID_PARAMS', 'Must provide either node identity (node_id/file_path/title) or query');
-      }
-
-      if (hasIdentity && params.set_directory !== undefined) {
-        return fail('INVALID_PARAMS', 'set_directory is not supported in single-node mode. Use rename-node to move individual files.');
       }
 
       // ── Query mode ──────────────────────────────────────────────────
@@ -149,10 +153,16 @@ export function registerUpdateNode(
 
       // ── Single-node mode ────────────────────────────────────────────
       const dryRun = params.dry_run ?? false; // default false in single-node mode
-      const { set_title, set_types, set_fields, set_body, append_body } = params;
+      const { set_title, set_types, set_fields, set_body, append_body, set_directory } = params;
 
       if (set_body !== undefined && append_body !== undefined) {
         return fail('INVALID_PARAMS', 'set_body and append_body are mutually exclusive');
+      }
+      if (set_directory !== undefined && set_directory.endsWith('.md')) {
+        return fail(
+          'INVALID_PARAMS',
+          '"set_directory" must be a folder path, not a filename. The filename is always derived from the node title.',
+        );
       }
 
       const resolved = resolveNodeIdentity(db, {
@@ -182,10 +192,13 @@ export function registerUpdateNode(
 
       // If title changed, derive new file path and check for conflicts
       let effectiveFilePath = node.file_path;
-      const titleSanitized = titleChanged ? sanitizeFilename(`${finalTitle}.md`) : null;
-      if (titleChanged) {
+      const directoryChanged = set_directory !== undefined;
+      const titleSanitized = titleChanged || directoryChanged ? sanitizeFilename(`${finalTitle}.md`) : null;
+      if (titleChanged || directoryChanged) {
         const currentDir = dirname(node.file_path);
-        const newDir = currentDir === '.' ? '' : currentDir;
+        const newDir = directoryChanged
+          ? (set_directory === '.' ? '' : set_directory!)
+          : (currentDir === '.' ? '' : currentDir);
         const sanitizedFilename = titleSanitized!.filename;
         effectiveFilePath = newDir ? `${newDir}/${sanitizedFilename}` : sanitizedFilename;
 
@@ -256,10 +269,11 @@ export function registerUpdateNode(
         finalBody = currentBody ? `${currentBody}\n\n${append_body}` : append_body;
       }
 
+      const { claimsByType, globalFields } = loadSchemaContext(db, finalTypes);
+      const validation = validateProposedState(finalFields, finalTypes, claimsByType, globalFields);
+
       // ── Dry run: validate without writing ─────────────────────────
       if (dryRun) {
-        const { claimsByType, globalFields } = loadSchemaContext(db, finalTypes);
-        const validation = validateProposedState(finalFields, finalTypes, claimsByType, globalFields);
         const titleIssues: ToolIssue[] = titleChanged ? checkTitleSafety(finalTitle) : [];
         const sanitizeIssues: ToolIssue[] = titleSanitized?.sanitized
           ? [{
@@ -286,6 +300,20 @@ export function registerUpdateNode(
         );
       }
 
+      if (directoryChanged && effectiveFilePath !== node.file_path && hasBlockingErrors(validation.issues)) {
+        const errorCount = validation.issues.filter(i => i.severity === 'error').length;
+        return fail(
+          'VALIDATION_FAILED',
+          `Validation failed with ${errorCount} error(s)`,
+          {
+            details: {
+              issues: validation.issues.map(adaptIssue),
+              fixable: buildFixable(validation.issues, validation.effective_fields),
+            },
+          },
+        );
+      }
+
       // ── Undo operation setup (skipped for dry_run) ──────────────────
       const operation_id = dryRun ? undefined : createOperation(db, {
         source_tool: 'update-node',
@@ -297,6 +325,7 @@ export function registerUpdateNode(
           set_fields,
           set_body,
           append_body,
+          set_directory,
         }),
       });
 
@@ -344,11 +373,27 @@ export function registerUpdateNode(
           );
         }
 
+        if (directoryChanged && effectiveFilePath !== node.file_path) {
+          const conflict = checkMoveConflict(db, vaultPath, effectiveFilePath, node.node_id);
+          if (conflict) return fail('CONFLICT', conflict);
+          if (node.title.includes('/') || node.title.includes('\\')) {
+            return fail('INVALID_PARAMS', 'Title contains path separators, cannot move');
+          }
+          if (!existsSync(join(vaultPath, node.file_path))) {
+            return fail('NOT_FOUND', 'Source file missing from disk');
+          }
+          moveNodeFile(db, writeLock, vaultPath, {
+            node_id: node.node_id,
+            file_path: node.file_path,
+            title: node.title,
+          }, effectiveFilePath, operation_id);
+        }
+
         // No title change — standard mutation
         const result = executeMutation(db, writeLock, vaultPath, {
           source: 'tool',
           node_id: node.node_id,
-          file_path: node.file_path,
+          file_path: effectiveFilePath,
           title: finalTitle,
           types: finalTypes,
           fields: finalFields,
@@ -408,6 +453,7 @@ function buildSingleNodeDescription(
     set_fields?: Record<string, unknown>;
     set_body?: string;
     append_body?: string;
+    set_directory?: string;
   },
 ): string {
   const parts: string[] = [];
@@ -421,6 +467,7 @@ function buildSingleNodeDescription(
   }
   if (params.set_body !== undefined) parts.push('body');
   if (params.append_body !== undefined) parts.push('append_body');
+  if (params.set_directory !== undefined) parts.push('directory');
   const changes = parts.length > 0 ? parts.join(', ') : 'no-op';
   return `update-node: ${changes} on '${title}'`;
 }
@@ -605,6 +652,33 @@ function checkMoveConflict(db: Database.Database, vaultPath: string, newFilePath
     }
   }
   return null;
+}
+
+function moveNodeFile(
+  db: Database.Database,
+  writeLock: WriteLockManager,
+  vaultPath: string,
+  node: { node_id: string; file_path: string; title: string },
+  newFilePath: string,
+  operation_id?: string,
+): void {
+  const oldAbs = join(vaultPath, node.file_path);
+  const newAbs = safeVaultPath(vaultPath, newFilePath);
+
+  const targetDir = dirname(newAbs);
+  if (!existsSync(targetDir)) {
+    mkdirSync(targetDir, { recursive: true });
+  }
+
+  writeLock.withLockSync(oldAbs, () => {
+    writeLock.withLockSync(newAbs, () => {
+      if (operation_id) {
+        captureRenameSnapshot(db, operation_id, node.node_id);
+      }
+      renameSync(oldAbs, newAbs);
+      db.prepare('UPDATE nodes SET file_path = ?, content_hash = NULL WHERE id = ?').run(newFilePath, node.node_id);
+    });
+  });
 }
 
 function hasChanges(

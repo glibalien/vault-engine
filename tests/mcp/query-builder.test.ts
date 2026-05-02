@@ -97,6 +97,26 @@ describe('buildNodeQuery', () => {
     });
   });
 
+  describe('identity exclusion filters', () => {
+    it('filters to explicit node_ids', () => {
+      const { rows, total } = runQuery({ node_ids: ['n1', 'n3'] });
+      expect(total).toBe(2);
+      expect(rows.map(r => r.id).sort()).toEqual(['n1', 'n3']);
+    });
+
+    it('excludes explicit without_node_ids', () => {
+      const { rows, total } = runQuery({ without_node_ids: ['n2'] });
+      expect(total).toBe(2);
+      expect(rows.map(r => r.id).sort()).toEqual(['n1', 'n3']);
+    });
+
+    it('excludes explicit without_titles case-insensitively', () => {
+      const { rows, total } = runQuery({ without_titles: ['quick note'] });
+      expect(total).toBe(2);
+      expect(rows.map(r => r.id).sort()).toEqual(['n1', 'n3']);
+    });
+  });
+
   describe('path_prefix filter', () => {
     it('returns only nodes under the prefix', () => {
       const { rows, total } = runQuery({ path_prefix: 'meetings/' });

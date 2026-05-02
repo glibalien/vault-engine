@@ -47,7 +47,7 @@ const includeSchema = z.array(z.enum(['coverage', 'orphans', 'overrides'])).opti
 export function registerDescribeSchema(server: McpServer, db: Database.Database): void {
   server.tool(
     'describe-schema',
-    'Returns a named schema in a compact creation-oriented shape (just what\'s needed to author a valid node). Pass `include` to layer in audit data: "coverage" (node_count + field_coverage), "orphans" (orphan_field_names), "overrides" (per-field override detail + full global_field blocks).',
+    'Returns a named schema in a compact creation-oriented shape, including filename_template and default_directory for type-based file placement. Pass `include` to layer in audit data: "coverage" (node_count + field_coverage), "orphans" (orphan_field_names), "overrides" (per-field override detail + full global_field blocks).',
     {
       name: z.string().describe('Schema name'),
       include: includeSchema.describe('Audit sections to add. Any subset of coverage, orphans, overrides.'),

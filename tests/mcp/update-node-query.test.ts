@@ -406,6 +406,27 @@ describe('update-node query mode — set_directory', () => {
     expect(error.code).toBe('INVALID_PARAMS');
   });
 
+  it('does not move a single node when combined field validation fails', async () => {
+    createGlobalField(db, { name: 'status', field_type: 'enum', enum_values: ['open', 'closed'], required: true });
+    createSchemaDefinition(db, { name: 'strict', field_claims: [{ field: 'status' }] });
+    createNode({ file_path: 'a.md', title: 'A', types: ['strict'], fields: { status: 'open' } });
+
+    const body = parseResult(await handler({
+      title: 'A',
+      set_directory: 'Persons',
+      set_fields: { status: 'invalid-value' },
+    }));
+
+    expect(body.ok).toBe(false);
+    const error = body.error as { code: string };
+    expect(error.code).toBe('VALIDATION_FAILED');
+
+    const dbNode = db.prepare("SELECT file_path FROM nodes WHERE title = 'A'").get() as { file_path: string };
+    expect(dbNode.file_path).toBe('a.md');
+    expect(existsSync(join(vaultPath, 'a.md'))).toBe(true);
+    expect(existsSync(join(vaultPath, 'Persons/A.md'))).toBe(false);
+  });
+
   it('dry-run preview shows path_changed for moved nodes', async () => {
     createNode({ file_path: 'Alice.md', title: 'Alice', types: ['person'] });
     createNode({ file_path: 'Bob.md', title: 'Bob', types: ['person'] });

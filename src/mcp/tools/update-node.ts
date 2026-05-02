@@ -269,10 +269,11 @@ export function registerUpdateNode(
         finalBody = currentBody ? `${currentBody}\n\n${append_body}` : append_body;
       }
 
+      const { claimsByType, globalFields } = loadSchemaContext(db, finalTypes);
+      const validation = validateProposedState(finalFields, finalTypes, claimsByType, globalFields);
+
       // ── Dry run: validate without writing ─────────────────────────
       if (dryRun) {
-        const { claimsByType, globalFields } = loadSchemaContext(db, finalTypes);
-        const validation = validateProposedState(finalFields, finalTypes, claimsByType, globalFields);
         const titleIssues: ToolIssue[] = titleChanged ? checkTitleSafety(finalTitle) : [];
         const sanitizeIssues: ToolIssue[] = titleSanitized?.sanitized
           ? [{
@@ -296,6 +297,20 @@ export function registerUpdateNode(
             },
           },
           allIssues.map(adaptIssue),
+        );
+      }
+
+      if (directoryChanged && effectiveFilePath !== node.file_path && hasBlockingErrors(validation.issues)) {
+        const errorCount = validation.issues.filter(i => i.severity === 'error').length;
+        return fail(
+          'VALIDATION_FAILED',
+          `Validation failed with ${errorCount} error(s)`,
+          {
+            details: {
+              issues: validation.issues.map(adaptIssue),
+              fixable: buildFixable(validation.issues, validation.effective_fields),
+            },
+          },
         );
       }
 

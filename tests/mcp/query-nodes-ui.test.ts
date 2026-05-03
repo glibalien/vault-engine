@@ -4,6 +4,8 @@ import { existsSync } from "node:fs";
 import path from "node:path";
 import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { registerQueryNodesUi } from "../../src/mcp/ui/query-nodes/register.js";
+import { registerQueryNodes } from "../../src/mcp/tools/query-nodes.js";
+import { createTestDb } from "../helpers/db.js";
 
 const BUNDLE_PATH = path.resolve("dist/mcp/ui/query-nodes/index.html");
 
@@ -62,5 +64,24 @@ describe("registerQueryNodesUi", () => {
   it("uses the MCP App MIME type", async () => {
     const r = await captureResource();
     expect(r.config.mimeType).toBe("text/html;profile=mcp-app");
+  });
+});
+
+describe("query-nodes tool: UI metadata", () => {
+  it("advertises _meta.ui.resourceUri pointing at the UI resource", () => {
+    let capturedConfig: Record<string, unknown> | undefined;
+    const fakeServer = {
+      tool: () => {
+        // Should not be called after the migration; if it is, capturedConfig stays undefined.
+      },
+      registerTool: (_name: string, config: Record<string, unknown>, _handler: unknown) => {
+        capturedConfig = config;
+      },
+    };
+    const db = createTestDb();
+    registerQueryNodes(fakeServer as unknown as McpServer, db);
+    expect(capturedConfig).toBeDefined();
+    const meta = capturedConfig!._meta as { ui?: { resourceUri?: string } } | undefined;
+    expect(meta?.ui?.resourceUri).toBe("ui://vault-engine/query-nodes");
   });
 });

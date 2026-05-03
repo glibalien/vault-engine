@@ -1,6 +1,7 @@
 import type { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import type Database from 'better-sqlite3';
 import { z } from 'zod';
+import { registerAppTool } from '@modelcontextprotocol/ext-apps/server';
 import { ok, type Issue } from './errors.js';
 import { buildNodeQuery } from '../query-builder.js';
 import type { FieldFilter, NodeQueryFilter } from '../query-builder.js';
@@ -8,6 +9,7 @@ import { resolveFieldValue, type FieldRow } from '../field-value.js';
 import type { EmbeddingIndexer } from '../../search/indexer.js';
 import type { Embedder } from '../../search/embedder.js';
 import { hybridSearch } from '../../search/search.js';
+import { QUERY_NODES_UI_RESOURCE_URI } from '../ui/query-nodes/register.js';
 
 const fieldFilterSchema = z.object({
   eq: z.unknown().optional(),
@@ -240,10 +242,15 @@ export function registerQueryNodes(
   _embeddingIndexer?: EmbeddingIndexer,
   embedder?: Embedder,
 ): void {
-  server.tool(
+  registerAppTool(
+    server,
     'query-nodes',
+    {
+      description:
     'Search and query nodes across the vault: semantic (vector) search, full-text search, and structured filters on identity, type, fields, references, path, date, and cross-node joins. Use the query param for hybrid ranked results combining FTS and semantic retrieval. Scores use Reciprocal Rank Fusion (RRF) — absolute values are not meaningful, only relative ordering matters. match_sources indicates retrieval method: "fts" (full-text match), "semantic" (vector/embedding match), or both. Returns paginated results. Use include_fields to return field values inline (e.g. ["project","status"] or ["*"] for all). When you know the exact title, prefer get-node with title param. For partial title matching, use title_contains. For exact title filtering combined with other constraints, use title_eq. Use without_node_ids or without_titles to exclude known keepers from broader filters. Cross-node filtering: join_filters narrows results to nodes linked to a target matching a nested filter; without_joins excludes them. Each filter has optional direction ("outgoing" default, or "incoming"), optional rel_type (string or array for OR), and optional target (nested NodeQueryFilter without its own join_filters). Example — open tasks whose linked project is done: {"types":["task"],"fields":{"status":{"eq":"open"}},"join_filters":[{"rel_type":"project","target":{"types":["project"],"fields":{"status":{"eq":"done"}}}}]}. Differs from references: references matches by identity (a specific target), join_filters matches by pattern (any node matching the target filter). When a join filter has a target, unresolved edges are invisible to it; a CROSS_NODE_FILTER_UNRESOLVED warning surfaces in the envelope warnings array if such edges existed and could have affected the answer.\n\nField operator cheatsheet (use describe-global-field if unsure of a field type):\n- scalar string / enum: eq, ne, one_of, exists\n- number / date: eq, ne, gt, gte, lt, lte, exists (dates are ISO 8601 strings)\n- list of strings / list of refs: includes (element match), exists\n- any field: contains (substring, searches both text and JSON values)\nNote: includes is for list fields only; on scalars it silently returns no rows. eq/ne on list fields likewise won\'t match. For reference fields, prefer the top-level `references:{target,rel_type}` filter over `includes` — it resolves title/path/id variants correctly.\n\nCommon query recipes:\n- Open tasks: {"types":["task"],"fields":{"status":{"eq":"open"}}}\n- Tasks with multiple statuses: {"types":["task"],"fields":{"status":{"one_of":["open","pending"]}}}\n- Tasks in project X: {"types":["task"],"references":{"target":"X","rel_type":"project"}}\n- Overdue tasks: {"types":["task"],"fields":{"due":{"lt":"2026-04-20"},"status":{"ne":"done"}}}\n- Tasks with no project: {"types":["task"],"without_fields":["project"]}\n- Recently modified notes: {"types":["note"],"modified_since":"2026-04-13"}',
-    paramsShape,
+      inputSchema: paramsShape,
+      _meta: { ui: { resourceUri: QUERY_NODES_UI_RESOURCE_URI } },
+    },
     async (params) => {
       const sortBy = params.sort_by ?? 'title';
       const sortOrder = params.sort_order ?? 'asc';

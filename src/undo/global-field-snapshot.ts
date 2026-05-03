@@ -17,6 +17,7 @@ export const GLOBAL_FIELD_COLUMNS = [
   'overrides_allowed_default_value',
   'overrides_allowed_enum_values',
   'list_item_type',
+  'ui_hints',
 ] as const;
 
 export const SCHEMA_FIELD_CLAIM_COLUMNS = [

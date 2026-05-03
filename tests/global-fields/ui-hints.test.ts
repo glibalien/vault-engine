@@ -203,3 +203,33 @@ describe('renameGlobalField preserves ui hints', () => {
     expect(getGlobalField(db, 'newname')?.ui_hints).toBeNull();
   });
 });
+
+import { createOperation, finalizeOperation } from '../../src/undo/operation.js';
+import { captureGlobalFieldSnapshot, restoreGlobalFieldSnapshot } from '../../src/undo/global-field-snapshot.js';
+import { addUndoTables, addGlobalFieldUndoSnapshots } from '../../src/db/migrate.js';
+
+function setupDbWithUndo(): Database.Database {
+  const db = new Database(':memory:');
+  createSchema(db);
+  addUiHints(db);
+  addUndoTables(db);
+  addGlobalFieldUndoSnapshots(db);
+  return db;
+}
+
+describe('undo snapshot captures ui_hints', () => {
+  it('restores ui_hints after a destructive update', () => {
+    const db = setupDbWithUndo();
+    createGlobalField(db, { name: 'f', field_type: 'string', ui: { label: 'Original', order: 1 } });
+
+    const op = createOperation(db, { source_tool: 'test', description: 'update ui' });
+    captureGlobalFieldSnapshot(db, op, 'f');
+    updateGlobalField(db, 'f', { ui: { label: 'Changed', order: 99 } });
+    finalizeOperation(db, op);
+
+    expect(getGlobalField(db, 'f')?.ui_hints).toEqual({ label: 'Changed', order: 99 });
+
+    restoreGlobalFieldSnapshot(db, op, 'f');
+    expect(getGlobalField(db, 'f')?.ui_hints).toEqual({ label: 'Original', order: 1 });
+  });
+});

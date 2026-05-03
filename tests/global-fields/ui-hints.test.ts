@@ -323,3 +323,31 @@ describe('describe-global-field returns ui', () => {
     expect(env.data.ui).toBeNull();
   });
 });
+
+import { registerDescribeSchema } from '../../src/mcp/tools/describe-schema.js';
+
+describe('describe-schema returns ui per claim', () => {
+  it('includes ui (always present, possibly null) on each claim', async () => {
+    const db = setupDb();
+    createGlobalField(db, { name: 'status', field_type: 'enum', enum_values: ['open', 'done'], ui: { widget: 'enum', label: 'Status', order: 5 } });
+    createGlobalField(db, { name: 'note', field_type: 'string' });
+    db.prepare('INSERT INTO schemas (name) VALUES (?)').run('task');
+    db.prepare('INSERT INTO schema_field_claims (schema_name, field) VALUES (?, ?), (?, ?)')
+      .run('task', 'status', 'task', 'note');
+
+    const server = new McpServer({ name: 'test', version: '0' });
+    registerDescribeSchema(server, db);
+    const env = envelope(await callMcpTool(server, 'describe-schema', { name: 'task' }));
+
+    expect(env.ok).toBe(true);
+    const fieldsByName = new Map(((env as { data: { fields: Array<Record<string, unknown>> } }).data.fields).map(f => [f.name, f]));
+
+    const status = fieldsByName.get('status') as Record<string, unknown>;
+    expect('ui' in status).toBe(true);
+    expect(status.ui).toEqual({ widget: 'enum', label: 'Status', order: 5 });
+
+    const note = fieldsByName.get('note') as Record<string, unknown>;
+    expect('ui' in note).toBe(true);
+    expect(note.ui).toBeNull();
+  });
+});

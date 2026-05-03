@@ -35,6 +35,7 @@ interface GlobalFieldRow {
   overrides_allowed_default_value: number;
   overrides_allowed_enum_values: number;
   list_item_type: string | null;
+  ui_hints: string | null;
 }
 
 interface OrphanRow {
@@ -106,6 +107,10 @@ export function registerDescribeSchema(server: McpServer, db: Database.Database)
         if (claim.label !== null) field.label = claim.label;
         if (description !== null) field.description = description;
 
+        // ui hints (always present in shape; null when unset).
+        // v1: per-claim ui equals the global-field ui (no per-type override).
+        field.ui = gf?.ui_hints ? JSON.parse(gf.ui_hints) : null;
+
         if (wantOverrides) {
           field.required_override = claim.required_override === null ? null : Boolean(claim.required_override);
           field.default_value_override = overridden
@@ -126,6 +131,7 @@ export function registerDescribeSchema(server: McpServer, db: Database.Database)
               enum_values: Boolean(gf.overrides_allowed_enum_values),
             },
             list_item_type: gf.list_item_type,
+            ui_hints: gf.ui_hints ? JSON.parse(gf.ui_hints) : null,
           } : null;
         }
 

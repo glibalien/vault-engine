@@ -502,3 +502,25 @@ export function addNodeTypesSortOrder(db: Database.Database): void {
   });
   run();
 }
+
+/**
+ * Migration: add `ui_hints` column to `global_fields` (2026-05-03).
+ *
+ * Stores UI rendering hints (widget / label / help / order) as a
+ * JSON-serialized object, or NULL when no hints are set. Existing rows stay
+ * NULL — bundles fall back to the documented inference table.
+ *
+ * Spec: docs/superpowers/specs/2026-05-03-mcp-app-foundations-2-3-design.md
+ *
+ * Idempotent — safe to run on a database that already has the column.
+ */
+export function addUiHints(db: Database.Database): void {
+  const run = db.transaction(() => {
+    const cols = (db.prepare('PRAGMA table_info(global_fields)').all() as Array<{ name: string }>)
+      .map(c => c.name);
+    if (!cols.includes('ui_hints')) {
+      db.prepare('ALTER TABLE global_fields ADD COLUMN ui_hints TEXT').run();
+    }
+  });
+  run();
+}

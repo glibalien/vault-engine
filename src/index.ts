@@ -10,6 +10,7 @@ import {
   upgradeToPhase2, upgradeToPhase3, upgradeToPhase4, upgradeToPhase6, upgradeToVersionStamps,
   addCreatedAt, upgradeForOverrides, ensureMetaTable, upgradeForResolvedTargetId,
   addUndoTables, addNodeTypesSortOrder, addSchemaUndoSnapshots, addGlobalFieldUndoSnapshots,
+  addUiHints,
 } from './db/migrate.js';
 import { createServer } from './mcp/server.js';
 import { parseArgs } from './transport/args.js';
@@ -62,6 +63,7 @@ addUndoTables(db);
 addNodeTypesSortOrder(db);
 addSchemaUndoSnapshots(db);
 addGlobalFieldUndoSnapshots(db);
+addUiHints(db);
 
 const excludeDirs = (process.env.VAULT_EXCLUDE_DIRS ?? '').split(',').map(s => s.trim()).filter(Boolean);
 if (excludeDirs.length > 0) {

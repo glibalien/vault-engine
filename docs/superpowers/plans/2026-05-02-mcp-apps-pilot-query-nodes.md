@@ -1303,19 +1303,11 @@ npm test
 
 Expected: all tests pass. No new test failures introduced.
 
-- [ ] **Step 4: Smoke-start the server and verify resource is exposed**
+- [ ] **Step 4: Resource exposure verification note**
 
-```bash
-node dist/index.js --transport http &
-SERVER_PID=$!
-sleep 2
-curl -s -X POST http://localhost:3334/mcp \
-  -H "Content-Type: application/json" \
-  -d '{"jsonrpc":"2.0","id":1,"method":"resources/list","params":{}}' | grep -c "ui://vault-engine/query-nodes"
-kill $SERVER_PID
-```
+The original curl-based smoke check for `resources/list` was removed because it cannot succeed against vault-engine's HTTP transport. `POST /mcp` is gated by OAuth bearer auth and requires an `initialize` handshake to establish a session before any other JSON-RPC call. A bare curl request to `resources/list` therefore does not verify resource registration.
 
-Expected: `1` — the resource appears in the resources list. (Adjust port if your local config differs.)
+Resource registration is verified at unit level by `tests/mcp/query-nodes-ui.test.ts`, which asserts the `ui://vault-engine/query-nodes` URI, bundled HTML sentinel, MCP App MIME type, and `_meta.ui.resourceUri` tool-side link. End-to-end verification against a live server is deferred to Task 14's manual capability checklist on the systemd deploy.
 
 - [ ] **Step 5: Commit any package-lock churn**
 

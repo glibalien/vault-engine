@@ -209,6 +209,7 @@ import { captureGlobalFieldSnapshot, restoreGlobalFieldSnapshot } from '../../sr
 import { addUndoTables, addGlobalFieldUndoSnapshots } from '../../src/db/migrate.js';
 import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import { registerCreateGlobalField } from '../../src/mcp/tools/create-global-field.js';
+import { registerUpdateGlobalField } from '../../src/mcp/tools/update-global-field.js';
 
 function setupDbWithUndo(): Database.Database {
   const db = new Database(':memory:');
@@ -273,5 +274,28 @@ describe('create-global-field MCP tool accepts ui', () => {
     }));
     expect(env.ok).toBe(false);
     if (!env.ok) expect(env.error.code).toBe('INVALID_PARAMS');
+  });
+});
+
+describe('update-global-field MCP tool accepts ui', () => {
+  it('updates ui hints on an existing field', async () => {
+    const db = setupDbWithUndo();
+    createGlobalField(db, { name: 'f', field_type: 'string', ui: { label: 'A' } });
+
+    const server = new McpServer({ name: 'test', version: '0' });
+    registerUpdateGlobalField(server, db);
+    const env = envelope(await callMcpTool(server, 'update-global-field', { name: 'f', ui: { label: 'B', order: 7 } }));
+    expect(env.ok).toBe(true);
+    expect(getGlobalField(db, 'f')?.ui_hints).toEqual({ label: 'B', order: 7 });
+  });
+
+  it('clears ui hints with ui: null', async () => {
+    const db = setupDbWithUndo();
+    createGlobalField(db, { name: 'f', field_type: 'string', ui: { label: 'A' } });
+    const server = new McpServer({ name: 'test', version: '0' });
+    registerUpdateGlobalField(server, db);
+    const env = envelope(await callMcpTool(server, 'update-global-field', { name: 'f', ui: null }));
+    expect(env.ok).toBe(true);
+    expect(getGlobalField(db, 'f')?.ui_hints).toBeNull();
   });
 });

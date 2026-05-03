@@ -30,6 +30,12 @@ export function registerUpdateGlobalField(server: McpServer, db: Database.Databa
         default_value: z.boolean().optional(),
         enum_values: z.boolean().optional(),
       }).optional().describe('Per-property override permissions for schema claims'),
+      ui: z.object({
+        widget: z.enum(['text', 'textarea', 'enum', 'date', 'number', 'bool', 'link', 'tags']).optional(),
+        label: z.string().max(80).optional(),
+        help: z.string().max(280).optional(),
+        order: z.number().int().optional(),
+      }).nullable().optional().describe('UI rendering hints. Pass null or {} to clear; absent key = no change; populated object = REPLACE existing hints (no merge).'),
       confirm: z.boolean().optional().describe('Set true to apply a type change (otherwise previews impact)'),
       discard_uncoercible: z.boolean().optional().describe('When applying a type change with uncoercible values, set true to delete those values. Default: refuse the change with CONFIRMATION_REQUIRED.'),
     },

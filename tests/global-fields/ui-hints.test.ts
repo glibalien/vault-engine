@@ -210,6 +210,7 @@ import { addUndoTables, addGlobalFieldUndoSnapshots } from '../../src/db/migrate
 import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import { registerCreateGlobalField } from '../../src/mcp/tools/create-global-field.js';
 import { registerUpdateGlobalField } from '../../src/mcp/tools/update-global-field.js';
+import { registerDescribeGlobalField } from '../../src/mcp/tools/describe-global-field.js';
 
 function setupDbWithUndo(): Database.Database {
   const db = new Database(':memory:');
@@ -297,5 +298,28 @@ describe('update-global-field MCP tool accepts ui', () => {
     const env = envelope(await callMcpTool(server, 'update-global-field', { name: 'f', ui: null }));
     expect(env.ok).toBe(true);
     expect(getGlobalField(db, 'f')?.ui_hints).toBeNull();
+  });
+});
+
+describe('describe-global-field returns ui', () => {
+  it('returns ui blob when set', async () => {
+    const db = setupDb();
+    createGlobalField(db, { name: 'f', field_type: 'string', ui: { widget: 'textarea', label: 'F' } });
+    const server = new McpServer({ name: 'test', version: '0' });
+    registerDescribeGlobalField(server, db);
+    const env = envelope(await callMcpTool(server, 'describe-global-field', { name: 'f' }));
+    expect(env.ok).toBe(true);
+    expect(env.data.ui).toEqual({ widget: 'textarea', label: 'F' });
+  });
+
+  it('returns ui as null when unset (always present in shape)', async () => {
+    const db = setupDb();
+    createGlobalField(db, { name: 'f', field_type: 'string' });
+    const server = new McpServer({ name: 'test', version: '0' });
+    registerDescribeGlobalField(server, db);
+    const env = envelope(await callMcpTool(server, 'describe-global-field', { name: 'f' }));
+    expect(env.ok).toBe(true);
+    expect('ui' in env.data).toBe(true);
+    expect(env.data.ui).toBeNull();
   });
 });

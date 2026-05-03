@@ -15,6 +15,7 @@ interface GlobalFieldRow {
   overrides_allowed_default_value: number;
   overrides_allowed_enum_values: number;
   list_item_type: string | null;
+  ui_hints: string | null;
 }
 
 export function registerDescribeGlobalField(server: McpServer, db: Database.Database): void {
@@ -65,6 +66,7 @@ export function registerDescribeGlobalField(server: McpServer, db: Database.Data
           enum_values: Boolean(row.overrides_allowed_enum_values),
         },
         list_item_type: row.list_item_type,
+        ui: row.ui_hints !== null ? JSON.parse(row.ui_hints) : null,
         claimed_by_types,
         node_count: nodeCountRow.count,
         orphan_count: orphanRow.count,

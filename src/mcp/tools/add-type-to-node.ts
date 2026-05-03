@@ -5,7 +5,7 @@ import type Database from 'better-sqlite3';
 import { z } from 'zod';
 import { ok, fail, adaptIssue } from './errors.js';
 import { resolveNodeIdentity } from './resolve-identity.js';
-import { executeMutation } from '../../pipeline/execute.js';
+import { executeMutation, StaleNodeError } from '../../pipeline/execute.js';
 import { PipelineError } from '../../pipeline/types.js';
 import { reconstructValue } from '../../pipeline/classify-value.js';
 import type { WriteLockManager } from '../../sync/write-lock.js';
@@ -15,6 +15,7 @@ import { buildFixable } from '../../validation/fixable.js';
 import { createOperation, finalizeOperation } from '../../undo/operation.js';
 import { loadSchemaContext } from '../../pipeline/schema-context.js';
 import { validateProposedState, defaultedFieldsFrom } from '../../validation/validate.js';
+import { buildStaleNodeEnvelope } from './stale-helpers.js';
 
 const paramsShape = {
   node_id: z.string().optional(),
@@ -22,6 +23,7 @@ const paramsShape = {
   title: z.string().optional(),
   type: z.string(),
   dry_run: z.boolean().default(false),
+  expected_version: z.number().int().min(1).optional(),
 };
 
 export function registerAddTypeToNode(
@@ -140,6 +142,7 @@ export function registerAddTypeToNode(
           types: newTypes,
           fields: currentFields,
           body: currentBody,
+          expectedVersion: params.expected_version,
         }, syncLogger, { operation_id });
 
         // The pipeline emits field-defaulted edits-log entries automatically
@@ -159,6 +162,9 @@ export function registerAddTypeToNode(
           result.validation.issues.map(adaptIssue),
         );
       } catch (err) {
+        if (err instanceof StaleNodeError) {
+          return buildStaleNodeEnvelope(db, err);
+        }
         if (err instanceof PipelineError && err.validation) {
           const errorCount = err.validation.issues.filter(i => i.severity === 'error').length;
           return fail(

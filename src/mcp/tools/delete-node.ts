@@ -10,6 +10,8 @@ import type { SyncLogger } from '../../sync/sync-logger.js';
 import type { EmbeddingIndexer } from '../../search/indexer.js';
 import { executeDeletion } from '../../pipeline/delete.js';
 import { createOperation, finalizeOperation } from '../../undo/operation.js';
+import { StaleNodeError } from '../../pipeline/execute.js';
+import { buildStaleNodeEnvelope } from './stale-helpers.js';
 
 const paramsShape = {
   node_id: z.string().optional(),
@@ -18,6 +20,7 @@ const paramsShape = {
   confirm: z.boolean().default(false),
   dry_run: z.boolean().default(false),
   referencing_nodes_limit: z.number().default(20),
+  expected_version: z.number().int().min(1).optional(),
 };
 
 export function registerDeleteNode(
@@ -107,6 +110,7 @@ export function registerDeleteNode(
           node_id: node.node_id,
           file_path: node.file_path,
           unlink_file: true,
+          expectedVersion: params.expected_version,
         }, { operation_id });
 
         embeddingIndexer?.removeNode(result.node_id);
@@ -117,6 +121,11 @@ export function registerDeleteNode(
           file_path: node.file_path,
           dangling_references: incomingCount.c,
         });
+      } catch (err) {
+        if (err instanceof StaleNodeError) {
+          return buildStaleNodeEnvelope(db, err);
+        }
+        throw err;
       } finally {
         finalizeOperation(db, operation_id);
       }

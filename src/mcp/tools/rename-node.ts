@@ -16,12 +16,13 @@ import { ok, fail, adaptIssue } from './errors.js';
 import { resolveDirectory } from '../../schema/paths.js';
 import { resolveNodeIdentity } from './resolve-identity.js';
 import { checkTitleSafety, sanitizeFilename, type ToolIssue } from './title-warnings.js';
-import { executeMutation } from '../../pipeline/execute.js';
+import { executeMutation, StaleNodeError } from '../../pipeline/execute.js';
 import { reconstructValue } from '../../pipeline/classify-value.js';
 import { resolveTarget } from '../../resolver/resolve.js';
 import type { WriteLockManager } from '../../sync/write-lock.js';
 import type { SyncLogger } from '../../sync/sync-logger.js';
 import { createOperation, finalizeOperation } from '../../undo/operation.js';
+import { buildStaleNodeEnvelope } from './stale-helpers.js';
 
 /**
  * A pending filesystem mutation that should be reversed if the surrounding
@@ -92,6 +93,7 @@ export function executeRename(
   syncLogger?: SyncLogger,
   undoContext?: { operation_id: string },
   fsRollback?: FsRollback,
+  expectedVersion?: number,
 ): { refsUpdated: number } {
   const oldTitle = node.title;
   const oldFilePath = node.file_path;
@@ -122,6 +124,14 @@ export function executeRename(
   //    is a no-op when it fires under the same operation_id.
   if (undoContext) {
     captureRenameSnapshot(db, undoContext.operation_id, node.node_id);
+  }
+
+  if (expectedVersion !== undefined) {
+    const row = db.prepare('SELECT version FROM nodes WHERE id = ?')
+      .get(node.node_id) as { version: number } | undefined;
+    if (row !== undefined && row.version !== expectedVersion) {
+      throw new StaleNodeError(node.node_id, expectedVersion, row.version);
+    }
   }
 
   // 1. Rename file on disk (tracked for filesystem rollback).
@@ -222,6 +232,7 @@ const paramsShape = {
   title: z.string().optional(),
   new_title: z.string(),
   directory: z.string().optional(),
+  expected_version: z.number().int().min(1).optional(),
 };
 
 export function registerRenameNode(
@@ -300,7 +311,7 @@ export function registerRenameNode(
           node_id: node.node_id,
           file_path: oldFilePath,
           title: oldTitle,
-        }, params.new_title, newFilePath, syncLogger, { operation_id }, fsRollback);
+        }, params.new_title, newFilePath, syncLogger, { operation_id }, fsRollback, params.expected_version);
       });
 
       try {
@@ -341,6 +352,9 @@ export function registerRenameNode(
             const msg = undoErr instanceof Error ? undoErr.message : String(undoErr);
             console.error(`[rename-node] fs rollback failed: ${msg}`);
           }
+        }
+        if (err instanceof StaleNodeError) {
+          return buildStaleNodeEnvelope(db, err);
         }
         return fail('INTERNAL_ERROR', err instanceof Error ? err.message : String(err));
       } finally {

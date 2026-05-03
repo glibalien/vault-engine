@@ -5,13 +5,14 @@ import type Database from 'better-sqlite3';
 import { z } from 'zod';
 import { ok, fail, adaptIssue, type Issue } from './errors.js';
 import { resolveNodeIdentity } from './resolve-identity.js';
-import { executeMutation } from '../../pipeline/execute.js';
+import { executeMutation, StaleNodeError } from '../../pipeline/execute.js';
 import { PipelineError } from '../../pipeline/types.js';
 import { reconstructValue } from '../../pipeline/classify-value.js';
 import { buildFixable } from '../../validation/fixable.js';
 import type { WriteLockManager } from '../../sync/write-lock.js';
 import type { SyncLogger } from '../../sync/sync-logger.js';
 import { createOperation, finalizeOperation } from '../../undo/operation.js';
+import { buildStaleNodeEnvelope } from './stale-helpers.js';
 
 const paramsShape = {
   node_id: z.string().optional(),
@@ -20,6 +21,7 @@ const paramsShape = {
   type: z.string(),
   confirm: z.boolean().default(false),
   dry_run: z.boolean().default(false),
+  expected_version: z.number().int().min(1).optional(),
 };
 
 export function registerRemoveTypeFromNode(
@@ -142,6 +144,7 @@ export function registerRemoveTypeFromNode(
           types: resultingTypes,
           fields: currentFields,
           body: currentBody,
+          expectedVersion: params.expected_version,
         }, syncLogger, { operation_id });
 
         // Write fields-orphaned log entry if any fields became orphans
@@ -167,6 +170,9 @@ export function registerRemoveTypeFromNode(
           edits_logged: result.edits_logged + (wouldOrphanFields.length > 0 ? 1 : 0),
         });
       } catch (err) {
+        if (err instanceof StaleNodeError) {
+          return buildStaleNodeEnvelope(db, err);
+        }
         if (err instanceof PipelineError && err.validation) {
           const errorCount = err.validation.issues.filter(i => i.severity === 'error').length;
           return fail(

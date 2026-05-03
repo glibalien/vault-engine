@@ -10,7 +10,7 @@ import { resolveDirectory } from '../../schema/paths.js';
 import { ok, fail, adaptIssue, type Issue } from './errors.js';
 import { checkTitleSafety, checkBodyFrontmatter, sanitizeFilename } from './title-warnings.js';
 import { resolveNodeIdentity } from './resolve-identity.js';
-import { executeMutation } from '../../pipeline/execute.js';
+import { executeMutation, StaleNodeError } from '../../pipeline/execute.js';
 import { PipelineError } from '../../pipeline/types.js';
 import { reconstructValue } from '../../pipeline/classify-value.js';
 import { backupFile, restoreFile, cleanupBackups } from '../../pipeline/file-writer.js';
@@ -21,6 +21,7 @@ import { createOperation, finalizeOperation } from '../../undo/operation.js';
 import type { WriteLockManager } from '../../sync/write-lock.js';
 import type { SyncLogger } from '../../sync/sync-logger.js';
 import type { EmbeddingIndexer } from '../../search/indexer.js';
+import { buildStaleNodeDetails } from './stale-helpers.js';
 
 const createParamsSchema = z.object({
   title: z.string(),
@@ -43,12 +44,14 @@ const updateParamsSchema = z.object({
   set_fields: z.record(z.string(), z.unknown()).optional(),
   set_body: z.string().optional(),
   append_body: z.string().optional(),
+  expected_version: z.number().int().min(1).optional(),
 }).strict();
 
 const deleteParamsSchema = z.object({
   node_id: z.string().optional(),
   file_path: z.string().optional(),
   title: z.string().optional(),
+  expected_version: z.number().int().min(1).optional(),
 }).strict();
 
 const operationSchema = z.discriminatedUnion('op', [
@@ -101,7 +104,15 @@ export function registerBatchMutate(
     'Execute multiple mutation operations atomically. All operations succeed or all roll back. Rename is not supported in batch. Create ops use schema default_directory when directory is omitted — pass override_default_directory: true to place elsewhere. The legacy path alias is deprecated; use directory. Use dry_run: true to preview the entire batch atomically (composed effects via SAVEPOINT-style rollback) without applying.',
     paramsShape,
     async (params) => {
-      const results: Array<{ op: string; node_id: string; file_path: string }> = [];
+      const results: Array<{
+        op: string;
+        op_index: number;
+        status: 'applied' | 'stale';
+        node_id: string;
+        file_path?: string;
+        new_version?: number;
+        details?: Record<string, unknown>;
+      }> = [];
       const tmpDir = join(vaultPath, '.vault-engine', 'tmp');
       const warnings: Issue[] = [];
 
@@ -191,7 +202,8 @@ export function registerBatchMutate(
                 ...(dryRun ? { db_only: true } : {}),
               }, syncLogger, operation_id ? { operation_id } : undefined);
               if (!dryRun && result.file_written) createdFiles.push(absPath);
-              results.push({ op: 'create', node_id: result.node_id, file_path: result.file_path });
+              const newVersion = getNodeVersion(db, result.node_id);
+              results.push({ op: 'create', op_index: i, status: 'applied', node_id: result.node_id, file_path: result.file_path, new_version: newVersion });
               if (dryRun) {
                 would_apply.push({
                   op: 'create',
@@ -279,8 +291,10 @@ export function registerBatchMutate(
                 fields: finalFields,
                 body: finalBody,
                 ...(dryRun ? { db_only: true } : {}),
+                expectedVersion: opParams.expected_version,
               }, syncLogger, operation_id ? { operation_id } : undefined);
-              results.push({ op: 'update', node_id: result.node_id, file_path: result.file_path });
+              const newVersion = getNodeVersion(db, result.node_id);
+              results.push({ op: 'update', op_index: i, status: 'applied', node_id: result.node_id, file_path: result.file_path, new_version: newVersion });
 
               if (dryRun) {
                 // Compute change-indicators by diffing against pre-update DB state we already loaded.
@@ -343,10 +357,11 @@ export function registerBatchMutate(
                 node_id: node.node_id,
                 file_path: node.file_path,
                 unlink_file: !dryRun,
+                expectedVersion: opParams.expected_version,
               }, operation_id ? { operation_id } : undefined);
               if (!dryRun) deletedNodeIds.push(node.node_id);
 
-              results.push({ op: 'delete', node_id: node.node_id, file_path: node.file_path });
+              results.push({ op: 'delete', op_index: i, status: 'applied', node_id: node.node_id, file_path: node.file_path });
               if (dryRun && preview_refs) {
                 would_apply.push({
                   op: 'delete',
@@ -358,6 +373,16 @@ export function registerBatchMutate(
               }
             }
           } catch (err) {
+            if (err instanceof StaleNodeError) {
+              results.push({
+                op,
+                op_index: i,
+                status: 'stale',
+                node_id: err.nodeId,
+                details: buildStaleNodeDetails(db, err),
+              });
+              continue;
+            }
             if (err instanceof PipelineError) {
               const details: Record<string, unknown> = {};
               if (err.validation) {
@@ -461,4 +486,8 @@ function countKinds(ops: Array<{ op: string }>): string {
   const counts: Record<string, number> = {};
   for (const o of ops) counts[o.op] = (counts[o.op] ?? 0) + 1;
   return Object.entries(counts).map(([k, v]) => `${v} ${k}`).join(', ');
+}
+
+function getNodeVersion(db: Database.Database, nodeId: string): number | undefined {
+  return (db.prepare('SELECT version FROM nodes WHERE id = ?').get(nodeId) as { version: number } | undefined)?.version;
 }

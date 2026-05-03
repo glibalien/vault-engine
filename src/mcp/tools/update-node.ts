@@ -11,7 +11,7 @@ import { ok, fail, adaptIssue, type Issue } from './errors.js';
 import { resolveNodeIdentity } from './resolve-identity.js';
 import { executeRename, captureRenameSnapshot } from './rename-node.js';
 import { checkTitleSafety, sanitizeFilename, type ToolIssue } from './title-warnings.js';
-import { executeMutation } from '../../pipeline/execute.js';
+import { executeMutation, StaleNodeError } from '../../pipeline/execute.js';
 import { PipelineError } from '../../pipeline/types.js';
 import { reconstructValue } from '../../pipeline/classify-value.js';
 import { hasBlockingErrors } from '../../pipeline/errors.js';
@@ -24,6 +24,7 @@ import type { WriteLockManager } from '../../sync/write-lock.js';
 import type { SyncLogger } from '../../sync/sync-logger.js';
 import { checkTypesHaveSchemas } from '../../pipeline/check-types.js';
 import { createOperation, finalizeOperation } from '../../undo/operation.js';
+import { buildStaleNodeEnvelope } from './stale-helpers.js';
 
 const _targetFilterSchema = z.object({
   node_ids: z.array(z.string()).optional(),
@@ -97,6 +98,7 @@ const paramsShape = {
   // Batch controls
   confirm_large_batch: z.boolean().optional(),
   dry_run: z.boolean().optional(),
+  expected_version: z.number().int().min(1).optional(),
   // Path operation
   set_directory: z.string().optional(),
 };
@@ -125,6 +127,9 @@ export function registerUpdateNode(
 
       // ── Query mode ──────────────────────────────────────────────────
       if (hasQuery) {
+        if (params.expected_version !== undefined) {
+          return fail('INVALID_PARAMS', 'expected_version is not supported in query mode (caller does not know which nodes will match).');
+        }
         if (params.set_types !== undefined) {
           return fail(
             'INVALID_PARAMS',
@@ -340,6 +345,7 @@ export function registerUpdateNode(
             types: finalTypes,
             fields: finalFields,
             body: finalBody,
+            expectedVersion: params.expected_version,
           }, syncLogger, operation_id ? { operation_id } : undefined);
 
           // Then rename (file + DB + references)
@@ -348,7 +354,7 @@ export function registerUpdateNode(
               node_id: node.node_id,
               file_path: node.file_path,
               title: node.title,
-            }, finalTitle, effectiveFilePath, syncLogger, operation_id ? { operation_id } : undefined);
+            }, finalTitle, effectiveFilePath, syncLogger, operation_id ? { operation_id } : undefined, undefined, params.expected_version);
           })();
 
           const titleIssues: ToolIssue[] = checkTitleSafety(finalTitle);
@@ -398,6 +404,7 @@ export function registerUpdateNode(
           types: finalTypes,
           fields: finalFields,
           body: finalBody,
+          expectedVersion: params.expected_version,
         }, syncLogger, operation_id ? { operation_id } : undefined);
 
         return ok(
@@ -412,6 +419,9 @@ export function registerUpdateNode(
           [...result.validation.issues, ...typeOpConflict].map(adaptIssue),
         );
       } catch (err) {
+        if (err instanceof StaleNodeError) {
+          return buildStaleNodeEnvelope(db, err);
+        }
         if (err instanceof PipelineError && err.validation) {
           const errorCount = err.validation.issues.filter(i => i.severity === 'error').length;
           return fail(

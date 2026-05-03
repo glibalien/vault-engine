@@ -7,3 +7,4 @@ dist/
 .env
 .worktrees/
 .codex
+.superpowers/

@@ -30,6 +30,7 @@ interface NodeRow {
   content_hash: string | null;
   file_mtime: number | null;
   indexed_at: number | null;
+  version: number;
 }
 
 interface RelRow {
@@ -150,6 +151,7 @@ export function registerGetNode(
         id: node.id,
         file_path: node.file_path,
         title: node.title,
+        version: node.version,
         types,
         fields,
         relationships: { outgoing: outgoingGrouped, incoming: incomingGrouped },

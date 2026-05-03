@@ -86,6 +86,7 @@ interface NodeRow {
   id: string;
   file_path: string;
   title: string | null;
+  version: number;
 }
 
 function enrichRows(
@@ -111,6 +112,7 @@ function enrichRows(
       id: row.id,
       file_path: row.file_path,
       title: row.title,
+      version: row.version,
       types: (getTypes.all(row.id) as Array<{ schema_type: string }>).map(t => t.schema_type),
       field_count: (getFieldCount.get(row.id) as { count: number }).count,
     };
@@ -305,7 +307,7 @@ export function registerQueryNodes(
           const { sql, params: sqlParams } = buildNodeQuery(filter, db);
           // Fetch all candidate IDs (no LIMIT — hybrid search applies its own ranking)
           const idSql = sql.replace(
-            /^SELECT DISTINCT n\.id, n\.file_path, n\.title, n\.body/,
+            /^SELECT DISTINCT n\.id, n\.file_path, n\.title, n\.body, n\.version/,
             'SELECT DISTINCT n.id',
           );
           const idRows = db.prepare(idSql).all(...sqlParams) as Array<{ id: string }>;
@@ -322,7 +324,7 @@ export function registerQueryNodes(
         const total = searchHits.length;
 
         // Fetch node rows for the page
-        const getNode = db.prepare('SELECT id, file_path, title FROM nodes WHERE id = ?');
+        const getNode = db.prepare('SELECT id, file_path, title, version FROM nodes WHERE id = ?');
         const rows: NodeRow[] = [];
         for (const hit of pageHits) {
           const row = getNode.get(hit.node_id) as NodeRow | undefined;

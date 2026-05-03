@@ -399,7 +399,7 @@ export function buildNodeQuery(filter: NodeQueryFilter, db?: Database.Database):
 
   const baseFrom = `FROM nodes n`;
   const countSql = `SELECT COUNT(DISTINCT n.id) as total ${baseFrom} ${joinSql} ${whereSql}`.trimEnd();
-  const sql = `SELECT DISTINCT n.id, n.file_path, n.title, n.body ${baseFrom} ${joinSql} ${whereSql}`.trimEnd();
+  const sql = `SELECT DISTINCT n.id, n.file_path, n.title, n.body, n.version ${baseFrom} ${joinSql} ${whereSql}`.trimEnd();
 
   return { sql, countSql, params };
 }

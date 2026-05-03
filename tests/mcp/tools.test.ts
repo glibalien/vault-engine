@@ -229,6 +229,7 @@ describe('query-nodes', () => {
     const result = body.data;
     expect(result.total).toBe(3);
     expect(result.nodes).toHaveLength(3);
+    expect(result.nodes.every((n: any) => typeof n.version === 'number')).toBe(true);
     // Default sort by title asc
     expect(result.nodes[0].title).toBe('Fix Bug');
     expect(result.nodes[1].title).toBe('Quick Note');
@@ -467,6 +468,7 @@ describe('get-node', () => {
     expect(result.id).toBe('n1');
     expect(result.title).toBe('Team Meeting');
     expect(result.file_path).toBe('meetings/meeting.md');
+    expect(result.version).toBe(1);
   });
 
   it('retrieves node by file_path', async () => {

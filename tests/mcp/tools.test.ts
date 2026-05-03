@@ -24,6 +24,9 @@ function getToolHandler(registerFn: (server: McpServer, db: Database.Database) =
     tool: (_name: string, _desc: string, _schema: unknown, handler: (...args: unknown[]) => unknown) => {
       capturedHandler = (args) => handler(args);
     },
+    registerTool: (_name: string, _config: unknown, handler: (...args: unknown[]) => unknown) => {
+      capturedHandler = (args) => handler(args);
+    },
   } as unknown as McpServer;
   registerFn(fakeServer, db);
   return capturedHandler!;

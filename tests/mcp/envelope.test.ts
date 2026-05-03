@@ -30,6 +30,9 @@ function captureHandler(registerFn: (server: McpServer, ...args: any[]) => void,
     tool: (_name: string, _desc: string, _schema: unknown, handler: (...a: unknown[]) => unknown) => {
       captured = (args) => handler(args);
     },
+    registerTool: (_name: string, _config: unknown, handler: (...a: unknown[]) => unknown) => {
+      captured = (args) => handler(args);
+    },
   } as unknown as McpServer;
   registerFn(fakeServer, ...extras);
   return captured!;

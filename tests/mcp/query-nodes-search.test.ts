@@ -68,6 +68,9 @@ function captureHandler(idx?: EmbeddingIndexer, emb?: Embedder) {
     tool: (_name: string, _desc: string, _schema: unknown, h: (args: Record<string, unknown>) => Promise<unknown>) => {
       capturedHandler = h;
     },
+    registerTool: (_name: string, _config: unknown, h: (args: Record<string, unknown>) => Promise<unknown>) => {
+      capturedHandler = h;
+    },
   };
   registerQueryNodes(fakeServer as unknown as McpServer, db, idx, emb);
   return capturedHandler!;

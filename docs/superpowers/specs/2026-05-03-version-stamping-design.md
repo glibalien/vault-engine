@@ -120,9 +120,9 @@ Per-op try/catch around `StaleNodeError`; non-stale ops continue. Existing per-o
 
 Single SELECT change in `enrichRows()` for `query-nodes`; one column added in `get-node`'s row fetch. No API breakage — additive field on existing shapes.
 
-### Issue code
+### Error code
 
-`STALE_NODE` added to the `ToolIssueCode` closed union in `src/mcp/tools/errors.ts`. The build typecheck (`npm run build` runs the test tsconfig project) will then force every mutation tool handler to handle it.
+`STALE_NODE` added to the `ErrorCode` union in `src/mcp/tools/errors.ts` (the envelope's `error.code` type, lines 4-16). It's an error — not a warning — so it belongs alongside `INVALID_PARAMS`, `CONFIRMATION_REQUIRED`, etc., not in `ToolIssueCode` (which is for `warnings[]` entries). Adding to a string-literal union is purely additive — no exhaustive-switch breakage.
 
 ---
 

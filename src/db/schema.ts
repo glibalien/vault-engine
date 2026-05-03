@@ -16,7 +16,8 @@ export function createSchema(db: Database.Database): void {
       content_hash TEXT,
       file_mtime INTEGER,
       indexed_at INTEGER,
-      created_at INTEGER
+      created_at INTEGER,
+      version INTEGER NOT NULL DEFAULT 1
     );
 
     CREATE TABLE IF NOT EXISTS node_types (

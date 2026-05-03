@@ -7,7 +7,7 @@ loadDotenv({ path: resolve(import.meta.dirname ?? '.', '..', '.env') });
 import { openDatabase } from './db/connection.js';
 import { createSchema } from './db/schema.js';
 import {
-  upgradeToPhase2, upgradeToPhase3, upgradeToPhase4, upgradeToPhase6,
+  upgradeToPhase2, upgradeToPhase3, upgradeToPhase4, upgradeToPhase6, upgradeToVersionStamps,
   addCreatedAt, upgradeForOverrides, ensureMetaTable, upgradeForResolvedTargetId,
   addUndoTables, addNodeTypesSortOrder, addSchemaUndoSnapshots, addGlobalFieldUndoSnapshots,
 } from './db/migrate.js';
@@ -53,6 +53,7 @@ upgradeToPhase2(db);
 upgradeToPhase3(db);
 upgradeToPhase4(db);
 upgradeToPhase6(db);
+upgradeToVersionStamps(db);
 addCreatedAt(db);
 upgradeForOverrides(db);
 ensureMetaTable(db);

@@ -64,6 +64,23 @@ export function upgradeToPhase6(db: Database.Database): void {
 }
 
 /**
+ * Add monotonic version stamps to nodes for optimistic concurrency.
+ * Idempotent — safe to run on a database that already has the column.
+ *
+ * Spec: docs/superpowers/specs/2026-05-03-version-stamping-design.md
+ */
+export function upgradeToVersionStamps(db: Database.Database): void {
+  const run = db.transaction(() => {
+    const cols = (db.prepare('PRAGMA table_info(nodes)').all() as { name: string }[])
+      .map(c => c.name);
+    if (!cols.includes('version')) {
+      db.prepare('ALTER TABLE nodes ADD COLUMN version INTEGER NOT NULL DEFAULT 1').run();
+    }
+  });
+  run();
+}
+
+/**
  * Upgrade an existing database to Phase 4.
  *
  * Drops the old `embeddings` placeholder table, creates `embedding_meta` and

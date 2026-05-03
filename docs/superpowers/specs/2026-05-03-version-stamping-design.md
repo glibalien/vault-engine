@@ -1,7 +1,7 @@
 # Version Stamping & STALE_NODE — Design Spec
 
 **Date:** 2026-05-03
-**Status:** Design approved, pending implementation plan
+**Status:** Implemented 2026-05-03
 **Motivation:** Foundation #1 in [`Vault Engine - MCP App Visualization Foundations`](../../../../Documents/archbrain/Notes/Vault%20Engine%20-%20MCP%20App%20Visualization%20Foundations.md) (vault note, 2026-05-03)
 **Depends on:** Merged — `feat/unified-deletion`, `feat/mcp-response-envelope`, `feat/undo-system`
 
@@ -87,6 +87,20 @@ Pass-through to the pipeline. On `StaleNodeError` from the pipeline, the tool ca
 ```
 
 `current_node` matches the shape `get-node` returns (single-node fetch helper, reused) so the iframe gets a drop-in replacement for its local row.
+
+On success, single-node mutation tools return the node's new `version` in their data envelope so callers can chain writes without a follow-up read:
+
+```json
+{
+  "ok": true,
+  "data": {
+    "node_id": "abc",
+    "file_path": "task.md",
+    "version": 9
+  },
+  "warnings": []
+}
+```
 
 ### `update-node` query mode
 
@@ -278,6 +292,18 @@ If the design proves wrong, removal is one commit:
 - Leave the `version` column in place (harmless; can be dropped in a follow-up if desired).
 
 The `STALE_NODE` issue code stays in the closed union (no harm) until a separate cleanup commit removes it.
+
+---
+
+## Status
+
+- 2026-05-03: Implemented in vault-engine via `3d77e04`, `e333d95`, `7e5dde4`, `ecac1c6`, `1f7b4fc`, and `93c6216`.
+
+### Plan defects discovered during execution
+
+- `batch-mutate` in the codebase is still atomic for non-stale failures, despite the plan text calling it best-effort-not-transactional. Implementation added skip-and-report only for `STALE_NODE`; other failures preserve the existing rollback contract.
+- Rename paths mutate node identity through `executeRename` before the normal re-render pipeline call, so stale checking had to be added at that rename boundary, not only inside `executeMutation`.
+- `update-node` with `set_title` plus other changes originally double-checked `expected_version`: the pre-rename `executeMutation` bumped the version, then `executeRename` compared the caller's original version against that self-induced bump and returned `STALE_NODE` after a partial write. The fix is to validate freshness once before the first mutation and not pass `expectedVersion` into the subsequent self-rename call; `executeRename` still checks versions for direct `rename-node` calls and now bumps `version` for pure renames.
 
 ---
 

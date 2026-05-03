@@ -79,6 +79,7 @@ export function registerAddTypeToNode(
           added_fields: [],
           readopted_fields: [],
           already_present: true,
+          version: getNodeVersion(db, node.node_id),
         });
       }
 
@@ -149,6 +150,7 @@ export function registerAddTypeToNode(
         // because validate.ts produces source='defaulted' entries in coerced_state
         // when required-with-default fields are missing.
         const addedFields = defaultedFieldsFrom(result.validation).map(p => p.field);
+        const version = getNodeVersion(db, result.node_id);
 
         return ok(
           {
@@ -158,6 +160,7 @@ export function registerAddTypeToNode(
             added_fields: addedFields,
             readopted_fields: readoptedFields,
             already_present: false,
+            version,
           },
           result.validation.issues.map(adaptIssue),
         );
@@ -187,4 +190,8 @@ export function registerAddTypeToNode(
       }
     },
   );
+}
+
+function getNodeVersion(db: Database.Database, nodeId: string): number | undefined {
+  return (db.prepare('SELECT version FROM nodes WHERE id = ?').get(nodeId) as { version: number } | undefined)?.version;
 }

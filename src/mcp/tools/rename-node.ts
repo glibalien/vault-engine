@@ -154,7 +154,7 @@ export function executeRename(
   }
 
   // 2. Update the renamed node's DB state
-  db.prepare('UPDATE nodes SET file_path = ?, title = ? WHERE id = ?').run(
+  db.prepare('UPDATE nodes SET file_path = ?, title = ?, version = version + 1 WHERE id = ?').run(
     newFilePath, newTitle, node.node_id,
   );
 
@@ -316,6 +316,7 @@ export function registerRenameNode(
 
       try {
         const { refsUpdated } = txn();
+        const version = getNodeVersion(db, node.node_id);
         // Patch description now that refsUpdated is known.
         db.prepare('UPDATE undo_operations SET description = ? WHERE operation_id = ?')
           .run(
@@ -338,6 +339,7 @@ export function registerRenameNode(
             old_title: oldTitle,
             new_title: params.new_title,
             references_updated: refsUpdated,
+            version,
           },
           issues.map(adaptIssue),
         );
@@ -362,6 +364,10 @@ export function registerRenameNode(
       }
     },
   );
+}
+
+function getNodeVersion(db: Database.Database, nodeId: string): number | undefined {
+  return (db.prepare('SELECT version FROM nodes WHERE id = ?').get(nodeId) as { version: number } | undefined)?.version;
 }
 
 /**

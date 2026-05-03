@@ -1,6 +1,8 @@
 import { describe, it, expect, beforeEach, afterEach } from 'vitest';
 import type { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import Database from 'better-sqlite3';
+import { existsSync, readFileSync } from 'node:fs';
+import { join } from 'node:path';
 import { createSchema } from '../../src/db/schema.js';
 import { addUndoTables } from '../../src/db/migrate.js';
 import { createSchemaDefinition } from '../../src/schema/crud.js';
@@ -45,7 +47,7 @@ function getHandler(registerFn: (server: McpServer) => void) {
   return captured!;
 }
 
-function createNode(filePath = 'node.md', title = 'Node', types: string[] = ['note']) {
+function createNode(filePath = 'node.md', title = 'Node', types: string[] = ['note'], body = '') {
   return executeMutation(db, writeLock, vaultPath, {
     source: 'tool',
     node_id: null,
@@ -53,7 +55,7 @@ function createNode(filePath = 'node.md', title = 'Node', types: string[] = ['no
     title,
     types,
     fields: {},
-    body: '',
+    body,
   });
 }
 
@@ -116,6 +118,7 @@ describe('single-node mutation expected_version', () => {
       expected_version: 1,
     }));
     expect(okResponse.ok).toBe(true);
+    expect(okResponse.data.version).toBe(2);
 
     const queryResponse = parseResult(await handler({
       query: { types: ['note'] },
@@ -125,6 +128,60 @@ describe('single-node mutation expected_version', () => {
     expect(queryResponse.ok).toBe(false);
     expect(queryResponse.error?.code).toBe('INVALID_PARAMS');
     expect(queryResponse.error?.message).toMatch(/expected_version/);
+  });
+
+  it('update-node with set_title and set_body succeeds with matching expected_version', async () => {
+    const created = createNode('orig.md', 'Orig', ['note'], 'starter');
+    const handler = getHandler(server => registerUpdateNode(server, db, writeLock, vaultPath));
+
+    const response = parseResult(await handler({
+      node_id: created.node_id,
+      set_title: 'Renamed',
+      set_body: 'edited body',
+      expected_version: 1,
+    }));
+
+    expect(response.ok).toBe(true);
+    expect(response.data.version).toBe(3);
+    expect(response.data.title).toBe('Renamed');
+    expect(response.data.file_path).toBe('Renamed.md');
+    const row = db.prepare('SELECT title, file_path, body, version FROM nodes WHERE id = ?')
+      .get(created.node_id) as { title: string; file_path: string; body: string; version: number };
+    expect(row).toMatchObject({
+      title: 'Renamed',
+      file_path: 'Renamed.md',
+      body: 'edited body',
+      version: 3,
+    });
+  });
+
+  it('update-node with stale set_title and set_body returns STALE_NODE before partial write', async () => {
+    const created = createNode('orig.md', 'Orig', ['note'], 'starter');
+    bumpNode(created.node_id, 'orig.md', 'Orig');
+    const handler = getHandler(server => registerUpdateNode(server, db, writeLock, vaultPath));
+
+    const response = parseResult(await handler({
+      node_id: created.node_id,
+      set_title: 'Renamed',
+      set_body: 'edited body',
+      expected_version: 1,
+    }));
+
+    expect(response.ok).toBe(false);
+    expect(response.error?.code).toBe('STALE_NODE');
+    expect(response.error?.details.current_version).toBe(2);
+    expect(response.error?.details.current_node.body).toBe('bump');
+    const row = db.prepare('SELECT title, file_path, body, version FROM nodes WHERE id = ?')
+      .get(created.node_id) as { title: string; file_path: string; body: string; version: number };
+    expect(row).toMatchObject({
+      title: 'Orig',
+      file_path: 'orig.md',
+      body: 'bump',
+      version: 2,
+    });
+    expect(existsSync(join(vaultPath, 'orig.md'))).toBe(true);
+    expect(existsSync(join(vaultPath, 'Renamed.md'))).toBe(false);
+    expect(readFileSync(join(vaultPath, 'orig.md'), 'utf-8')).not.toContain('edited body');
   });
 
   it('add-type-to-node returns STALE_NODE when stale', async () => {
@@ -142,6 +199,20 @@ describe('single-node mutation expected_version', () => {
     expect(response.error?.code).toBe('STALE_NODE');
   });
 
+  it('add-type-to-node success returns the new version', async () => {
+    const created = createNode('add-success.md', 'Add Success');
+    const handler = getHandler(server => registerAddTypeToNode(server, db, writeLock, vaultPath));
+
+    const response = parseResult(await handler({
+      node_id: created.node_id,
+      type: 'task',
+      expected_version: 1,
+    }));
+
+    expect(response.ok).toBe(true);
+    expect(response.data.version).toBe(2);
+  });
+
   it('remove-type-from-node returns STALE_NODE when stale', async () => {
     const created = createNode('remove.md', 'Remove Type', ['note', 'task']);
     bumpNode(created.node_id, 'remove.md', 'Remove Type', ['note', 'task']);
@@ -155,6 +226,20 @@ describe('single-node mutation expected_version', () => {
 
     expect(response.ok).toBe(false);
     expect(response.error?.code).toBe('STALE_NODE');
+  });
+
+  it('remove-type-from-node success returns the new version', async () => {
+    const created = createNode('remove-success.md', 'Remove Success', ['note', 'task']);
+    const handler = getHandler(server => registerRemoveTypeFromNode(server, db, writeLock, vaultPath));
+
+    const response = parseResult(await handler({
+      node_id: created.node_id,
+      type: 'task',
+      expected_version: 1,
+    }));
+
+    expect(response.ok).toBe(true);
+    expect(response.data.version).toBe(2);
   });
 
   it('delete-node returns STALE_NODE when stale', async () => {
@@ -186,6 +271,20 @@ describe('single-node mutation expected_version', () => {
 
     expect(response.ok).toBe(false);
     expect(response.error?.code).toBe('STALE_NODE');
+  });
+
+  it('rename-node success returns the new version', async () => {
+    const created = createNode('rename-success.md', 'Rename Success');
+    const handler = getHandler(server => registerRenameNode(server, db, writeLock, vaultPath));
+
+    const response = parseResult(await handler({
+      node_id: created.node_id,
+      new_title: 'Renamed Success',
+      expected_version: 1,
+    }));
+
+    expect(response.ok).toBe(true);
+    expect(response.data.version).toBe(2);
   });
 });
 

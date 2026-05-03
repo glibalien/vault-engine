@@ -354,8 +354,9 @@ export function registerUpdateNode(
               node_id: node.node_id,
               file_path: node.file_path,
               title: node.title,
-            }, finalTitle, effectiveFilePath, syncLogger, operation_id ? { operation_id } : undefined, undefined, params.expected_version);
+            }, finalTitle, effectiveFilePath, syncLogger, operation_id ? { operation_id } : undefined);
           })();
+          const version = getNodeVersion(db, node.node_id);
 
           const titleIssues: ToolIssue[] = checkTitleSafety(finalTitle);
           const sanitizeIssues: ToolIssue[] = titleSanitized?.sanitized
@@ -374,6 +375,7 @@ export function registerUpdateNode(
               references_updated: refsUpdated,
               coerced_state: mutResult.validation.coerced_state,
               orphan_fields: mutResult.validation.orphan_fields,
+              version,
             },
             [...mutResult.validation.issues, ...titleIssues, ...sanitizeIssues, ...typeOpConflict].map(adaptIssue),
           );
@@ -406,6 +408,7 @@ export function registerUpdateNode(
           body: finalBody,
           expectedVersion: params.expected_version,
         }, syncLogger, operation_id ? { operation_id } : undefined);
+        const version = getNodeVersion(db, result.node_id);
 
         return ok(
           {
@@ -415,6 +418,7 @@ export function registerUpdateNode(
             types: finalTypes,
             coerced_state: result.validation.coerced_state,
             orphan_fields: result.validation.orphan_fields,
+            version,
           },
           [...result.validation.issues, ...typeOpConflict].map(adaptIssue),
         );
@@ -480,6 +484,10 @@ function buildSingleNodeDescription(
   if (params.set_directory !== undefined) parts.push('directory');
   const changes = parts.length > 0 ? parts.join(', ') : 'no-op';
   return `update-node: ${changes} on '${title}'`;
+}
+
+function getNodeVersion(db: Database.Database, nodeId: string): number | undefined {
+  return (db.prepare('SELECT version FROM nodes WHERE id = ?').get(nodeId) as { version: number } | undefined)?.version;
 }
 
 function handleQueryMode(

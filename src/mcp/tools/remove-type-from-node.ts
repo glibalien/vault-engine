@@ -161,6 +161,7 @@ export function registerRemoveTypeFromNode(
             }),
           );
         }
+        const version = getNodeVersion(db, result.node_id);
 
         return ok({
           node_id: result.node_id,
@@ -168,6 +169,7 @@ export function registerRemoveTypeFromNode(
           types: resultingTypes,
           orphaned_fields: wouldOrphanFields,
           edits_logged: result.edits_logged + (wouldOrphanFields.length > 0 ? 1 : 0),
+          version,
         });
       } catch (err) {
         if (err instanceof StaleNodeError) {
@@ -195,4 +197,8 @@ export function registerRemoveTypeFromNode(
       }
     },
   );
+}
+
+function getNodeVersion(db: Database.Database, nodeId: string): number | undefined {
+  return (db.prepare('SELECT version FROM nodes WHERE id = ?').get(nodeId) as { version: number } | undefined)?.version;
 }

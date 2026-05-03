@@ -3,6 +3,7 @@ import Database from 'better-sqlite3';
 import { createSchema } from '../../src/db/schema.js';
 import { addUiHints } from '../../src/db/migrate.js';
 import { validateUiHints, normalizeUiHints, UI_WIDGETS } from '../../src/global-fields/ui-hints.js';
+import { createGlobalField, getGlobalField, updateGlobalField } from '../../src/global-fields/crud.js';
 
 describe('addUiHints migration', () => {
   it('adds ui_hints column to global_fields', () => {
@@ -100,5 +101,49 @@ describe('UiHints validator', () => {
 
   it('returns a populated object as-is', () => {
     expect(normalizeUiHints({ label: 'X' })).toEqual({ label: 'X' });
+  });
+});
+
+function setupDb(): Database.Database {
+  const db = new Database(':memory:');
+  createSchema(db);
+  addUiHints(db);
+  return db;
+}
+
+describe('CRUD round-trip for ui_hints', () => {
+  it('createGlobalField persists ui hints', () => {
+    const db = setupDb();
+    createGlobalField(db, {
+      name: 'status',
+      field_type: 'enum',
+      enum_values: ['open', 'done'],
+      ui: { widget: 'enum', label: 'Status', order: 10 },
+    });
+    const def = getGlobalField(db, 'status');
+    expect(def?.ui_hints).toEqual({ widget: 'enum', label: 'Status', order: 10 });
+  });
+
+  it('createGlobalField with no ui leaves ui_hints null', () => {
+    const db = setupDb();
+    createGlobalField(db, { name: 'note', field_type: 'string' });
+    const def = getGlobalField(db, 'note');
+    expect(def?.ui_hints).toBeNull();
+  });
+
+  it('createGlobalField with ui: {} stores null', () => {
+    const db = setupDb();
+    createGlobalField(db, { name: 'note', field_type: 'string', ui: {} });
+    const def = getGlobalField(db, 'note');
+    expect(def?.ui_hints).toBeNull();
+  });
+
+  it('createGlobalField rejects invalid ui', () => {
+    const db = setupDb();
+    expect(() => createGlobalField(db, {
+      name: 'bad',
+      field_type: 'string',
+      ui: { widget: 'rainbow' } as unknown as Record<string, unknown>,
+    })).toThrow(/widget/);
   });
 });

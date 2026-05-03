@@ -3,6 +3,7 @@
 import type Database from 'better-sqlite3';
 import type { GlobalFieldDefinition, FieldType } from '../validation/types.js';
 import { coerceValue } from '../validation/coerce.js';
+import { validateUiHints, normalizeUiHints, type UiHints } from './ui-hints.js';
 
 // ── Shared types ─────────────────────────────────────────────────────
 
@@ -16,6 +17,7 @@ export interface CreateGlobalFieldInput {
   required?: boolean;
   list_item_type?: FieldType;
   overrides_allowed?: { required?: boolean; default_value?: boolean; enum_values?: boolean };
+  ui?: UiHints | null;
 }
 
 export interface UpdateGlobalFieldInput {
@@ -108,6 +110,7 @@ interface GlobalFieldRow {
   overrides_allowed_default_value: number;
   overrides_allowed_enum_values: number;
   list_item_type: string | null;
+  ui_hints: string | null;
 }
 
 function rowToDefinition(row: GlobalFieldRow): GlobalFieldDefinition {
@@ -125,6 +128,7 @@ function rowToDefinition(row: GlobalFieldRow): GlobalFieldDefinition {
       enum_values: row.overrides_allowed_enum_values === 1,
     },
     list_item_type: row.list_item_type as FieldType | null,
+    ui_hints: row.ui_hints !== null ? JSON.parse(row.ui_hints) as UiHints : null,
   };
 }
 
@@ -168,6 +172,17 @@ export function createGlobalField(
     }
   }
 
+  // Validate + normalize ui hints
+  let uiHintsJson: string | null = null;
+  if (input.ui !== undefined) {
+    const validated = validateUiHints(input.ui);
+    if (!validated.ok) {
+      throw new Error(validated.reason);
+    }
+    const normalized = normalizeUiHints(validated.value);
+    uiHintsJson = normalized !== null ? JSON.stringify(normalized) : null;
+  }
+
   const enumValues = input.enum_values ? JSON.stringify(input.enum_values) : null;
   const defaultValue = input.default_value !== undefined && input.default_value !== null
     ? JSON.stringify(input.default_value)
@@ -175,8 +190,8 @@ export function createGlobalField(
 
   try {
     db.prepare(`
-      INSERT INTO global_fields (name, field_type, enum_values, reference_target, description, default_value, required, overrides_allowed_required, overrides_allowed_default_value, overrides_allowed_enum_values, list_item_type)
-      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+      INSERT INTO global_fields (name, field_type, enum_values, reference_target, description, default_value, required, overrides_allowed_required, overrides_allowed_default_value, overrides_allowed_enum_values, list_item_type, ui_hints)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
     `).run(
       input.name,
       input.field_type,
@@ -189,6 +204,7 @@ export function createGlobalField(
       input.overrides_allowed?.default_value ? 1 : 0,
       input.overrides_allowed?.enum_values ? 1 : 0,
       input.list_item_type ?? null,
+      uiHintsJson,
     );
   } catch (err: unknown) {
     const msg = err instanceof Error ? err.message : String(err);

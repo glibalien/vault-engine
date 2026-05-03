@@ -78,6 +78,7 @@ describe('createGlobalField', () => {
         enum_values: false,
       },
       list_item_type: null,
+      ui_hints: null,
     });
   });
 

@@ -21,6 +21,7 @@ function gf(overrides: Partial<GlobalFieldDefinition> & { name: string }): Globa
     required: false,
     overrides_allowed: { required: false, default_value: false, enum_values: false },
     list_item_type: null,
+    ui_hints: null,
     ...overrides,
   };
 }

@@ -147,3 +147,41 @@ describe('CRUD round-trip for ui_hints', () => {
     })).toThrow(/widget/);
   });
 });
+
+describe('updateGlobalField ui semantics', () => {
+  it('absent ui key leaves stored hints intact', () => {
+    const db = setupDb();
+    createGlobalField(db, { name: 'f', field_type: 'string', ui: { label: 'A', help: 'B' } });
+    updateGlobalField(db, 'f', { description: 'no ui change' });
+    expect(getGlobalField(db, 'f')?.ui_hints).toEqual({ label: 'A', help: 'B' });
+  });
+
+  it('ui: null clears stored hints', () => {
+    const db = setupDb();
+    createGlobalField(db, { name: 'f', field_type: 'string', ui: { label: 'A' } });
+    updateGlobalField(db, 'f', { ui: null });
+    expect(getGlobalField(db, 'f')?.ui_hints).toBeNull();
+  });
+
+  it('ui: {} clears stored hints', () => {
+    const db = setupDb();
+    createGlobalField(db, { name: 'f', field_type: 'string', ui: { label: 'A' } });
+    updateGlobalField(db, 'f', { ui: {} });
+    expect(getGlobalField(db, 'f')?.ui_hints).toBeNull();
+  });
+
+  it('replace-not-merge: previous keys not in new object are dropped', () => {
+    const db = setupDb();
+    createGlobalField(db, { name: 'f', field_type: 'string', ui: { label: 'A', help: 'B' } });
+    updateGlobalField(db, 'f', { ui: { label: 'X' } });
+    expect(getGlobalField(db, 'f')?.ui_hints).toEqual({ label: 'X' });
+  });
+
+  it('rejects invalid ui on update', () => {
+    const db = setupDb();
+    createGlobalField(db, { name: 'f', field_type: 'string' });
+    expect(() => updateGlobalField(db, 'f', {
+      ui: { widget: 'rainbow' } as unknown as Record<string, unknown>,
+    })).toThrow(/widget/);
+  });
+});

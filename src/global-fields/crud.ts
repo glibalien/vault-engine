@@ -29,6 +29,7 @@ export interface UpdateGlobalFieldInput {
   required?: boolean;
   list_item_type?: FieldType;
   overrides_allowed?: { required?: boolean; default_value?: boolean; enum_values?: boolean };
+  ui?: UiHints | null;
   confirm?: boolean;
   discard_uncoercible?: boolean;
 }
@@ -288,6 +289,15 @@ export function updateGlobalField(
         params.push(input.overrides_allowed.enum_values ? 1 : 0);
       }
     }
+    if (input.ui !== undefined) {
+      const validated = validateUiHints(input.ui);
+      if (!validated.ok) {
+        throw new Error(validated.reason);
+      }
+      const normalized = normalizeUiHints(validated.value);
+      updates.push('ui_hints = ?');
+      params.push(normalized !== null ? JSON.stringify(normalized) : null);
+    }
 
     if (updates.length > 0) {
       params.push(name);
@@ -368,6 +378,15 @@ export function updateGlobalField(
     if (input.reference_target !== undefined) {
       gfUpdates.push('reference_target = ?');
       gfParams.push(input.reference_target);
+    }
+    if (input.ui !== undefined) {
+      const validated = validateUiHints(input.ui);
+      if (!validated.ok) {
+        throw new Error(validated.reason);
+      }
+      const normalized = normalizeUiHints(validated.value);
+      gfUpdates.push('ui_hints = ?');
+      gfParams.push(normalized !== null ? JSON.stringify(normalized) : null);
     }
 
     gfParams.push(name);

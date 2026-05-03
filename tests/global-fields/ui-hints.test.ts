@@ -207,6 +207,8 @@ describe('renameGlobalField preserves ui hints', () => {
 import { createOperation, finalizeOperation } from '../../src/undo/operation.js';
 import { captureGlobalFieldSnapshot, restoreGlobalFieldSnapshot } from '../../src/undo/global-field-snapshot.js';
 import { addUndoTables, addGlobalFieldUndoSnapshots } from '../../src/db/migrate.js';
+import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
+import { registerCreateGlobalField } from '../../src/mcp/tools/create-global-field.js';
 
 function setupDbWithUndo(): Database.Database {
   const db = new Database(':memory:');
@@ -215,6 +217,17 @@ function setupDbWithUndo(): Database.Database {
   addUndoTables(db);
   addGlobalFieldUndoSnapshots(db);
   return db;
+}
+
+async function callMcpTool(server: McpServer, name: string, args: Record<string, unknown>): Promise<{ content: Array<{ type: string; text: string }> }> {
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  const tool = (server as any)._registeredTools[name];
+  if (!tool) throw new Error(`Tool ${name} not registered`);
+  return tool.callback ? tool.callback(args) : tool.handler(args);
+}
+
+function envelope(result: { content: Array<{ type: string; text: string }> }) {
+  return JSON.parse(result.content[0].text);
 }
 
 describe('undo snapshot captures ui_hints', () => {
@@ -231,5 +244,34 @@ describe('undo snapshot captures ui_hints', () => {
 
     restoreGlobalFieldSnapshot(db, op, 'f');
     expect(getGlobalField(db, 'f')?.ui_hints).toEqual({ label: 'Original', order: 1 });
+  });
+});
+
+describe('create-global-field MCP tool accepts ui', () => {
+  it('passes ui through to createGlobalField', async () => {
+    const db = setupDbWithUndo();
+    const server = new McpServer({ name: 'test', version: '0' });
+    registerCreateGlobalField(server, db);
+    const env = envelope(await callMcpTool(server, 'create-global-field', {
+      name: 'status',
+      field_type: 'enum',
+      enum_values: ['open', 'done'],
+      ui: { widget: 'enum', label: 'Status' },
+    }));
+    expect(env.ok).toBe(true);
+    expect(getGlobalField(db, 'status')?.ui_hints).toEqual({ widget: 'enum', label: 'Status' });
+  });
+
+  it('rejects invalid ui at the MCP layer', async () => {
+    const db = setupDbWithUndo();
+    const server = new McpServer({ name: 'test', version: '0' });
+    registerCreateGlobalField(server, db);
+    const env = envelope(await callMcpTool(server, 'create-global-field', {
+      name: 'bad',
+      field_type: 'string',
+      ui: { widget: 'rainbow' },
+    }));
+    expect(env.ok).toBe(false);
+    if (!env.ok) expect(env.error.code).toBe('INVALID_PARAMS');
   });
 });

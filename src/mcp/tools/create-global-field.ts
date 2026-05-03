@@ -27,6 +27,12 @@ export function registerCreateGlobalField(server: McpServer, db: Database.Databa
         default_value: z.boolean().optional(),
         enum_values: z.boolean().optional(),
       }).optional().describe('Per-property override permissions for schema claims'),
+      ui: z.object({
+        widget: z.enum(['text', 'textarea', 'enum', 'date', 'number', 'bool', 'link', 'tags']).optional(),
+        label: z.string().max(80).optional(),
+        help: z.string().max(280).optional(),
+        order: z.number().int().optional(),
+      }).nullable().optional().describe('UI rendering hints (widget/label/help/order). Pass null or {} to clear.'),
     },
     async (params) => {
       const operation_id = createOperation(db, {

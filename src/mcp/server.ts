@@ -7,6 +7,7 @@ import type { ExtractionCache } from '../extraction/cache.js';
 import type { EmbeddingIndexer } from '../search/indexer.js';
 import type { Embedder } from '../search/embedder.js';
 import { registerAllTools } from './tools/index.js';
+import { registerQueryNodesUi } from './ui/query-nodes/register.js';
 
 export interface ServerContext {
   db: Database.Database;
@@ -30,5 +31,6 @@ export function createServer(db: Database.Database, ctx?: {
 }): McpServer {
   const server = new McpServer({ name: 'vault-engine', version: '0.1.0' });
   registerAllTools(server, db, ctx);
+  registerQueryNodesUi(server);
   return server;
 }

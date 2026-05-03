@@ -34,7 +34,7 @@ No architectural changes. Same single mutation pipeline, same `{ok, data|error, 
 - Add a `ui_hints` column to the `global_fields` table.
 - Accept an optional `ui` param on `create-global-field` and `update-global-field`.
 - Surface `ui` via `describe-global-field` (top-level key) and `describe-schema` (per-claim key).
-- Audit `Issue` emission sites in `src/validation/*` and `src/coercion/*` to ensure `Issue.field` is populated when the issue is per-field.
+- Audit direct `Issue` construction sites in `src/mcp/tools/*` to ensure `Issue.field` is populated for the per-field codes (`FIELD_OPERATOR_MISMATCH` and any future per-field `IssueCode`). The `ValidationIssue` path already populates `field` correctly.
 - Add a new section to this spec capturing the bundle-author write-safety contract.
 
 Watcher, indexer, embedder, undo, render path, file rendering: untouched.
@@ -56,19 +56,24 @@ All four keys are optional. An entry with no keys set is equivalent to `null`.
 
 ### Inference table (when `widget` is absent)
 
-Bundles infer the widget from `value_type` + `enum_values`. The table is **canonical** — bundles MUST agree on it so the same field renders the same way across surfaces.
+Bundles infer the widget from `field_type` + `list_item_type`. The table is **canonical** — bundles MUST agree on it so the same field renders the same way across surfaces.
 
-| `value_type` | `enum_values` present? | Inferred `widget`                  |
-| ------------ | ---------------------- | ---------------------------------- |
-| `text`       | no                     | `text`                             |
-| `text`       | yes                    | `enum`                             |
-| `number`     | —                      | `number`                           |
-| `date`       | —                      | `date`                             |
-| `bool`       | —                      | `bool`                             |
-| `list_text`  | no                     | `tags`                             |
-| `list_text`  | yes                    | `tags` *(with enum constraint)*    |
-| `list_ref`   | —                      | `link` *(multi)*                   |
-| `json`       | —                      | `textarea` *(read-only by default)*|
+The seven `field_type` values come from `src/validation/types.ts`: `string`, `number`, `date`, `boolean`, `reference`, `enum`, `list`. For `field_type === 'list'`, `list_item_type` carries the element type (any of the other six, except `list` itself).
+
+| `field_type` | `list_item_type`               | Inferred `widget`               |
+| ------------ | ------------------------------ | ------------------------------- |
+| `string`     | —                              | `text`                          |
+| `enum`       | —                              | `enum`                          |
+| `number`     | —                              | `number`                        |
+| `date`       | —                              | `date`                          |
+| `boolean`    | —                              | `bool`                          |
+| `reference`  | —                              | `link` *(single)*               |
+| `list`       | `string`                       | `tags`                          |
+| `list`       | `enum`                         | `tags` *(with enum constraint)* |
+| `list`       | `reference`                    | `link` *(multi)*                |
+| `list`       | `number` / `date` / `boolean`  | `tags` *(best effort)*          |
+
+`textarea` has no inference path — it's an explicit override only. A schema author who wants multi-line rendering for a `string` field sets `widget: 'textarea'` deliberately.
 
 Inference is documented, not implemented in the engine; a shared utility can be factored out of the second or third bundle if duplication justifies it.
 
@@ -171,45 +176,74 @@ Untouched. Hints are DB-only metadata; markdown rendering doesn't see them. The 
 
 ### Motivation
 
-The closed-union `Issue` shape (`src/mcp/tools/errors.ts`) already declares `field?: string`. The gap is consistency at emission sites. Form-based bundles need per-field errors to land under the correct input; without `Issue.field` populated, the bundle can only show errors as a top-level banner.
+The closed-union `Issue` shape (`src/mcp/tools/errors.ts:29-35`) declares `field?: string`. Form-based bundles need per-field errors to land under the correct input; without `Issue.field` populated, the bundle can only show errors as a top-level banner.
+
+### Current state — narrower than first thought
+
+The validation path is already correct:
+
+- `ValidationIssue` (`src/validation/types.ts:89-95`) has **`field: string`** — required, not optional. Every `ValidationIssueCode` is per-field by construction.
+- `adaptIssue` (`src/mcp/tools/errors.ts:64-80`) propagates `v.field` from `ValidationIssue` into the unified `Issue` correctly.
+- Coercion paths funnel through validation and surface as `ValidationIssue`s; `coercion_code` (`STRING_TO_NUMBER`, `STRING_TO_DATE_FUZZY`, etc.) is a property on `CoercedValue`, not an `IssueCode`.
+
+The gap is in **direct `Issue` construction inside tool handlers** — places that build `Issue` objects without going through `adaptIssue`. These currently never set `field`, even when the issue is per-field.
 
 ### Scope
 
-Audit each `Issue` construction site and ensure:
+Audit each direct `Issue` construction site (search pattern: `: Issue[] =` and `: Issue |` and `Issue =` in `src/mcp/tools/*.ts`) and ensure:
 
-- Per-field issues populate `field` with the vault field name (e.g., `"status"`, `"due_date"`).
-- Node-level issues leave `field` unset.
+- Per-field issues populate `field` with the vault field name.
+- Non-per-field issues (title-level, body-level, type-level, query-level, parameter-level) leave `field` unset.
 
-Sites to cover:
-
-- `src/validation/*` — `validateProposedState` and the per-claim validators that produce `REQUIRED_MISSING`, `ENUM_VIOLATION`, `TYPE_MISMATCH`, etc. These are per-field by definition.
-- `src/coercion/*` — coercion failures (`COERCION_FAILED`) and warnings (`STRING_TO_DATE_FUZZY`, etc.). All per-field.
-- `src/pipeline/check-types.ts` — `UNKNOWN_TYPE` is node-level; `field` stays unset. Confirm.
-- `src/global-fields/crud.ts` — `update-global-field`'s discard gate, when an existing value of node X won't coerce to the new field type. The issue is per-field (refers to the field whose type is changing); set `field`.
+Known sites from a `grep` pass: `query-nodes.ts:150,196,207,349,389`, `update-node.ts:559,628,817,942`, `batch-mutate.ts:117`, `delete-node.ts:78`, `remove-type-from-node.ts:77,102`, `query-sync-log.ts:87`. Plus any `IssueCode` added later — e.g., the unioned warning codes `FIELD_OPERATOR_MISMATCH` (per-field), `CROSS_NODE_FILTER_UNRESOLVED` (query-level), `LAST_TYPE_REMOVAL` (type-level), `PENDING_REFERENCES` (cross-node), `RESULT_TRUNCATED` (query-level), `DEPRECATED_PARAM` (parameter-level).
 
 Out of scope:
 
+- Anything in `src/validation/*` — `ValidationIssue.field` is required and already populated.
+- `ToolIssue` codes (`TITLE_WIKILINK_UNSAFE`, `FRONTMATTER_IN_BODY`, `TYPE_OP_CONFLICT`, `TITLE_FILENAME_SANITIZED`) — by design these are title/body/type-level, not per-field; the type doesn't even carry `field`.
 - Tool-entry zod validation errors (`INVALID_PARAMS`). These describe parameter names, not vault field names. `Issue.field` is reserved for vault fields.
-- Restructuring `Issue` to add new properties.
-- Any change that affects the `IssueCode` union — that's typecheck-pinned by `npm run build` and out of scope for this spec.
+- Restructuring `Issue` or `ValidationIssue` to add new properties.
+- Any change that affects the `IssueCode` union — typecheck-pinned by `npm run build`; out of scope.
 
 ### Behavior contract
 
-For every `IssueCode`, the spec pins whether `field` is expected populated:
+For every `IssueCode` currently in the union, the spec pins whether `field` is expected to be populated when an instance is constructed. Codes are split by source.
 
-| Code (sample, not exhaustive) | `field` populated? |
+**`ValidationIssueCode` (from `src/validation/types.ts`)** — all per-field by construction:
+
+| Code                          | `field` populated? |
 | ----------------------------- | ------------------ |
 | `REQUIRED_MISSING`            | yes                |
-| `ENUM_VIOLATION`              | yes                |
+| `ENUM_MISMATCH`               | yes                |
 | `TYPE_MISMATCH`               | yes                |
 | `COERCION_FAILED`             | yes                |
-| `STRING_TO_DATE_FUZZY`        | yes                |
-| `UNKNOWN_TYPE`                | no                 |
-| `STALE_NODE`                  | no                 |
-| `TITLE_COLLISION`             | no                 |
-| `CONFIRMATION_REQUIRED`       | no                 |
+| `LIST_ITEM_COERCION_FAILED`   | yes                |
+| `MERGE_CONFLICT`              | yes                |
+| `INTERNAL_CONSISTENCY`        | yes                |
 
-The full table lives next to the audit test (below) so it stays close to the assertions.
+**`ToolIssueCode` (from `src/mcp/tools/title-warnings.ts`)** — title/body/type-level, never per-field; the `ToolIssue` type carries no `field` property:
+
+| Code                          | `field` populated? |
+| ----------------------------- | ------------------ |
+| `TITLE_WIKILINK_UNSAFE`       | no                 |
+| `FRONTMATTER_IN_BODY`         | no                 |
+| `TYPE_OP_CONFLICT`            | no                 |
+| `TITLE_FILENAME_SANITIZED`    | no                 |
+
+**Additional `IssueCode` warning entries (from `src/mcp/tools/errors.ts:19-27`)** — constructed directly in tool handlers:
+
+| Code                            | `field` populated? | Why                              |
+| ------------------------------- | ------------------ | -------------------------------- |
+| `FIELD_OPERATOR_MISMATCH`       | yes                | per-field (operator vs type)     |
+| `CROSS_NODE_FILTER_UNRESOLVED`  | no                 | query-level (join target)        |
+| `LAST_TYPE_REMOVAL`             | no                 | type-level                       |
+| `PENDING_REFERENCES`            | no                 | cross-node                       |
+| `RESULT_TRUNCATED`              | no                 | query-level                      |
+| `DEPRECATED_PARAM`              | no                 | parameter-level                  |
+
+`ErrorCode` values (`UNKNOWN_TYPE`, `STALE_NODE`, `CONFIRMATION_REQUIRED`, etc.) live on the top-level `error.code`, not on `Issue`, and have no `field` property — out of scope for this audit.
+
+The full table lives next to the audit test so it stays close to the assertions.
 
 ### Out-of-scope discoveries
 
@@ -283,7 +317,7 @@ Files changed:
 - `src/mcp/tools/update-global-field.ts` — accept `ui` param; semantics per §2 ("authoring").
 - `src/mcp/tools/describe-global-field.ts` — return `ui` (top-level key, possibly null).
 - `src/mcp/tools/describe-schema.ts` — return `ui` per claim (in v1, hard-coded equal to global-field `ui`).
-- Various sites in `src/validation/*`, `src/coercion/*`, `src/pipeline/check-types.ts`, `src/global-fields/crud.ts` — set `Issue.field` consistently per §2.5.
+- Direct `Issue` construction sites in `src/mcp/tools/*` (notably `query-nodes.ts`, `update-node.ts`, `batch-mutate.ts`, `delete-node.ts`, `remove-type-from-node.ts`, `query-sync-log.ts`) — set `Issue.field` for `FIELD_OPERATOR_MISMATCH` and any other per-field code identified in the §2.5 contract table.
 
 Files added (tests):
 

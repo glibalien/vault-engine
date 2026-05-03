@@ -19,6 +19,9 @@ function getToolHandler(name: string) {
     tool: (n: string, _desc: string, _schema: unknown, handler: (...args: unknown[]) => unknown) => {
       if (n === name) capturedHandler = (args) => handler(args);
     },
+    registerTool: (n: string, _config: unknown, handler: (...args: unknown[]) => unknown) => {
+      if (n === name) capturedHandler = (args) => handler(args);
+    },
   } as unknown as McpServer;
   registerAllTools(fakeServer, db);
   return capturedHandler!;

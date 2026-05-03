@@ -22,6 +22,9 @@ function captureHandler() {
     tool: (_n: string, _d: string, _s: unknown, cb: (...a: unknown[]) => unknown) => {
       h = (args) => cb(args) as Promise<unknown>;
     },
+    registerTool: (_n: string, _config: unknown, cb: (...a: unknown[]) => unknown) => {
+      h = (args) => cb(args) as Promise<unknown>;
+    },
   } as unknown as McpServer;
   // registerQueryNodes signature is (server, db, embeddingIndexer?, embedder?).
   // Integration tests exercise the structured path; no embedder needed.

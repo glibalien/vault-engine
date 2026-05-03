@@ -4,6 +4,7 @@ import { safeVaultPath } from './safe-path.js';
 import type { WriteLockManager } from '../sync/write-lock.js';
 import { refreshOnDelete } from '../resolver/refresh.js';
 import type { UndoContext } from './types.js';
+import { StaleNodeError } from './execute.js';
 
 export interface ProposedDeletion {
   source: 'tool' | 'watcher' | 'reconciler' | 'fullIndex' | 'batch' | 'undo';
@@ -11,6 +12,7 @@ export interface ProposedDeletion {
   file_path: string;
   unlink_file: boolean;
   reason?: string;
+  expectedVersion?: number;
 }
 
 export interface DeletionResult {
@@ -48,6 +50,14 @@ export function executeDeletion(
   }
 
   const txn = db.transaction(() => {
+    if (deletion.expectedVersion !== undefined) {
+      const row = db.prepare('SELECT version FROM nodes WHERE id = ?')
+        .get(deletion.node_id) as { version: number } | undefined;
+      if (row !== undefined && row.version !== deletion.expectedVersion) {
+        throw new StaleNodeError(deletion.node_id, deletion.expectedVersion, row.version);
+      }
+    }
+
     // ── Undo snapshot capture (pre-delete state) ────────────────────
     if (undoContext) {
       const nodeRow = db.prepare('SELECT file_path, title, body FROM nodes WHERE id = ?')

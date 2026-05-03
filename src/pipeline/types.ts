@@ -17,6 +17,7 @@ export interface ProposedMutation {
   raw_field_texts?: Record<string, string>;  // watcher path: pre-stripped text for wiki-link fields
   source_content_hash?: string;              // watcher path: SHA256 of file at parse time — stored as DB content_hash when file write is skipped
   db_only?: boolean;                         // when true, skip file write (watcher path)
+  expectedVersion?: number;                  // optional optimistic concurrency check for tool callers
 }
 
 /**

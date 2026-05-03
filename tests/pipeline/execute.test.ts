@@ -3,7 +3,7 @@ import { join } from 'node:path';
 import { existsSync, readFileSync, writeFileSync, mkdirSync } from 'node:fs';
 import Database from 'better-sqlite3';
 import { createSchema } from '../../src/db/schema.js';
-import { executeMutation } from '../../src/pipeline/execute.js';
+import { executeMutation, StaleNodeError } from '../../src/pipeline/execute.js';
 import { PipelineError } from '../../src/pipeline/types.js';
 import type { ProposedMutation } from '../../src/pipeline/types.js';
 import { WriteLockManager } from '../../src/sync/write-lock.js';
@@ -231,6 +231,109 @@ describe('executeMutation — no-op write rule', () => {
 
     expect(result.file_written).toBe(false);
     expect(result.edits_logged).toBe(0);
+  });
+});
+
+// ── Version stamping ─────────────────────────────────────────────────
+
+describe('executeMutation — version stamping', () => {
+  it('starts new nodes at version 1', () => {
+    const result = executeMutation(db, writeLock, vaultPath, makeMutation({
+      file_path: 'fresh.md',
+    }));
+    const v = (db.prepare('SELECT version FROM nodes WHERE id = ?').get(result.node_id) as { version: number }).version;
+    expect(v).toBe(1);
+  });
+
+  it('bumps version on each non-noop apply', () => {
+    const created = executeMutation(db, writeLock, vaultPath, makeMutation({
+      file_path: 'x.md',
+    }));
+    executeMutation(db, writeLock, vaultPath, makeMutation({
+      node_id: created.node_id,
+      file_path: 'x.md',
+      body: 'changed',
+    }));
+    executeMutation(db, writeLock, vaultPath, makeMutation({
+      node_id: created.node_id,
+      file_path: 'x.md',
+      body: 'changed again',
+    }));
+    const v = (db.prepare('SELECT version FROM nodes WHERE id = ?').get(created.node_id) as { version: number }).version;
+    expect(v).toBe(3);
+  });
+
+  it('does not bump on no-op', () => {
+    const created = executeMutation(db, writeLock, vaultPath, makeMutation({
+      file_path: 'y.md',
+    }));
+    const result = executeMutation(db, writeLock, vaultPath, makeMutation({
+      node_id: created.node_id,
+      file_path: 'y.md',
+    }));
+    expect(result.file_written).toBe(false);
+    const v = (db.prepare('SELECT version FROM nodes WHERE id = ?').get(created.node_id) as { version: number }).version;
+    expect(v).toBe(1);
+  });
+});
+
+// ── expectedVersion check ────────────────────────────────────────────
+
+describe('executeMutation — expectedVersion check', () => {
+  it('throws StaleNodeError when expectedVersion does not match current', () => {
+    const created = executeMutation(db, writeLock, vaultPath, makeMutation({
+      file_path: 'z.md',
+    }));
+    expect(() => executeMutation(db, writeLock, vaultPath, makeMutation({
+      node_id: created.node_id,
+      file_path: 'z.md',
+      body: 'new',
+      expectedVersion: 99,
+    }))).toThrow(StaleNodeError);
+  });
+
+  it('proceeds when expectedVersion matches current', () => {
+    const created = executeMutation(db, writeLock, vaultPath, makeMutation({
+      file_path: 'w.md',
+    }));
+    expect(() => executeMutation(db, writeLock, vaultPath, makeMutation({
+      node_id: created.node_id,
+      file_path: 'w.md',
+      body: 'new',
+      expectedVersion: 1,
+    }))).not.toThrow();
+  });
+
+  it('proceeds when expectedVersion omitted', () => {
+    const created = executeMutation(db, writeLock, vaultPath, makeMutation({
+      file_path: 'v.md',
+    }));
+    expect(() => executeMutation(db, writeLock, vaultPath, makeMutation({
+      node_id: created.node_id,
+      file_path: 'v.md',
+      body: 'no version param',
+    }))).not.toThrow();
+  });
+
+  it('StaleNodeError exposes nodeId, expected, and current versions', () => {
+    const created = executeMutation(db, writeLock, vaultPath, makeMutation({
+      file_path: 'u.md',
+    }));
+    try {
+      executeMutation(db, writeLock, vaultPath, makeMutation({
+        node_id: created.node_id,
+        file_path: 'u.md',
+        body: 'x',
+        expectedVersion: 99,
+      }));
+      throw new Error('should have thrown');
+    } catch (err) {
+      expect(err).toBeInstanceOf(StaleNodeError);
+      const stale = err as StaleNodeError;
+      expect(stale.nodeId).toBe(created.node_id);
+      expect(stale.expectedVersion).toBe(99);
+      expect(stale.currentVersion).toBe(1);
+    }
   });
 });
 

@@ -26,6 +26,17 @@ import type { FileContext } from '../validation/resolve-default.js';
 import { resolveTarget } from '../resolver/resolve.js';
 import { refreshOnCreate, refreshOnRename } from '../resolver/refresh.js';
 
+export class StaleNodeError extends Error {
+  constructor(
+    public readonly nodeId: string,
+    public readonly expectedVersion: number,
+    public readonly currentVersion: number,
+  ) {
+    super(`Node ${nodeId} was modified (v${expectedVersion} -> v${currentVersion}) since you read it`);
+    this.name = 'StaleNodeError';
+  }
+}
+
 /**
  * Execute a mutation through the full write pipeline.
  *
@@ -291,6 +302,14 @@ export function executeMutation(
       } as PipelineResult & { _noop: boolean };
     }
 
+    if (mutation.expectedVersion !== undefined && mutation.node_id !== null) {
+      const row = db.prepare('SELECT version FROM nodes WHERE id = ?')
+        .get(mutation.node_id) as { version: number } | undefined;
+      if (row !== undefined && row.version !== mutation.expectedVersion) {
+        throw new StaleNodeError(mutation.node_id, mutation.expectedVersion, row.version);
+      }
+    }
+
     // ── Stage 6: Write (under write lock) ───────────────────────────
     return writeLock.withLockSync(absPath, () => {
       // db_only: update DB only, skip file write (watcher path).
@@ -343,15 +362,16 @@ export function executeMutation(
 
       // Upsert nodes row (created_at set on INSERT only, preserved on UPDATE)
       db.prepare(`
-        INSERT INTO nodes (id, file_path, title, body, content_hash, file_mtime, indexed_at, created_at)
-        VALUES (@id, @file_path, @title, @body, @content_hash, @file_mtime, @indexed_at, @created_at)
+        INSERT INTO nodes (id, file_path, title, body, content_hash, file_mtime, indexed_at, created_at, version)
+        VALUES (@id, @file_path, @title, @body, @content_hash, @file_mtime, @indexed_at, @created_at, 1)
         ON CONFLICT(id) DO UPDATE SET
           file_path = @file_path,
           title = @title,
           body = @body,
           content_hash = @content_hash,
           file_mtime = @file_mtime,
-          indexed_at = @indexed_at
+          indexed_at = @indexed_at,
+          version = version + 1
       `).run({
         id: nodeId,
         file_path: mutation.file_path,

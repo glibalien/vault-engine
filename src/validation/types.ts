@@ -1,5 +1,7 @@
 // src/validation/types.ts
 
+import type { UiHints } from '../global-fields/ui-hints.js';
+
 export interface OverridesAllowed {
   required: boolean;
   default_value: boolean;
@@ -16,6 +18,7 @@ export interface GlobalFieldDefinition {
   required: boolean;
   overrides_allowed: OverridesAllowed;
   list_item_type: FieldType | null;
+  ui_hints: UiHints | null;
 }
 
 export type Override<T> = { kind: 'inherit' } | { kind: 'override'; value: T };

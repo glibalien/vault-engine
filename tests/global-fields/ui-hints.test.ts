@@ -3,7 +3,7 @@ import Database from 'better-sqlite3';
 import { createSchema } from '../../src/db/schema.js';
 import { addUiHints } from '../../src/db/migrate.js';
 import { validateUiHints, normalizeUiHints, UI_WIDGETS } from '../../src/global-fields/ui-hints.js';
-import { createGlobalField, getGlobalField, updateGlobalField } from '../../src/global-fields/crud.js';
+import { createGlobalField, getGlobalField, updateGlobalField, renameGlobalField } from '../../src/global-fields/crud.js';
 
 describe('addUiHints migration', () => {
   it('adds ui_hints column to global_fields', () => {
@@ -183,5 +183,23 @@ describe('updateGlobalField ui semantics', () => {
     expect(() => updateGlobalField(db, 'f', {
       ui: { widget: 'rainbow' } as unknown as Record<string, unknown>,
     })).toThrow(/widget/);
+  });
+});
+
+describe('renameGlobalField preserves ui hints', () => {
+  it('carries ui_hints from old name to new name', () => {
+    const db = setupDb();
+    createGlobalField(db, { name: 'old', field_type: 'string', ui: { label: 'L', order: 5 } });
+    renameGlobalField(db, 'old', 'newname');
+    expect(getGlobalField(db, 'old')).toBeNull();
+    const renamed = getGlobalField(db, 'newname');
+    expect(renamed?.ui_hints).toEqual({ label: 'L', order: 5 });
+  });
+
+  it('null ui_hints stays null after rename', () => {
+    const db = setupDb();
+    createGlobalField(db, { name: 'old', field_type: 'string' });
+    renameGlobalField(db, 'old', 'newname');
+    expect(getGlobalField(db, 'newname')?.ui_hints).toBeNull();
   });
 });

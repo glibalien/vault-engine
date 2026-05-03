@@ -454,8 +454,8 @@ export function renameGlobalField(
   const renameTx = db.transaction(() => {
     // 1. Insert new global_fields row first (so FK references can point to it)
     db.prepare(`
-      INSERT INTO global_fields (name, field_type, enum_values, reference_target, description, default_value, required, overrides_allowed_required, overrides_allowed_default_value, overrides_allowed_enum_values, list_item_type)
-      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+      INSERT INTO global_fields (name, field_type, enum_values, reference_target, description, default_value, required, overrides_allowed_required, overrides_allowed_default_value, overrides_allowed_enum_values, list_item_type, ui_hints)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
     `).run(
       newName,
       current.field_type,
@@ -468,6 +468,7 @@ export function renameGlobalField(
       current.overrides_allowed.default_value ? 1 : 0,
       current.overrides_allowed.enum_values ? 1 : 0,
       current.list_item_type,
+      current.ui_hints !== null ? JSON.stringify(current.ui_hints) : null,
     );
 
     // 2. Update schema_field_claims to point to new name

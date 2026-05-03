@@ -13,7 +13,8 @@ export type ErrorCode =
   | 'CONFLICT'
   | 'BATCH_FAILED'
   | 'OPERATION_NOT_FOUND'
-  | 'CONFIRMATION_REQUIRED';
+  | 'CONFIRMATION_REQUIRED'
+  | 'STALE_NODE';
 
 export type IssueCode =
   | ValidationIssueCode

@@ -69,6 +69,19 @@ if (excludeDirs.length > 0) {
   console.log(`Excluding directories: ${excludeDirs.join(', ')}`);
 }
 
+function runOneShotNormalize(dryRun: boolean): never {
+  const writeLock = new WriteLockManager();
+  const syncLogger = new SyncLogger(db);
+  const stats = runNormalizerSweep(vaultPath!, db, writeLock, syncLogger, { dryRun });
+  db.close();
+  process.exit(stats.errored > 0 ? 1 : 0);
+}
+
+// Dry-run normalize is read-only against the DB and writes no files, so we can run
+// it before fullIndex / startupSchemaRender. That keeps it cheap and safe to invoke
+// while the live service holds the same DB open in WAL mode.
+if (args.normalize && args.dryRun) runOneShotNormalize(true);
+
 // --- Extraction + Embedder (must init before fullIndex for delete cleanup) ---
 const { registry: extractorRegistry, pdfFallback } = buildExtractors(
   process.env as Record<string, string | undefined>,
@@ -119,16 +132,8 @@ if (storedResolvedVersion < CURRENT_RESOLVED_TARGETS_VERSION) {
 
 startupSchemaRender(db, vaultPath);
 
-// --- One-shot normalize mode ---
-if (args.normalize) {
-  const writeLock = new WriteLockManager();
-  const syncLogger = new SyncLogger(db);
-  const stats = runNormalizerSweep(vaultPath, db, writeLock, syncLogger, {
-    dryRun: args.dryRun,
-  });
-  db.close();
-  process.exit(stats.errored > 0 ? 1 : 0);
-}
+// --- One-shot normalize mode (live writes; dry-run already exited above) ---
+if (args.normalize) runOneShotNormalize(false);
 
 // --- Embedder post-init: version check + initial enqueue + background ---
 if (embeddingIndexer) {

@@ -257,7 +257,7 @@ This section is the deliverable. No code change beyond the audit pass below.
 
 The contract a bundle author MUST follow when calling tools that write. "MUST" means honoring it is load-bearing for the safety story; "SHOULD" means best practice but not a correctness requirement.
 
-1. **Tools that default `dry_run: true` MUST be called dry-run-first.** Surface the preview to the user. Then call again with `dry_run: false` and `confirm: true` (where applicable — e.g., `update-schema`'s orphan gate, `update-global-field`'s discard gate). No silent flip from preview to commit. Covers: `update-node` query mode, `batch-mutate`, `update-schema`, `update-global-field` type-change.
+1. **High-blast-radius write tools MUST be called dry-run-first.** Surface the preview to the user. Then call again with `dry_run: false` and `confirm: true` (where applicable — e.g., `update-schema`'s orphan gate, `update-global-field`'s discard gate). No silent flip from preview to commit. Covers: `update-node` query mode (server-side default `true`), `batch-mutate`, `update-schema`, `update-global-field` type-change. Note: `batch-mutate` and `update-schema` default `dry_run: false` in code (audit finding — see table); bundles MUST pass `dry_run: true` explicitly on first call.
 
 2. **Tools that default `dry_run: false` MAY be called directly when the click *is* the confirmation.** Single-node `update-node`, `add-type-to-node`, `remove-type-from-node`, `rename-node`, `create-node`. The bundle's UI affordance — clicking a status pill, pressing enter on a renamed title, hitting "Save" on a form — is the user's intent. Trust the bundle's UX + undo as the safety net.
 
@@ -284,8 +284,8 @@ To make the contract accurate, this spec enumerates the current `dry_run` defaul
 | `add-type-to-node`           | `false`           | none                                         |
 | `remove-type-from-node`      | `false`           | none                                         |
 | `rename-node`                | `false`           | none                                         |
-| `batch-mutate`               | `true`            | none beyond preview                          |
-| `update-schema`              | `true`            | `CONFIRMATION_REQUIRED` on orphan field values |
+| `batch-mutate`               | `false`           | none beyond preview                          |
+| `update-schema`              | `false`           | `CONFIRMATION_REQUIRED` on orphan field values |
 | `update-global-field`        | `false`           | `CONFIRMATION_REQUIRED` on type change with uncoercible values; `discard_uncoercible` opt-in |
 | `delete-schema`              | `false`           | none                                         |
 | `delete-global-field`        | `false`           | none                                         |

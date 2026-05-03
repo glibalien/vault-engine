@@ -182,6 +182,30 @@ These were called out during brainstorming as "decide in the implementation plan
 - Exact pinned versions of `@modelcontextprotocol/ext-apps` and any peer-dep alignment with the existing `@modelcontextprotocol/sdk ^1.29.0`.
 - Whether the copy step also needs to run during `npm run dev` (`tsx watch` doesn't compile to disk, so `register.ts` reads HTML directly from `src/`; should be a no-op, but verify).
 
+## Pilot results — 2026-05-02
+
+All five capability-checklist items passed on the production systemd deploy:
+
+1. **Claude renders the UI.** Iframe shows the filter strip + warnings + results table inline. ✅
+2. **Refilter without re-prompting.** Expanding the filter form, changing `types`, and clicking Apply updates the table without a new model turn. ✅
+3. **Drill-down.** Row expansion fetches body via `get-node` over the bridge; collapse/re-expand hits the body cache instantly. ✅
+4. **Graceful degradation in Codex CLI.** Same `query-nodes` call returns a byte-identical JSON envelope to the pre-pilot baseline. ✅
+5. **Production tunnel end-to-end.** Verified through the Cloudflare tunnel, not just localhost. ✅
+
+### Operational note for future MCP App tools
+
+After adding `_meta.ui.resourceUri` to an existing MCP tool, **Claude clients cache the previous `tools/list` description** and will not pick up the new metadata until the connector is removed and re-added. First attempts on the live deploy will show a "preparing UI" banner that resolves to "unable to reach <server>" because Claude never even fetches the new metadata — the resource fetch never reaches the origin. A single connector refresh fixes it.
+
+This is worth surfacing in the next spec that adds UI to another tool (`vault-stats`, `list-undo-history`, `describe-schema` are the obvious candidates from the bidirectional read-only scope locked above).
+
+### Two plan-defects discovered during execution
+
+Documented here for the record; both fixes are in commit history:
+
+1. The plan's iframe entry script referenced `app.onerror` (no such property on `App`) and imported `McpUiHostContext` as a named type from `@modelcontextprotocol/ext-apps` — the package re-exports it under a colliding name (`ProtocolWithEvents`), causing TS2460. Worked around in commit `90da815` via a derived param type.
+2. The plan's Task 10 listed three test files needing a `registerTool` mock branch; the full suite revealed three more (`tests/integration/cross-node-query.test.ts`, `tests/phase2/conformance.test.ts`, `tests/phase2/tools.test.ts`). Extended in commit `74ffb40`.
+3. The plan's Task 13 Step 4 used a curl smoke against `POST /mcp` that cannot succeed against vault-engine (OAuth + session-init handshake required). Replaced with a note pointing at the unit-test coverage and Task 14 as the real verification.
+
 ## Reversibility
 
 If after the trial the UI is unused or unwanted, removal is one commit:

@@ -12,9 +12,10 @@ import {
   applyDocumentTheme,
   applyHostFonts,
   applyHostStyleVariables,
-  type McpUiHostContext,
 } from "@modelcontextprotocol/ext-apps";
 import type { CallToolResult } from "@modelcontextprotocol/sdk/types.js";
+
+type HostContext = Parameters<NonNullable<App["onhostcontextchanged"]>>[0];
 
 interface Envelope {
   ok: boolean;
@@ -273,9 +274,7 @@ function render(): void {
 
 const app = new App({ name: "vault-engine query-nodes UI", version: "0.1.0" });
 
-app.onerror = (err) => console.error("[query-nodes-ui] App error:", err);
-
-app.onhostcontextchanged = (ctx: McpUiHostContext) => {
+app.onhostcontextchanged = (ctx: HostContext) => {
   if (ctx.theme) applyDocumentTheme(ctx.theme);
   if (ctx.styles?.variables) applyHostStyleVariables(ctx.styles.variables);
   if (ctx.styles?.css?.fonts) applyHostFonts(ctx.styles.css.fonts);

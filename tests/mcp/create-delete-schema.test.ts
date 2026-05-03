@@ -4,7 +4,7 @@ import Database from 'better-sqlite3';
 import { existsSync } from 'node:fs';
 import { join } from 'node:path';
 import { createSchema } from '../../src/db/schema.js';
-import { addUndoTables, addSchemaUndoSnapshots } from '../../src/db/migrate.js';
+import { addUndoTables, addSchemaUndoSnapshots, addUiHints } from '../../src/db/migrate.js';
 import { createGlobalField } from '../../src/global-fields/crud.js';
 import { createSchemaDefinition, getSchemaDefinition } from '../../src/schema/crud.js';
 import { createTempVault } from '../helpers/vault.js';
@@ -46,6 +46,7 @@ beforeEach(() => {
   createSchema(db);
   addUndoTables(db);
   addSchemaUndoSnapshots(db);
+  addUiHints(db);
   writeLock = new WriteLockManager();
 });
 afterEach(() => { db.close(); cleanup(); });

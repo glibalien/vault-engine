@@ -3,6 +3,7 @@ import { join } from 'node:path';
 import { existsSync, readFileSync, writeFileSync, mkdirSync } from 'node:fs';
 import Database from 'better-sqlite3';
 import { createSchema } from '../../src/db/schema.js';
+import { addUiHints } from '../../src/db/migrate.js';
 import { executeMutation, StaleNodeError } from '../../src/pipeline/execute.js';
 import { PipelineError } from '../../src/pipeline/types.js';
 import type { ProposedMutation } from '../../src/pipeline/types.js';
@@ -23,6 +24,7 @@ beforeEach(() => {
   db.pragma('journal_mode = WAL');
   db.pragma('foreign_keys = ON');
   createSchema(db);
+  addUiHints(db);
   writeLock = new WriteLockManager();
 });
 

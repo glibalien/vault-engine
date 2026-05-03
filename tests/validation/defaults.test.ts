@@ -9,6 +9,7 @@
 import { describe, it, expect, beforeEach, afterEach } from 'vitest';
 import Database from 'better-sqlite3';
 import { createSchema } from '../../src/db/schema.js';
+import { addUiHints } from '../../src/db/migrate.js';
 import { createGlobalField } from '../../src/global-fields/crud.js';
 import { createSchemaDefinition } from '../../src/schema/crud.js';
 import { loadSchemaContext } from '../../src/pipeline/schema-context.js';
@@ -27,6 +28,7 @@ beforeEach(() => {
   db.pragma('journal_mode = WAL');
   db.pragma('foreign_keys = ON');
   createSchema(db);
+  addUiHints(db);
 });
 
 afterEach(() => {

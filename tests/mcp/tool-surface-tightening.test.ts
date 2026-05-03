@@ -4,7 +4,7 @@ import { existsSync } from 'node:fs';
 import type { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import Database from 'better-sqlite3';
 import { createSchema } from '../../src/db/schema.js';
-import { addUndoTables } from '../../src/db/migrate.js';
+import { addUndoTables, addUiHints } from '../../src/db/migrate.js';
 import { executeMutation } from '../../src/pipeline/execute.js';
 import { WriteLockManager } from '../../src/sync/write-lock.js';
 import { createGlobalField } from '../../src/global-fields/crud.js';
@@ -131,6 +131,7 @@ describe('rename-node surface tightening', () => {
     db.pragma('foreign_keys = ON');
     createSchema(db);
     addUndoTables(db);
+    addUiHints(db);
     writeLock = new WriteLockManager();
     handler = captureHandler();
   });
@@ -252,6 +253,7 @@ describe('create-node surface tightening', () => {
     db.pragma('foreign_keys = ON');
     createSchema(db);
     addUndoTables(db);
+    addUiHints(db);
     writeLock = new WriteLockManager();
     handler = captureHandler();
   });
@@ -410,6 +412,7 @@ describe('update-node set_title renames file', () => {
     db.pragma('foreign_keys = ON');
     createSchema(db);
     addUndoTables(db);
+    addUiHints(db);
     writeLock = new WriteLockManager();
     handler = captureHandler();
   });
@@ -560,6 +563,7 @@ describe('update-node query mode set_directory', () => {
     db.pragma('foreign_keys = ON');
     createSchema(db);
     addUndoTables(db);
+    addUiHints(db);
     writeLock = new WriteLockManager();
     handler = captureHandler();
   });

@@ -2,7 +2,7 @@ import { describe, it, expect, beforeEach, afterEach } from 'vitest';
 import type { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import Database from 'better-sqlite3';
 import { createSchema } from '../../src/db/schema.js';
-import { addUndoTables, addNodeTypesSortOrder, addSchemaUndoSnapshots } from '../../src/db/migrate.js';
+import { addUndoTables, addNodeTypesSortOrder, addSchemaUndoSnapshots, addUiHints } from '../../src/db/migrate.js';
 import { createGlobalField } from '../../src/global-fields/crud.js';
 import { createTempVault } from '../helpers/vault.js';
 import { registerCreateSchema } from '../../src/mcp/tools/create-schema.js';
@@ -42,6 +42,7 @@ describe('Phase B end-to-end smoke: schema ops + confirm gate + undo', () => {
     addUndoTables(db);
     addNodeTypesSortOrder(db);
     addSchemaUndoSnapshots(db);
+    addUiHints(db);
     writeLock = new WriteLockManager();
     syncLogger = new SyncLogger(db);
   });

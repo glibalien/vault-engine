@@ -4,7 +4,7 @@ import { join } from 'node:path';
 import type { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import Database from 'better-sqlite3';
 import { createSchema } from '../../src/db/schema.js';
-import { addUndoTables } from '../../src/db/migrate.js';
+import { addUndoTables, addUiHints } from '../../src/db/migrate.js';
 import { executeMutation } from '../../src/pipeline/execute.js';
 import { WriteLockManager } from '../../src/sync/write-lock.js';
 import { createGlobalField } from '../../src/global-fields/crud.js';
@@ -70,6 +70,7 @@ beforeEach(() => {
   db.pragma('foreign_keys = ON');
   createSchema(db);
   addUndoTables(db);
+  addUiHints(db);
   writeLock = new WriteLockManager();
 
   // Register schemas for all types used in tests

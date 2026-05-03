@@ -3,6 +3,7 @@ import { join } from 'node:path';
 import { writeFileSync } from 'node:fs';
 import Database from 'better-sqlite3';
 import { createSchema } from '../../src/db/schema.js';
+import { addUiHints } from '../../src/db/migrate.js';
 import { executeMutation } from '../../src/pipeline/execute.js';
 import { WriteLockManager } from '../../src/sync/write-lock.js';
 import { createGlobalField } from '../../src/global-fields/crud.js';
@@ -46,12 +47,14 @@ beforeEach(() => {
   dbTool.pragma('journal_mode = WAL');
   dbTool.pragma('foreign_keys = ON');
   createSchema(dbTool);
+  addUiHints(dbTool);
   setupSchema(dbTool);
 
   dbWatcher = new Database(':memory:');
   dbWatcher.pragma('journal_mode = WAL');
   dbWatcher.pragma('foreign_keys = ON');
   createSchema(dbWatcher);
+  addUiHints(dbWatcher);
   setupSchema(dbWatcher);
 });
 

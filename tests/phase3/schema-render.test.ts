@@ -4,6 +4,7 @@ import { existsSync, readFileSync, writeFileSync, mkdirSync, unlinkSync } from '
 import { parse as parseYaml } from 'yaml';
 import Database from 'better-sqlite3';
 import { createSchema } from '../../src/db/schema.js';
+import { addUiHints } from '../../src/db/migrate.js';
 import { createGlobalField } from '../../src/global-fields/crud.js';
 import { createSchemaDefinition, updateSchemaDefinition } from '../../src/schema/crud.js';
 import { renderSchemaFile, renderFieldsFile, deleteSchemaFile, startupSchemaRender } from '../../src/schema/render.js';
@@ -19,6 +20,7 @@ beforeEach(() => {
   db.pragma('journal_mode = WAL');
   db.pragma('foreign_keys = ON');
   createSchema(db);
+  addUiHints(db);
 });
 
 afterEach(() => {

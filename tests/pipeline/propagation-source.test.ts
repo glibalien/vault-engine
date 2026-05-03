@@ -1,6 +1,7 @@
 import { describe, it, expect, beforeEach, afterEach } from 'vitest';
 import Database from 'better-sqlite3';
 import { createSchema } from '../../src/db/schema.js';
+import { addUiHints } from '../../src/db/migrate.js';
 import { executeMutation } from '../../src/pipeline/execute.js';
 import { PipelineError } from '../../src/pipeline/types.js';
 import type { ProposedMutation } from '../../src/pipeline/types.js';
@@ -20,6 +21,7 @@ beforeEach(() => {
   db.pragma('journal_mode = WAL');
   db.pragma('foreign_keys = ON');
   createSchema(db);
+  addUiHints(db);
   writeLock = new WriteLockManager();
 });
 

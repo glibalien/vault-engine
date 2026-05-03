@@ -5,6 +5,7 @@ import { tmpdir } from 'node:os';
 import Database from 'better-sqlite3';
 import type { FSWatcher } from 'chokidar';
 import { createSchema } from '../../src/db/schema.js';
+import { addUiHints } from '../../src/db/migrate.js';
 import { fullIndex } from '../../src/indexer/indexer.js';
 import { IndexMutex } from '../../src/sync/mutex.js';
 import { WriteLockManager } from '../../src/sync/write-lock.js';
@@ -36,6 +37,7 @@ describe('watcher — field-defaulted emission', () => {
     db.pragma('journal_mode = WAL');
     db.pragma('foreign_keys = ON');
     createSchema(db);
+    addUiHints(db);
 
     // Set up a schema with a required-with-default field
     createGlobalField(db, {

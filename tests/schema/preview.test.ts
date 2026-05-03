@@ -3,6 +3,7 @@ import Database from 'better-sqlite3';
 import { statSync } from 'node:fs';
 import { join } from 'node:path';
 import { createSchema } from '../../src/db/schema.js';
+import { addUiHints } from '../../src/db/migrate.js';
 import { createGlobalField } from '../../src/global-fields/crud.js';
 import { createSchemaDefinition } from '../../src/schema/crud.js';
 import { executeMutation } from '../../src/pipeline/execute.js';
@@ -21,6 +22,7 @@ beforeEach(() => {
   db.pragma('journal_mode = WAL');
   db.pragma('foreign_keys = ON');
   createSchema(db);
+  addUiHints(db);
   writeLock = new WriteLockManager();
 });
 

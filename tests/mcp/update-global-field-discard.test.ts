@@ -2,7 +2,7 @@ import { describe, it, expect, beforeEach, afterEach } from 'vitest';
 import type { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import Database from 'better-sqlite3';
 import { createSchema } from '../../src/db/schema.js';
-import { addGlobalFieldUndoSnapshots, addUndoTables } from '../../src/db/migrate.js';
+import { addGlobalFieldUndoSnapshots, addUndoTables, addUiHints } from '../../src/db/migrate.js';
 import { createGlobalField } from '../../src/global-fields/crud.js';
 import { registerUpdateGlobalField } from '../../src/mcp/tools/update-global-field.js';
 
@@ -37,6 +37,7 @@ beforeEach(() => {
   createSchema(db);
   addUndoTables(db);
   addGlobalFieldUndoSnapshots(db);
+  addUiHints(db);
 
   createGlobalField(db, { name: 'count', field_type: 'string' });
 

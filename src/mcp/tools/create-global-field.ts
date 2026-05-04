@@ -2,7 +2,7 @@ import type { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import type Database from 'better-sqlite3';
 import { z } from 'zod';
 import { ok, fail } from './errors.js';
-import { createGlobalField } from '../../global-fields/crud.js';
+import { createGlobalField, definitionToWire } from '../../global-fields/crud.js';
 import { renderFieldsFile } from '../../schema/render.js';
 import { createOperation, finalizeOperation } from '../../undo/operation.js';
 import { captureGlobalFieldSnapshot } from '../../undo/global-field-snapshot.js';
@@ -48,7 +48,7 @@ export function registerCreateGlobalField(server: McpServer, db: Database.Databa
         tx();
 
         if (ctx?.vaultPath) renderFieldsFile(db, ctx.vaultPath);
-        return ok({ ...result!, operation_id });
+        return ok({ ...definitionToWire(result!), operation_id });
       } catch (err) {
         return fail('INVALID_PARAMS', err instanceof Error ? err.message : String(err));
       } finally {

@@ -351,3 +351,42 @@ describe('describe-schema returns ui per claim', () => {
     expect(note.ui).toBeNull();
   });
 });
+
+describe('MCP write tools surface ui (not ui_hints) in responses', () => {
+  it('create-global-field returns data.ui, not data.ui_hints', async () => {
+    const db = setupDbWithUndo();
+    const server = new McpServer({ name: 'test', version: '0' });
+    registerCreateGlobalField(server, db);
+    const env = envelope(await callMcpTool(server, 'create-global-field', {
+      name: 'status',
+      field_type: 'enum',
+      enum_values: ['open', 'done'],
+      ui: { widget: 'enum', label: 'Status' },
+    }));
+    expect(env.ok).toBe(true);
+    if (env.ok) {
+      expect('ui' in env.data).toBe(true);
+      expect('ui_hints' in env.data).toBe(false);
+      expect((env.data as { ui: unknown }).ui).toEqual({ widget: 'enum', label: 'Status' });
+    }
+  });
+
+  it('update-global-field returns data.field.ui (not field.ui_hints) on non-type-change', async () => {
+    const db = setupDbWithUndo();
+    createGlobalField(db, { name: 'f', field_type: 'string', ui: { label: 'A' } });
+    const server = new McpServer({ name: 'test', version: '0' });
+    registerUpdateGlobalField(server, db);
+    const env = envelope(await callMcpTool(server, 'update-global-field', {
+      name: 'f',
+      ui: { label: 'B', order: 7 },
+    }));
+    expect(env.ok).toBe(true);
+    if (env.ok) {
+      const data = env.data as { field?: Record<string, unknown> };
+      expect(data.field).toBeDefined();
+      expect('ui' in data.field!).toBe(true);
+      expect('ui_hints' in data.field!).toBe(false);
+      expect(data.field!.ui).toEqual({ label: 'B', order: 7 });
+    }
+  });
+});

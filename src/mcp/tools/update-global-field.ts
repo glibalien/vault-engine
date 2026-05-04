@@ -2,7 +2,7 @@ import type { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import type Database from 'better-sqlite3';
 import { z } from 'zod';
 import { ok, fail } from './errors.js';
-import { getGlobalField, updateGlobalField, TypeChangeRequiresDiscardError } from '../../global-fields/crud.js';
+import { getGlobalField, updateGlobalField, TypeChangeRequiresDiscardError, definitionToWire } from '../../global-fields/crud.js';
 import { renderFieldsFile, renderSchemaFile } from '../../schema/render.js';
 import { rerenderNodesWithField } from '../../schema/propagate.js';
 import type { WriteLockManager } from '../../sync/write-lock.js';
@@ -60,6 +60,10 @@ export function registerUpdateGlobalField(server: McpServer, db: Database.Databa
         });
         tx();
 
+        const wireResult = result!.field
+          ? { ...result!, field: definitionToWire(result!.field) }
+          : result!;
+
         if (ctx?.vaultPath) {
           renderFieldsFile(db, ctx.vaultPath);
           const claimingSchemas = db.prepare('SELECT DISTINCT schema_name FROM schema_field_claims WHERE field = ?')
@@ -72,11 +76,11 @@ export function registerUpdateGlobalField(server: McpServer, db: Database.Databa
             // their node_fields rows for this field were deleted
             const uncoercibleIds = result!.uncoercible?.map(u => u.node_id);
             const nodes_rerendered = rerenderNodesWithField(db, ctx.writeLock, ctx.vaultPath, name, uncoercibleIds, ctx.syncLogger);
-            return ok({ ...result!, operation_id, nodes_rerendered });
+            return ok({ ...wireResult, operation_id, nodes_rerendered });
           }
         }
 
-        return ok({ ...result!, operation_id });
+        return ok({ ...wireResult, operation_id });
       } catch (err) {
         if (err instanceof TypeChangeRequiresDiscardError) {
           return fail(

@@ -493,6 +493,23 @@ export function renameGlobalField(
   return renameTx();
 }
 
+// ── definitionToWire ─────────────────────────────────────────────────
+
+/**
+ * Convert a `GlobalFieldDefinition` to its wire shape for MCP responses,
+ * renaming the internal `ui_hints` column key to the public `ui` API name.
+ *
+ * Read tools (`describe-global-field`, `describe-schema`) shape `ui` manually;
+ * write tools that spread the definition into responses should use this helper
+ * to keep the API surface coherent.
+ *
+ * Spec: docs/superpowers/specs/2026-05-03-mcp-app-foundations-2-3-design.md §2
+ */
+export function definitionToWire(def: GlobalFieldDefinition): Omit<GlobalFieldDefinition, 'ui_hints'> & { ui: UiHints | null } {
+  const { ui_hints, ...rest } = def;
+  return { ...rest, ui: ui_hints };
+}
+
 // ── deleteGlobalField ────────────────────────────────────────────────
 
 export function deleteGlobalField(

@@ -17,11 +17,49 @@ export interface AuthConfig {
   issuerUrl: URL;
 }
 
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === 'object' && value !== null && !Array.isArray(value);
+}
+
+function getMcpRequestLabel(body: unknown): string | undefined {
+  if (!isRecord(body)) return undefined;
+
+  const method = body.method;
+  if (typeof method !== 'string') return undefined;
+
+  if (method !== 'tools/call') return `MCP ${method}`;
+
+  const params = body.params;
+  if (!isRecord(params) || typeof params.name !== 'string') {
+    return 'MCP tools/call';
+  }
+
+  return `MCP tools/call:${params.name}`;
+}
+
+export function describeMcpRequestBody(body: unknown): string | undefined {
+  if (Array.isArray(body)) {
+    const labels = body
+      .map(item => getMcpRequestLabel(item))
+      .filter((label): label is string => label !== undefined);
+
+    if (labels.length === 0) return undefined;
+
+    const visibleLabels = labels.slice(0, 5);
+    const suffix = labels.length > visibleLabels.length ? ` +${labels.length - visibleLabels.length}` : '';
+    return `MCP batch[${visibleLabels.join(', ')}${suffix}]`;
+  }
+
+  return getMcpRequestLabel(body);
+}
+
 function requestLogger(req: Request, res: Response, next: NextFunction): void {
   const start = Date.now();
   res.on('finish', () => {
     const duration = Date.now() - start;
-    process.stderr.write(`[vault-engine] ${req.method} ${req.path} ${res.statusCode} ${duration}ms\n`);
+    const mcpRequest = req.path === '/mcp' ? describeMcpRequestBody(req.body) : undefined;
+    const detail = mcpRequest ? ` ${mcpRequest}` : '';
+    process.stderr.write(`[vault-engine] ${req.method} ${req.path}${detail} ${res.statusCode} ${duration}ms\n`);
   });
   next();
 }

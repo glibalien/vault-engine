@@ -74,5 +74,8 @@ export function renderColumnsPicker(schema: Schema, state: UiState): HTMLElement
     const checkbox = el("input", attrs);
     return el("label", { className: "cols-picker-row" }, checkbox, " ", f.label ?? f.name);
   });
-  return el("div", { className: "cols-picker" }, ...items);
+  // No wrapper class here — the host element (#cols-picker-host) already
+  // carries the .cols-picker class and toggles .open for show/hide. Nesting
+  // another .cols-picker would inherit display:none and hide the items.
+  return el("div", { className: "cols-picker-inner" }, ...items);
 }

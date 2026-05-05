@@ -1,79 +1,53 @@
 <!DOCTYPE html>
 <!-- vault-engine query-nodes ui -->
 <html lang="en">
-<head>
-  <meta charset="UTF-8" />
-  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-  <meta name="color-scheme" content="light dark" />
-  <title>vault-engine — query-nodes</title>
-  <style>
-    :root {
-      --bg: #1a1a1a;
-      --bg-elev: #2a2a2a;
-      --bg-elev-2: #3a3a3a;
-      --bg-active: #4a5a7a;
-      --fg: #e8e8e8;
-      --fg-dim: #888;
-      --fg-faint: #666;
-      --accent: #9cf;
-      --warn: #fc6;
-      --danger: #f99;
-      --radius: 4px;
-      --gap: 6px;
-      color-scheme: light dark;
-    }
-    @media (prefers-color-scheme: light) {
-      :root {
-        --bg: #fff;
-        --bg-elev: #f4f4f5;
-        --bg-elev-2: #e5e7eb;
-        --bg-active: #dbeafe;
-        --fg: #111;
-        --fg-dim: #555;
-        --fg-faint: #888;
-        --accent: #2563eb;
-      }
-    }
-    body { margin: 0; font: 13px/1.4 system-ui, sans-serif; background: var(--bg); color: var(--fg); }
-    .app { padding: var(--gap); display: flex; flex-direction: column; gap: var(--gap); }
-    .filter-strip { background: var(--bg-elev); padding: 6px 10px; border-radius: var(--radius); font-family: monospace; cursor: pointer; }
-    .filter-strip.expanded { cursor: default; }
-    .filter-strip .summary { color: var(--accent); }
-    .filter-form { display: none; padding: 8px 0 4px; flex-direction: column; gap: 6px; }
-    .filter-strip.expanded .filter-form { display: flex; }
-    .filter-form label { display: flex; gap: 6px; align-items: center; font-size: 12px; }
-    .filter-form input, .filter-form select { background: var(--bg-elev-2); color: var(--fg); border: 1px solid var(--fg-faint); border-radius: var(--radius); padding: 3px 6px; font: inherit; }
-    .filter-form .actions { display: flex; gap: 6px; padding-top: 4px; }
-    .filter-form button { background: var(--accent); color: var(--bg); border: 0; border-radius: var(--radius); padding: 4px 10px; cursor: pointer; font: inherit; }
-    .filter-form button.secondary { background: var(--bg-elev-2); color: var(--fg); }
-    .warnings { background: var(--bg-elev); padding: 4px 10px; border-radius: var(--radius); border-left: 3px solid var(--warn); font-size: 12px; }
-    .results { background: var(--bg-elev); padding: 6px; border-radius: var(--radius); }
-    .results-meta { color: var(--fg-dim); font-size: 11px; margin-bottom: 4px; }
-    .row { background: var(--bg-elev-2); padding: 4px 8px; margin-bottom: 2px; border-radius: 2px; cursor: pointer; user-select: none; }
-    .row.expanded { background: var(--bg-active); border-left: 3px solid var(--accent); }
-    .row .caret { display: inline-block; width: 12px; color: var(--fg-dim); }
-    .row .meta { color: var(--fg-dim); font-size: 11px; margin-left: 6px; }
-    .row .sub { color: var(--fg-dim); font-size: 11px; margin-left: 18px; margin-top: 2px; font-family: monospace; }
-    .body { background: var(--bg); padding: 8px 12px; margin-top: 2px; border-radius: 2px; }
-    .body pre { margin: 0; white-space: pre-wrap; font: 12px/1.4 monospace; }
-    .body .actions { margin-top: 6px; font-size: 11px; color: var(--fg-faint); }
-    .body .actions code { user-select: all; cursor: text; background: var(--bg-elev-2); padding: 1px 4px; border-radius: 2px; }
-    .error { color: var(--danger); font-size: 11px; margin-top: 4px; padding: 4px 8px; background: rgba(255,153,153,0.1); border-radius: 2px; }
-    .empty { color: var(--fg-faint); font-size: 12px; text-align: center; padding: 12px; }
-  </style>
-</head>
-<body>
-  <div class="app">
-    <div class="filter-strip" id="filter-strip">
-      <div class="summary" id="filter-summary">Loading…</div>
-      <div class="filter-form" id="filter-form"></div>
-    </div>
+  <head>
+    <meta charset="UTF-8" />
+    <title>Vault Engine — Query Nodes</title>
+    <style>
+      :root { color-scheme: light dark; font-family: var(--mcp-font-family, system-ui, sans-serif); }
+      body { margin: 0; padding: 0; background: var(--mcp-color-background, white); color: var(--mcp-color-text, black); }
+
+      .header-bar { display: flex; justify-content: space-between; align-items: center; padding: 10px 14px; border-bottom: 1px solid #e0e0e0; background: #fafafa; }
+      .header-title strong { margin-right: 8px; }
+      .header-count { color: #666; font-size: 12px; }
+      .header-button { padding: 4px 10px; font-size: 12px; margin-left: 4px; cursor: pointer; }
+      .header-button-secondary { background: #eee; color: #333; }
+
+      .filter-strip { padding: 8px 14px; background: #f5f5f5; border-bottom: 1px solid #e0e0e0; font-size: 12px; display: flex; gap: 10px; align-items: center; flex-wrap: wrap; }
+      .filter-strip input, .filter-strip select { font-size: 12px; }
+
+      .chip-strip { padding: 8px 14px; display: flex; gap: 8px; flex-wrap: wrap; border-bottom: 1px solid #e0e0e0; background: white; }
+      .chip { padding: 4px 10px; border-radius: 14px; font-size: 12px; border: 1px solid #ccc; background: #f5f5f5; cursor: pointer; }
+      .chip-type-lock { background: #e3f2fd; border-color: #1976d2; color: #0d47a1; }
+      .chip-banner { padding: 6px 0; color: #333; }
+      .chip-banner-hint { color: #666; font-size: 12px; margin-left: 6px; }
+
+      .warnings { padding: 8px 14px; background: #fff7d6; border-bottom: 1px solid #d4a800; font-size: 12px; color: #5d4d00; }
+
+      .banner { padding: 10px 14px; background: #ffebee; border-bottom: 1px solid #c62828; color: #b71c1c; font-size: 13px; }
+
+      .results-table { width: 100%; border-collapse: collapse; font-size: 13px; }
+      .results-table thead { background: #fafafa; border-bottom: 2px solid #e0e0e0; }
+      .results-table th { text-align: left; padding: 8px 10px; font-size: 11px; text-transform: uppercase; color: #666; letter-spacing: 0.5px; font-weight: 500; }
+      .results-table td { padding: 8px 10px; border-bottom: 1px solid #eee; vertical-align: top; }
+      .td-empty { color: #999; font-style: italic; padding: 16px; text-align: center; }
+      .cell-empty { color: #ccc; }
+      .cell-tag-chip, .cell-link-chip { display: inline-block; padding: 1px 6px; background: #e3f2fd; color: #0d47a1; border-radius: 8px; font-size: 11px; margin-right: 4px; }
+
+      .cols-picker { padding: 12px 14px; background: white; border-bottom: 1px solid #e0e0e0; display: none; }
+      .cols-picker.open { display: block; }
+      .cols-picker-row { display: block; padding: 2px 0; font-size: 13px; }
+    </style>
+  </head>
+  <body>
+    <div id="banner-host"></div>
+    <div id="header-host"></div>
+    <div id="filter-strip-host"></div>
+    <div id="chip-strip-host"></div>
+    <div id="cols-picker-host" class="cols-picker"></div>
     <div id="warnings-host"></div>
-    <div class="results">
-      <div class="results-meta" id="results-meta"></div>
-      <div id="results-list"></div>
-    </div>
-  </div>
-  <script type="module" src="./app.ts"></script>
-</body>
+    <div id="table-host"></div>
+    <script type="module" src="/app.ts"></script>
+  </body>
 </html>

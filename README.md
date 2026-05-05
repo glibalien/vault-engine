@@ -4,17 +4,6 @@ Database-authoritative knowledge graph engine for markdown vaults, exposed via M
 
 ---
 
-## What makes it different
-
-- **Asymmetric sync.** The watcher reads files and updates the DB. The pipeline reads the DB and writes files. Nothing else writes files. This kills the merge-collision bugs that plague two-way sync.
-- **One mutation pipeline.** Tool calls, watcher events, schema propagation, and the periodic normalizer all flow through the same parse → validate → coerce → render → write transaction. No parallel code paths.
-- **Subprocess-isolated embedder.** The ONNX runtime (~1.5 GB resident) runs in a forked child, IPC for requests, self-exits after 5 min idle, transparent ~2–3 s respawn. `MAX_TOKENS=2048` is deliberately below Nomic's 8K window — ONNX's memory arena sizes to the largest tensor it's seen and never shrinks, so 8K embeds bloated RSS by ~6 GB. 2048 caps the arena at ~1.5 GB and tends to improve retrieval anyway (mean-pooled long vectors blur topical specificity).
-- **Reversible mutations.** Every tool write captures a pre-state snapshot via `UndoContext` — covers nodes, schemas, and global fields. `list-undo-history` + `undo-operations`. 24 h retention.
-- **Bulk mutate is `update-node` with a query.** Same predicate language as `query-nodes`, applied across the match set. Dry-run on by default; per-node failures are reported instead of aborting the run.
-- **Defaults aren't retroactive.** They populate at node creation, type addition, and newly-added schema claims — never via the normalizer. One intentional default-population path means data moves around without surprise backfills.
-
----
-
 ## Architecture
 
 The DB owns the truth; markdown is a projection. Every write is one transaction: load schema context → validate + coerce → resolve per-type overrides → render → hash-diff (no-op if unchanged) → atomic write + node upsert + FTS update + embedding enqueue.

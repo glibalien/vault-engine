@@ -1,222 +1,97 @@
 # Vault Engine
 
-A database-authoritative knowledge graph engine for markdown vaults, exposed to AI clients via the Model Context Protocol (MCP). SQLite is the source of truth; markdown files are a rendered view of that state, kept in sync by a bidirectional pipeline. Plain markdown in, structured queries out.
+Database-authoritative knowledge graph engine for markdown vaults, exposed via MCP. SQLite is the source of truth; markdown files are a rendered view of that state.
 
 ---
 
-## Technical Highlights
+## What makes it different
 
-- **Single mutation pipeline.** Every write — whether from an MCP tool call, a file watcher event, or the periodic normalizer — flows through one transactional pipeline: parse → validate → coerce → render → write. No parallel code paths, no divergence between tool and editor edits.
-- **Database-authoritative sync.** SQLite (WAL, foreign keys on) owns the truth. The file watcher updates the DB and stops; it never writes files. Files catch up on the next tool write or normalizer sweep. This asymmetry eliminates the merge collisions that plague two-way sync.
-- **Hybrid semantic + full-text search.** SQLite FTS5 over titles and bodies, fused via reciprocal rank fusion with 256-dimensional Nomic embeddings stored in `sqlite-vec`. Long documents are semantically chunked with overlap; each chunk is a separate vector row.
-- **Subprocess-isolated embedding model.** The ONNX runtime (~1.5 GB resident) runs in a forked child, serves requests over IPC, and self-exits after 5 minutes idle. Cold restart is ~2–3 s and transparent to callers.
-- **Rich schema system.** A global field pool with per-type override rules: schemas can override `required`, `default_value`, and `enum_values` on claimed fields, gated per-property on the global field. Multi-type conflict resolution is explicit (union for enums, cancellation for required/defaults).
-- **Reversible mutations.** Every tool-initiated write captures a pre-mutation snapshot. Operations are reviewable via `list-undo-history` and reversible via `undo-operations`, with 24 h retention and throw-safe finalization.
-- **Bulk mutation with dry-run.** `update-node` accepts a query predicate and applies `add_types`, `remove_types`, or `set_fields` across the matched set. Dry-run defaults on; the query builder is shared with `query-nodes` for predicate consistency.
-- **Multi-format content extraction.** Office documents, PDFs (text + OCR fallback), images, and audio. Extracted text is cached by content hash. Vision and audio providers are API-gated and pluggable (`VISION_PROVIDER=gemini|claude`).
-- **Path-traversal safe.** Every filesystem entry point goes through `safeVaultPath()`, which resolves and verifies containment within the vault root before any read, write, rename, or delete.
-- **Data is never silently dropped.** Orphaned fields persist when types are removed. Required-missing errors are tolerated on normalizer re-renders but blocked on tool writes. Type-unknown writes are rejected with the available schema list.
+- **Asymmetric sync.** The watcher reads files and updates the DB. The pipeline reads the DB and writes files. Nothing else writes files. This kills the merge-collision bugs that plague two-way sync.
+- **One mutation pipeline.** Tool calls, watcher events, schema propagation, and the periodic normalizer all flow through the same parse → validate → coerce → render → write transaction. No parallel code paths.
+- **Subprocess-isolated embedder.** The ONNX runtime (~1.5 GB resident) runs in a forked child, IPC for requests, self-exits after 5 min idle, transparent ~2–3 s respawn. `MAX_TOKENS=2048` is deliberately below Nomic's 8K window — ONNX's memory arena sizes to the largest tensor it's seen and never shrinks, so 8K embeds bloated RSS by ~6 GB. 2048 caps the arena at ~1.5 GB and tends to improve retrieval anyway (mean-pooled long vectors blur topical specificity).
+- **Reversible mutations.** Every tool write captures a pre-state snapshot via `UndoContext` — covers nodes, schemas, and global fields. `list-undo-history` + `undo-operations`. 24 h retention.
+- **Bulk mutate is `update-node` with a query.** Same predicate language as `query-nodes`, applied across the match set. Dry-run on by default; per-node failures are reported instead of aborting the run.
+- **Defaults aren't retroactive.** They populate at node creation, type addition, and newly-added schema claims — never via the normalizer. One intentional default-population path means data moves around without surprise backfills.
 
 ---
 
 ## Architecture
 
-### The core asymmetry
+The DB owns the truth; markdown is a projection. Every write is one transaction: load schema context → validate + coerce → resolve per-type overrides → render → hash-diff (no-op if unchanged) → atomic write + node upsert + FTS update + embedding enqueue.
 
-Traditional vault sync tools treat the filesystem as the truth and the database as an index. Vault Engine inverts this: the SQLite database is the source of truth, and markdown files are a rendered projection of its state. The watcher reads files and updates the DB. The pipeline renders from the DB and writes files. There is no code path where the filesystem "wins" without first being re-parsed, validated, and promoted into the DB.
+Sources differ in how strict the gate is:
 
-This asymmetry matters because it eliminates entire classes of bugs: no phantom fields from stale parses, no editor-vs-tool write races, no schema changes that break frontmatter silently.
+- **Tool writes** block on validation errors with a structured payload, and reject unknown types with the list of available schemas.
+- **Watcher events** absorb recoverable errors and keep prior DB values for rejected fields. Stays permissive on unknown types so editor-authored frontmatter doesn't bounce.
+- **Normalizer** tolerates `REQUIRED_MISSING` because it only re-renders existing state.
 
-### Mutation pipeline
+The watcher (chokidar, 2.5 s debounce, 5 s max-wait) is DB-only — it never writes files. Hash guard skips files the pipeline just wrote. YAML parser tolerates duplicate keys (Obsidian's property editor emits them) and retries on parse failures (Obsidian truncates growing files mid-write).
 
-Every write — MCP tool, watcher event, schema propagation, normalizer sweep — flows through the same pipeline inside a single transaction:
-
-1. **Load schema context** — fetch schema definitions and global fields for the node's types.
-2. **Validate and coerce** — check fields against type claims; coerce dates (ISO 8601 plus fuzzy natural-language via `chrono-node`), match enum values, cast numeric/boolean/JSON types. Produces a typed `coerced_state`.
-3. **Source-specific error handling** — tool writes block on validation errors with structured error payloads. The watcher absorbs recoverable errors and retains DB values for rejected fields. The normalizer tolerates `REQUIRED_MISSING` since it only re-renders existing state.
-4. **Compute effective state** — resolve overrides, apply per-type merges, determine field ordering (claimed fields by `sort_order` then unicode; orphans trail).
-5. **Render** — produce markdown with YAML frontmatter, compute SHA-256 content hash. If the hash matches both disk and DB, the transaction rolls back (no-op).
-6. **Write** — under a write lock: atomic file write, upsert `nodes`, replace types/fields/relationships, update FTS index, enqueue for embedding, log to `edits_log`.
-
-### File watcher
-
-Chokidar monitors the vault directory. The watcher is DB-only — it never writes files back.
-
-- **Debounce**: 2.5 s with a 5 s max-wait (matches Obsidian's ~2 s save cycle).
-- **Write-lock check**: skips files the pipeline just wrote, preventing re-processing of its own output.
-- **Parse retry**: up to 3 attempts with 2 s delay, to survive Obsidian's truncation window on growing files.
-- **Hash guard**: compares `sha256(file content)` to the stored `content_hash`; skips on match.
-- **YAML `uniqueKeys: false`**: Obsidian's property editor can emit duplicate YAML keys — the parser tolerates them (last wins) instead of throwing.
-
-### Normalizer
-
-A cron-scheduled sweep that re-renders files from DB state to fix drift (schema changes, field-order changes, new defaults, render-format changes). Per file: skip if excluded, skip if modified within the quiescence window (default 60 min), render from DB, diff hash, rewrite if stale. Summary row in `edits_log`; per-file events in `sync_log`. Also runnable one-shot with `--normalize` (`--dry-run` supported).
-
-### Undo / restore
-
-Every tool mutation captures a pre-mutation snapshot via `UndoContext`, threaded through `executeMutation` and `executeDeletion`. Tool handlers register an operation, pass `{ operation_id }` to the pipeline, and call `finalizeOperation` in a `finally` block (throw-safe). Restores run through the same pipeline with `source: 'undo'`, which suppresses nested capture, tolerates required-missing, and disables default backfilling. Snapshot inserts use `INSERT OR IGNORE` so multi-call handlers sharing an `operation_id` are safe. Hourly cleanup sweep; 24 h retention; 60 s orphan grace period.
+The normalizer is a cron-scheduled sweep that fixes drift (schema changes, field-order changes, added defaults). Skips recently modified files via a quiescence window. Runnable one-shot with `--normalize --dry-run`.
 
 ---
 
-## Search & Retrieval
+## Search
 
-### Hybrid search
+Hybrid lexical + semantic via reciprocal rank fusion (K=60).
 
-Combines lexical and semantic signals via reciprocal rank fusion (K=60).
+- **FTS5** (contentless) over titles and bodies.
+- **Vectors** — 256-dim q8-quantized Nomic embeddings stored in `sqlite-vec`.
+- **Structured filters** — `types`, `without_types`, `fields`, `without_fields`, `title_eq`, `title_contains` — share the query builder with `query-nodes`. Boostless filtering, not hacked-in ranking weights.
 
-- **Full-text**: SQLite FTS5 (contentless) over node titles and bodies.
-- **Semantic**: Nomic `embed-text-v1.5`, 256-dimensional q8-quantized vectors stored in `sqlite-vec`.
-- **Structured filters**: shared query builder supports `types`, `without_types`, `fields`, `without_fields`, `title_eq`, `title_contains` — boostless filtering rather than hacked-in ranking weights.
+Long docs chunk semantically (headings → paragraphs → sentences → hard split) with 128-token overlap. One `embedding_meta` + `embedding_vec` row per `(node_id, source_type, extraction_ref, chunk_index)`. Non-markdown `![[embed]]` refs get their own `source_type='extraction'` rows; stale rows reconcile on every node enqueue.
 
-### Embedding pipeline
-
-- **Subprocess-isolated ONNX runtime.** The model runs in a forked child (`src/search/embedder-worker.ts`) managed by a host (`src/search/embedder-host.ts`). Spawns on first request, idles out after 5 minutes, respawns on demand. Isolates the ~1.5 GB working set from the main process.
-- **Chunking for long inputs.** `embedDocument` returns `Float32Array[]` — one vector per chunk. The chunker (`src/search/chunker.ts`) splits semantically (headings → paragraphs → sentences → hard-split), with 128-token overlap, then packs. `MAX_TOKENS = 2048` is deliberately below Nomic's 8192 window: ONNX's memory arena sizes to the largest tensor it's seen and doesn't shrink, so 8k-token embeds bloat RSS by ~6 GB. 2048 caps the arena at ~1.5 GB and tends to improve retrieval (mean-pooled long vectors blur topical specificity).
-- **Multi-vector storage.** One `embedding_meta` + `embedding_vec` row per `(node_id, source_type, extraction_ref, chunk_index)`. Writes are transactional — delete all existing rows for the group, insert N fresh rows. Group-level hash skip avoids redundant work.
-- **Extraction embeddings.** Non-markdown `![[embed]]` refs are resolved, extracted, hashed, and embedded as separate rows with `source_type='extraction'`. Stale extraction rows reconcile on every node enqueue.
-- **Versioned index.** `meta.search_version` tracks the embedding pipeline version. Bumping `CURRENT_SEARCH_VERSION` clears all vectors and re-enqueues every node at startup.
+`meta.search_version` versions the pipeline. Bumping the constant clears all vectors and re-enqueues every node at startup.
 
 ---
 
-## Content Extraction
+## Content extraction
 
-Extracted text is cached by content hash in `extraction_cache`. Multiple extractors per file type, with fallback chains.
+Cached by content hash. Multiple extractors per file type with fallback chains.
 
-**Always available**
-- Markdown — direct parsing (no extractor).
-- Word, Excel, PowerPoint — via `officeparser` and `xlsx`.
-- PDFs (text) — via `unpdf`, fast and OCR-free.
+- **Always available** — Markdown, Word/Excel/PowerPoint (`officeparser`, `xlsx`), text PDFs (`unpdf`).
+- **API-gated** — Audio (Deepgram Nova-3), images (`VISION_PROVIDER=gemini|claude`), scanned PDFs (vision fallback when `avgCharsPerPage < 50`).
 
-**API-gated**
-- Audio (`.m4a`, `.mp3`, `.wav`, `.webm`, `.ogg`) — Deepgram Nova-3. Requires `DEEPGRAM_API_KEY`.
-- Images (`.png`, `.jpg`, `.gif`, `.webp`) — Gemini or Claude Vision. Requires the corresponding key.
-- Scanned PDFs — automatic vision fallback when `avgCharsPerPage < 50`. Uses the same vision provider.
-
-**Provider selection.** `VISION_PROVIDER=gemini|claude` (default `gemini`) picks the vision model. Missing key for the selected provider → warning + vision disabled (text-PDF extraction still works).
+Missing keys produce a warning and disable the affected extractor; everything else still works.
 
 ---
 
-## Schema System
+## Schema system
 
-### Global field pool
+Fields are defined once in a global pool (`global_fields`) — type, optional enum/default, and `overrides_allowed` permissions. Types claim fields via `schema_field_claims`; multiple types can claim the same global field.
 
-Fields are defined once in the global pool (`global_fields`) with a declared type, optional enum values, optional default, and `overrides_allowed` permissions. Types "claim" fields via `schema_field_claims` — multiple types can claim the same global field.
+A schema can override `required`, `default_value`, or `enum_values` on a claimed field, gated per-property by `overrides_allowed`. Override semantics:
 
-### Per-type overrides
+- **Enums** replace (not extend).
+- **Multi-type nodes** — enum: valid-for-any-type. Required/default: cancellation-on-conflict (disagreements fall back to global).
+- **`default_value_override: null`** means "no default on this type", distinct from absence (stored via a `default_value_overridden` flag).
 
-A schema can override `required`, `default_value`, or `enum_values` on a claimed field, but only if the global field's `overrides_allowed` grants permission for that property. Override semantics:
+Removing a type or claim doesn't delete data — orphan fields persist on the node and render after claimed fields. Re-adopting an orphan re-validates it through the normal path.
 
-- **Enums** — replace (not extend). A type's override fully supersedes the global enum list.
-- **Required / default_value** — cancellation-on-conflict across multi-type nodes: if types disagree, the effective value falls back to the global definition. Enum override: valid-for-any-type (accepted if any applicable type accepts it).
-- **Null-as-value** — `default_value_override: null` means "no default on this type" (not "inherit"). Stored via the `default_value_overridden` boolean flag to distinguish from absence.
-
-### Defaults are creation-only
-
-The normalizer never backfills missing defaults — it only re-renders existing state. Defaults populate at node creation, type addition, and schema propagation (for newly-added claims), never retroactively. The validation gate (`skipDefaults`) and pipeline tolerance (`REQUIRED_MISSING` accepted for normalizer source) enforce this.
-
-### Fuzzy date coercion
-
-Date fields accept ISO 8601 (with `T` or space, optional seconds) and fall back to `chrono-node` natural-language parsing (`"6 March 2020 | 6:35 am"` → `2020-03-06T06:35`). Fuzzy-parsed values are tagged `STRING_TO_DATE_FUZZY` in coercion output so tools can surface the interpretation.
+Date fields accept ISO 8601 plus `chrono-node` natural-language fallback (`"6 March 2020 | 6:35 am"` → `2020-03-06T06:35`). Fuzzy parses are tagged `STRING_TO_DATE_FUZZY` so callers can surface the interpretation.
 
 ---
 
-## MCP Surface
+## MCP surface
 
-29 tools, all behaving consistently: they share the mutation pipeline, the query builder, path safety, and undo capture.
+29 tools, all sharing the mutation pipeline, query builder, path safety, and undo capture. Every tool returns `{ ok, data | error, warnings }`.
 
-**Nodes** — `create-node`, `get-node`, `update-node`, `delete-node`, `rename-node`, `query-nodes`, `validate-node`, `batch-mutate`
+- **Nodes** — create / get / update / delete / rename / query / validate / batch-mutate
+- **Types** — add / remove / list
+- **Schemas** — create / update / delete / describe / list
+- **Global fields** — create / update / delete / rename / describe / list
+- **Discovery** — `list-field-values`, `infer-field-type`
+- **Content** — `read-embedded`
+- **Undo** — `list-undo-history`, `undo-operations`
+- **System** — `vault-stats`, `query-sync-log`
 
-**Types** — `add-type-to-node`, `remove-type-from-node`, `list-types`
-
-**Schemas** — `create-schema`, `update-schema`, `delete-schema`, `describe-schema`, `list-schemas`
-
-**Global Fields** — `create-global-field`, `update-global-field`, `delete-global-field`, `rename-global-field`, `describe-global-field`, `list-global-fields`
-
-**Discovery** — `list-field-values`, `infer-field-type`
-
-**Content** — `read-embedded`
-
-**Undo** — `list-undo-history`, `undo-operations`
-
-**System** — `vault-stats`, `query-sync-log`
-
-### Bulk mutate via query mode
-
-`update-node` has two modes. Single-node mode accepts a `node_id` and performs the edit with `dry_run` support. Query mode accepts the same predicate as `query-nodes` plus `add_types`, `remove_types`, and `set_fields` — applied across the matched set. Dry-run defaults on in query mode; execution is best-effort (not a single transaction — failures are reported per node without aborting the run).
-
-### Type safety on writes
-
-Tool writes reject unknown types with `UNKNOWN_TYPE` and the list of `available_schemas`. The watcher path stays permissive so editor-authored frontmatter with new types doesn't bounce at the door.
-
----
-
-## Data Integrity Semantics
-
-- **Orphans are preserved.** Removing a type or schema claim changes field classification, not field storage. The value remains in `node_fields` and renders after claimed fields.
-- **Re-adoption validates.** If a later schema claim re-adopts an orphan field, the pipeline validates/coerces the structured value through the normal claimed-field path.
-- **Raw text is orphan-only.** Editor-authored orphan wiki-links can preserve `value_raw_text` for round-tripping. Once the field is claimed again, the typed value becomes authoritative and stale orphan raw text is cleared.
-- **Defaults are not retroactive.** Defaults populate at creation, type addition, and schema propagation for newly-added claims. The normalizer never backfills defaults into existing nodes.
-- **Watcher is permissive; tools are strict.** The watcher accepts unknown types and retains prior DB values for rejected fields. Tool writes block on validation errors and unknown types.
-- **Batch query updates are best-effort.** `update-node` query mode reports per-node failures instead of wrapping the whole matched set in one transaction.
-
----
-
-## Database Schema
-
-SQLite runs with WAL mode and foreign keys enabled. Core tables include:
-
-| Table | Purpose |
-|-------|---------|
-| `nodes` | Core node data: file path, title, body, content hash, timestamps |
-| `node_types` | Node ↔ schema type mapping (many-to-many) |
-| `node_fields` | Field values in columnar form (text, number, date, json) with orphan-only raw text for wiki-link round-tripping |
-| `relationships` | Wiki-links and references (raw targets, resolved at query time) |
-| `global_fields` | Global field pool: type, enum values, defaults, override permissions |
-| `schemas` | Type definitions: display name, icon, filename template, default directory |
-| `schema_field_claims` | Per-type field overrides: required, default, enum values, sort order |
-| `edits_log` | Mutation audit log: tool writes, normalizer sweeps, conflicts, defaults |
-| `sync_log` | File-sync events (24 h retention) |
-| `extraction_cache` | Content extraction cache keyed by content hash |
-| `schema_file_hashes` | `.schema.md` hashes for drift detection |
-| `undo_operations` + `undo_snapshots` | Pre-mutation snapshots for reversibility (24 h retention) |
-| `embedding_meta` | One row per `(node_id, source_type, extraction_ref, chunk_index)` |
-| `nodes_fts` | FTS5 virtual table on title + body (contentless) |
-| `embedding_vec` | sqlite-vec virtual table: 256-dim float vectors |
-
----
-
-## Key Modules
-
-| Directory | Purpose |
-|-----------|---------|
-| `src/mcp/` | MCP server, tool definitions, shared query builder |
-| `src/db/` | SQLite connection (WAL, foreign keys), search-version migration |
-| `src/parser/` | Markdown / YAML frontmatter parser (`yaml` directly, not gray-matter) |
-| `src/renderer/` | DB state → markdown file renderer |
-| `src/indexer/` | Initial scan + incremental indexer, exclusion rules |
-| `src/pipeline/` | Single mutation pipeline, path safety, type checks, delete pipeline |
-| `src/schema/` | Schema CRUD and propagation |
-| `src/validation/` | Field validation, coercion, per-type override merging |
-| `src/global-fields/` | Global field pool management |
-| `src/discovery/` | Field-value enumeration, type inference |
-| `src/resolver/` | Wiki-link and reference resolution |
-| `src/sync/` | Watcher, reconciler, normalizer, write lock |
-| `src/search/` | Embedding host/worker, chunker, hybrid search (FTS5 + vector + RRF) |
-| `src/extraction/` | Office, PDF, image, audio extractors with provider fallbacks |
-| `src/undo/` | Undo snapshots, restore, cleanup |
-| `src/auth/` | OAuth (HTTP transport) |
-| `src/transport/` | HTTP (Express + StreamableHTTPServerTransport) and stdio layers |
+Mutation tools (`create-node`, `update-node`, `delete-node`, `add-type-to-node`, `remove-type-from-node`, `batch-mutate`, `update-schema`) all accept `dry_run`. Defaults to `true` for `update-node` query mode; `false` elsewhere.
 
 ---
 
 ## Setup
 
-### Prerequisites
-
-- Node.js >= 20
-- A markdown vault directory
-
-### Install and build
+Requires Node.js >= 20 and a markdown vault directory.
 
 ```bash
 git clone <repo-url> vault-engine
@@ -225,7 +100,7 @@ npm install
 npm run build
 ```
 
-### Environment variables
+### Environment
 
 | Variable | Required | Description |
 |----------|----------|-------------|
@@ -234,33 +109,20 @@ npm run build
 | `OAUTH_OWNER_PASSWORD` | HTTP only | Password for the OAuth token endpoint |
 | `OAUTH_ISSUER_URL` | HTTP only | OAuth issuer URL for token validation |
 | `VISION_PROVIDER` | No | `gemini` (default) or `claude` |
-| `GEMINI_API_KEY` | No | Enables Gemini Vision (images + scanned PDFs) |
-| `ANTHROPIC_API_KEY` | No | Enables Claude Vision (images + scanned PDFs) |
+| `GEMINI_API_KEY` / `ANTHROPIC_API_KEY` | No | Enables vision extraction (images + scanned PDFs) |
 | `DEEPGRAM_API_KEY` | No | Enables Deepgram Nova-3 audio transcription |
 | `NORMALIZE_CRON` | No | Cron expression for the periodic normalizer |
 | `NORMALIZE_QUIESCENCE_MINUTES` | No | Skip files modified within this window (default 60) |
 | `VAULT_EXCLUDE_DIRS` | No | Comma-separated folder prefixes to exclude entirely |
 
-Minimal `.env`:
-
-```env
-VAULT_PATH=/path/to/vault
-DB_PATH=/path/to/vault/.vault-engine/vault-new.db
-OAUTH_OWNER_PASSWORD=change-me
-OAUTH_ISSUER_URL=https://vault.example.com
-```
-
-### Running
-
-Commands read `VAULT_PATH` and optional settings from `.env`; alternatively export them in the shell before running.
+### Run
 
 ```bash
-npm run dev                                    # dev (auto-reload)
+npm run dev                                    # auto-reload (tsx watch)
 npm start                                      # stdio transport
 npm run start:http                             # HTTP transport
 node dist/index.js --transport both --port 3334
-node dist/index.js --normalize                 # one-shot normalizer sweep
-node dist/index.js --normalize --dry-run       # show stale files without writing
+node dist/index.js --normalize [--dry-run]     # one-shot normalizer sweep
 node dist/index.js --reindex-search            # clear + rebuild the search index
 ```
 
@@ -274,22 +136,19 @@ node dist/index.js --reindex-search            # clear + rebuild the search inde
 [Unit]
 Description=Vault Engine
 After=network-online.target
-Wants=network-online.target
 
 [Service]
 Type=simple
-User=<your-user>
 WorkingDirectory=/path/to/vault-engine
 EnvironmentFile=/path/to/vault-engine/.env
 ExecStart=/usr/bin/node /path/to/vault-engine/dist/index.js /path/to/vault/.vault-engine/vault-new.db --transport http --port 3334
 Restart=on-failure
-RestartSec=10
 
 [Install]
 WantedBy=multi-user.target
 ```
 
-### Remote access via Cloudflare Tunnel
+### Cloudflare tunnel
 
 ```yaml
 ingress:
@@ -297,48 +156,16 @@ ingress:
     service: http://localhost:3334
 ```
 
-OAuth auth is enforced on the HTTP transport (Bearer token, rate-limited to 5 attempts / 60 s). Stdio transport has no auth — it trusts the local process.
-
-### Operational notes
-
-- The HTTP transport binds to `127.0.0.1`; expose it through a local reverse proxy or tunnel rather than binding the Node process publicly.
-- The embedding worker is subprocess-isolated but memory-heavy. Expect roughly 1.5 GB RSS while the ONNX model is loaded.
-- Unsupported embedded file types can log extraction failures during background embedding. These failures drop that extraction job but do not stop the service.
-- The normalizer skips recently modified files according to `NORMALIZE_QUIESCENCE_MINUTES` to avoid fighting active editor saves.
-- `--reindex-search` clears vector rows and re-enqueues nodes for background embedding; it does not rebuild the SQLite schema from scratch.
-
-### MCP smoke check
-
-For HTTP deployments, first obtain an OAuth bearer token from the configured authorization flow. Then initialize an MCP session and call a tool:
-
-```bash
-TOKEN=...
-
-curl -i http://127.0.0.1:3334/mcp \
-  -H "Authorization: Bearer $TOKEN" \
-  -H "Accept: application/json, text/event-stream" \
-  -H "Content-Type: application/json" \
-  -d '{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2025-03-26","capabilities":{},"clientInfo":{"name":"smoke","version":"0.0.1"}}}'
-
-MCP_SESSION_ID=... # copy from the Mcp-Session-Id response header
-
-curl http://127.0.0.1:3334/mcp \
-  -H "Authorization: Bearer $TOKEN" \
-  -H "Mcp-Session-Id: $MCP_SESSION_ID" \
-  -H "Accept: application/json, text/event-stream" \
-  -H "Content-Type: application/json" \
-  -d '{"jsonrpc":"2.0","id":2,"method":"tools/call","params":{"name":"vault-stats","arguments":{}}}'
-```
+The HTTP transport binds to `127.0.0.1` and enforces OAuth Bearer auth (rate-limited 5 attempts / 60 s). Stdio transport trusts the local process. Expect ~1.5 GB RSS while the embedder is loaded; it idles out after 5 minutes.
 
 ---
 
-## Known Limitations
+## Known limitations
 
 - Wiki-link alias preservation is orphan-only. Claimed reference fields render from typed target values.
-- Extraction coverage is extension-dependent. Unknown extensions are skipped for extraction embeddings.
-- Query-mode bulk mutation is best-effort across matched nodes, not one all-or-nothing transaction.
-- The watcher accepts editor-authored unknown types; tool callers must define schemas before writing typed nodes.
-- The normalizer intentionally skips recently modified files, so canonical rendering may lag active edits.
+- Query-mode bulk mutation is best-effort, not all-or-nothing.
+- The watcher accepts editor-authored unknown types; tool writes require a schema first.
+- The normalizer skips recently modified files, so canonical rendering may lag active edits.
 
 ---
 
